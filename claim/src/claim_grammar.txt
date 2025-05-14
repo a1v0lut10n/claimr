@@ -1,0 +1,52 @@
+Revised DSL Grammar (Prolog III Inspired)
+
+Top-Level Structure
+-------------------
+program        ::= { clause }
+clause         ::= fact | rule | constraint_fact | constraint_rule | implication | query
+
+Facts and Rules
+---------------
+fact           ::= atom "."
+rule           ::= atom ":-" body "."
+
+Constraint Facts and Rules
+--------------------------
+constraint_fact     ::= "{" constraint_expr "}" "."
+constraint_rule     ::= atom ":-" body_with_constraints "."
+
+Queries
+-------
+query          ::= "?-" (body_with_constraints | "{" constraint_expr "}") "."
+
+Implication Syntax (optional sugar)
+-----------------------------------
+implication    ::= "{" constraint_expr "}" "=>" atom "."
+
+Bodies
+------
+body                 ::= goal { "," goal }
+body_with_constraints ::= extended_goal { "," extended_goal }
+
+goal                 ::= atom
+extended_goal        ::= goal | "{" constraint_expr "}"
+
+Constraints
+-----------
+constraint_expr ::= constraint_term { "," constraint_term }
+constraint_term ::= expr relop expr
+relop           ::= "=" | "!=" | "<" | ">" | "<=" | ">="
+
+Atoms and Terms
+---------------
+atom           ::= identifier "(" [ args ] ")"
+args           ::= expr { "," expr }
+
+expr           ::= identifier
+                 | number
+                 | atom
+                 | variable
+
+identifier     ::= letter { letter | digit | "_" }
+variable       ::= uppercase_letter { letter | digit | "_" }
+number         ::= digit { digit } [ "." digit { digit } ]
