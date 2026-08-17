@@ -8,6 +8,7 @@
 //! newtype.
 
 use std::fmt;
+use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use std::str::FromStr;
 
 use num_bigint::BigInt;
@@ -95,6 +96,78 @@ impl Number {
     }
 }
 
+impl Number {
+    /// True if the value is strictly positive.
+    pub fn is_positive(&self) -> bool {
+        self.0.numer().sign() == num_bigint::Sign::Plus
+    }
+
+    /// True if the value is strictly negative.
+    pub fn is_negative(&self) -> bool {
+        self.0.numer().sign() == num_bigint::Sign::Minus
+    }
+
+    /// The multiplicative inverse, or `None` for zero.
+    pub fn recip(&self) -> Option<Number> {
+        if self.is_zero() { None } else { Some(Number(self.0.recip())) }
+    }
+
+    /// Exact division, or `None` when dividing by zero.
+    pub fn checked_div(&self, rhs: &Number) -> Option<Number> {
+        if rhs.is_zero() { None } else { Some(Number(&self.0 / &rhs.0)) }
+    }
+
+    /// Absolute value.
+    pub fn abs(&self) -> Number {
+        if self.is_negative() { -self.clone() } else { self.clone() }
+    }
+}
+
+// Exact arithmetic. Owned and borrowed forms; `/` panics on zero (use
+// `checked_div` where the divisor is not known to be non-zero).
+macro_rules! impl_binop {
+    ($tr:ident, $m:ident, $op:tt) => {
+        impl $tr for Number {
+            type Output = Number;
+            fn $m(self, rhs: Number) -> Number { Number(self.0 $op rhs.0) }
+        }
+        impl<'a> $tr<&'a Number> for &'a Number {
+            type Output = Number;
+            fn $m(self, rhs: &'a Number) -> Number { Number(&self.0 $op &rhs.0) }
+        }
+        impl<'a> $tr<&'a Number> for Number {
+            type Output = Number;
+            fn $m(self, rhs: &'a Number) -> Number { Number(self.0 $op &rhs.0) }
+        }
+        impl<'a> $tr<Number> for &'a Number {
+            type Output = Number;
+            fn $m(self, rhs: Number) -> Number { Number(&self.0 $op rhs.0) }
+        }
+    };
+}
+impl_binop!(Add, add, +);
+impl_binop!(Sub, sub, -);
+impl_binop!(Mul, mul, *);
+impl_binop!(Div, div, /);
+
+impl Neg for Number {
+    type Output = Number;
+    fn neg(self) -> Number { Number(-self.0) }
+}
+impl Neg for &Number {
+    type Output = Number;
+    fn neg(self) -> Number { Number(-&self.0) }
+}
+impl AddAssign<&Number> for Number {
+    fn add_assign(&mut self, rhs: &Number) { self.0 += &rhs.0; }
+}
+impl SubAssign<&Number> for Number {
+    fn sub_assign(&mut self, rhs: &Number) { self.0 -= &rhs.0; }
+}
+impl MulAssign<&Number> for Number {
+    fn mul_assign(&mut self, rhs: &Number) { self.0 *= &rhs.0; }
+}
+
 impl fmt::Display for Number {
     /// Integers print plainly (`7`); other values as `numer/denom` in lowest
     /// terms (`33/32`), as Prolog III printed them.
@@ -111,6 +184,13 @@ impl fmt::Debug for Number {
     /// Same as `Display`, so `Expr::Number(37/2)` reads well in AST dumps.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
+    }
+}
+
+impl Default for Number {
+    /// Zero.
+    fn default() -> Self {
+        Number::zero()
     }
 }
 
@@ -208,6 +288,26 @@ mod tests {
             assert!(Number::from_literal(bad).is_err(), "{bad:?} should be rejected");
         }
         assert!(Number::from_ratio(1, 0).is_none());
+    }
+
+    #[test]
+    fn arithmetic_is_exact() {
+        let a = n("0.1") + n("0.2");
+        assert_eq!(a, n("0.3"));
+        assert_eq!(&n("1") / &n("3") * n("3"), n("1"));
+        assert_eq!(n("7") - n("10"), Number::from(-3));
+        assert_eq!(-n("2.5"), Number::from_ratio(-5, 2).unwrap());
+        assert_eq!(n("2").recip().unwrap(), Number::from_ratio(1, 2).unwrap());
+        assert!(Number::zero().recip().is_none());
+        assert!(n("1").checked_div(&Number::zero()).is_none());
+        assert!(n("1").is_positive() && !n("1").is_negative());
+        assert!(Number::from(-1).is_negative());
+        assert_eq!(Number::from(-3).abs(), n("3"));
+        let mut acc = Number::zero();
+        for _ in 0..10 {
+            acc += &n("0.1");
+        }
+        assert_eq!(acc, n("1"));
     }
 
     #[test]

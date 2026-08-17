@@ -17,6 +17,7 @@
 pub mod ast;
 pub mod eval;
 pub mod number;
+pub mod solver;
 mod parser;
 
 pub use ast::*;

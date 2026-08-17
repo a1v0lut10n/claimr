@@ -1,7 +1,7 @@
 ---
 date: 2026-08-18
 type: task
-status: planned
+status: done
 affects:
   - docs/architecture/README.md
   - docs/architecture/components/evaluator.md
@@ -52,8 +52,12 @@ modern, well-documented general simplex.
   `Number` (`exact-arithmetic`); no floats anywhere.
 - **What is a numeric position.** Operands of `< > <= >=`; operands of
   `+ - * /` and unary `-`; and both sides of `=` / `!=` when either side is
-  a `Number`, a numeric variable, an arithmetic term, or an attribute term
-  already registered. Everything else is tree unification / `dif` (stage 2).
+  a number (a literal or an arithmetic result) or an unbound numeric
+  variable. Everything else is tree unification / `dif` (stage 2).
+  *(Amended during implementation: "an attribute term already registered"
+  was dropped from the `=`/`!=` test — it would have made `{ f(a) = f(b) }`
+  depend on whether `f(a)` had been used numerically before, i.e. on
+  evaluation order. Compound-vs-compound `=` is always tree unification.)*
 - **Unknown of a term** (`unknown_of(addr) → SolverVar`): a `Number` is a
   constant; a heap `Var` gets (or has) a solver variable — the variable is
   then *numeric*; a `Const`/`Struct` in numeric position is an **attribute
@@ -132,10 +136,10 @@ modern, well-documented general simplex.
    terms), posts clause constraints at instantiation, and posts numeric
    relations as solver constraints; `answer.rs` renders the numeric part;
    `machine.rs` performs the exhaustive determined/disequation check before
-   yielding and surfaces `EvalError::NonLinear` (Solutions yields
-   `Result<Answer, EvalError>`? — no: keep `Answer` items and let
-   `Solutions::error()` expose a terminal error; the CLI prints it and exits
-   1. Decide in implementation, document the choice).
+   yielding and surfaces `EvalError::NonLinear`. *(Decided: `Solutions`
+   keeps yielding `Answer`s; a runtime error ends the iterator and
+   `Solutions::error()` exposes it, rendered with the query's variable
+   names; the CLI prints `file: in \`?- …\`: message` and exits 1.)*
 3. **CLI**: unchanged flags; prints numeric answers; the stage-3 error path.
 4. **Tests** (`src/solver/` unit, `src/eval/tests.rs`, golden runs):
    - simplex: feasibility/infeasibility, strict vs non-strict, equalities

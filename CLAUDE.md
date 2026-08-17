@@ -14,11 +14,14 @@ Rust. Single crate `claimr`:
 - `src/parser/` — an LR parser generated at build time by rustemo from
   `src/parser/claimr.rustemo`, with hand-maintained semantic actions in
   `claimr_actions.rs`;
-- `src/eval/` — the evaluator: rational-tree unification, `dif`, compile step,
-  iterative SLD machine, answers in solved form (`components/evaluator.md`).
-  Stage 2 of the evaluator design is done; **numeric constraints, arithmetic
-  terms and attribute terms are rejected at load until stage 3** (the linear
-  store / `solver` component);
+- `src/eval/` — the evaluator: rational-tree unification, `dif`, compile step
+  with arithmetic lowering, iterative SLD machine, answers in solved form
+  (`components/evaluator.md`);
+- `src/solver/` + the numeric glue in `src/eval/store.rs` — the linear
+  constraint store over exact rationals (Dutertre–de Moura simplex,
+  attribute terms, numeric disequations, delayed products;
+  `components/solver.md`). Evaluator stages 2–3 are done; stage 4 (answer
+  projection/simplification) and a REPL are open;
 - `src/main.rs` — thin CLI: `claimr file.claimr` runs the program's queries.
 
 Source files use the `.claimr` extension. **`src/parser/claimr.rustemo` is the

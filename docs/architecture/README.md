@@ -19,8 +19,8 @@ Nameable building blocks — a crate, module, or binary you can point at.
 | `cli`     | `src/main.rs` — the `claimr` binary: loads a program and runs its `?-` queries, printing answers (`--parse` dumps the AST, `--limit N` caps answers per query); GCC-style `file:line:col:` diagnostics. |
 | `grammar` | `src/parser/claimr.rustemo` — the formal grammar of the language, from which the parser is generated. `docs/reference/grammar.md` is a rendered EBNF view of it. |
 
-| `evaluator` | `src/eval/` — runtime term model (rational trees), unification, `dif`, the compile step, the iterative SLD machine with trail and suspension, answers in solved form. Stage 2 done; numeric constraints rejected until stage 3. Doc: [`components/evaluator.md`](components/evaluator.md). Design: [`../design/2026-08-17-evaluator.md`](../design/2026-08-17-evaluator.md). |
-| `solver`    | *(planned)* `src/solver/` — the constraint store: linear arithmetic over exact rationals (equalities, inequalities, delayed disequations), numeric attribute terms, satisfiability and determined-variable detection, projection to solved form for answers. Design: [`../design/2026-08-17-evaluator.md`](../design/2026-08-17-evaluator.md). |
+| `evaluator` | `src/eval/` — runtime term model (rational trees), unification, `dif`, the compile step (arithmetic lowering), the iterative SLD machine with trail and suspension, answers in solved form incl. the numeric store. Stages 2–3 done. Doc: [`components/evaluator.md`](components/evaluator.md). Design: [`../design/2026-08-17-evaluator.md`](../design/2026-08-17-evaluator.md). |
+| `solver`    | `src/solver/` (δ-rationals, linear expressions, Dutertre–de Moura simplex over exact rationals) plus the numeric glue in `src/eval/store.rs` (numeric variables, attribute terms with congruence, numeric disequations, delayed products, exact determined-variable detection). Stage 3 done. Doc: [`components/solver.md`](components/solver.md). Design: [`../design/2026-08-17-evaluator.md`](../design/2026-08-17-evaluator.md). |
 
 A REPL component is added when it exists.
 
@@ -31,7 +31,7 @@ Cross-component invariants — rules that survive replacing any single component
 | Name                | Invariant (summary) |
 |---------------------|---------------------|
 | `grammar-authority` | `src/parser/claimr.rustemo` is the single source of truth for the language's syntax — the parser is generated from it, so it cannot drift; `docs/reference/grammar.md` and the README are views that follow it, never the other way round. Every construct in the grammar has at least one parsed example under `examples/`. |
-| `exact-arithmetic`  | Numbers are exact arbitrary-precision rationals (integers = denominator 1); no floating point anywhere in the language core; decimal literals denote exact rationals; irrational reals exist only semantically as values of under-constrained variables. Decision: [`../design/2026-08-17-exact-rational-arithmetic.md`](../design/2026-08-17-exact-rational-arithmetic.md). |
+| `exact-arithmetic`  | Numbers are exact arbitrary-precision rationals (integers = denominator 1); no floating point anywhere in the language core; decimal literals denote exact rationals; irrational reals exist only semantically as values of under-constrained variables. Doc: [`aspects/exact-arithmetic.md`](aspects/exact-arithmetic.md). Decision: [`../design/2026-08-17-exact-rational-arithmetic.md`](../design/2026-08-17-exact-rational-arithmetic.md). |
 | `answer-soundness`  | Every answer the evaluator reports is a satisfiable system: a resolution step is taken only if the store (unification equations included) remains solvable, and reported constraints are exact — no approximate check ever admits an unsatisfiable answer or drops a satisfiable one. Doc: [`aspects/answer-soundness.md`](aspects/answer-soundness.md). Design: [`../design/2026-08-17-evaluator.md`](../design/2026-08-17-evaluator.md). |
 
 ## Litmus test

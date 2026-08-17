@@ -1,0 +1,5 @@
+?- mortal(socrates).
+true
+?- eligible(alice), { age(alice) >= 18 }.
+age(alice) >= 18
+age(alice) >= 18

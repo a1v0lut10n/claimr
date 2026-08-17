@@ -2,14 +2,18 @@
 //! chronological backtracking through choice points and the store's trail.
 //! Iterative — resolution depth never touches the Rust stack.
 //!
-//! A resolution step is taken only if head unification and any constraint
-//! goals reached leave the store satisfiable (`answer-soundness`).
+//! A resolution step is taken only if head unification, the clause's
+//! arithmetic definitions and any constraint goals reached leave the store
+//! satisfiable; before an answer is yielded the store is finalized (exact
+//! determination, disequation re-checks) — `answer-soundness`.
 
 use std::rc::Rc;
 
-use super::answer::{Answer, render_answer};
+use super::answer::{Answer, render_answer, render_terms};
 use super::compile::{build, PredKey, Program, Query, TGoal};
+use super::error::EvalError;
 use super::store::{Addr, Cell, Mark, Store};
+use crate::ast::RelOp;
 
 /// A runtime goal.
 #[derive(Debug, Clone, Copy)]
@@ -17,6 +21,7 @@ enum RtGoal {
     Call(Addr),
     Eq(Addr, Addr),
     Dif(Addr, Addr),
+    Rel(RelOp, Addr, Addr),
 }
 
 /// Persistent goal list: cheap to snapshot into choice points.
@@ -42,7 +47,9 @@ struct ChoicePoint {
 }
 
 /// The solutions of one query, produced lazily; each `next()` resumes the
-/// search where the previous answer left it.
+/// search where the previous answer left it. If the search stops on a
+/// runtime error (a non-linear residue, a cyclic attribute term) the iterator
+/// ends and [`Solutions::error`] reports it.
 pub struct Solutions<'p> {
     program: &'p Program,
     store: Store,
@@ -51,6 +58,7 @@ pub struct Solutions<'p> {
     query_vars: Vec<(String, Addr)>,
     started: bool,
     exhausted: bool,
+    error: Option<EvalError>,
 }
 
 impl<'p> Solutions<'p> {
@@ -59,17 +67,32 @@ impl<'p> Solutions<'p> {
         // Constraint facts first (validated satisfiable at compile time).
         let initial_ok = program.post_initial(&mut store);
         debug_assert!(initial_ok, "initial store validated at compile time");
+        store.set_baseline();
         let mut vars = vec![None; query.var_names.len()];
         let mut goals: Goals = None;
-        for g in query.goals.iter().rev() {
-            goals = cons(instantiate_goal(&mut store, g, &mut vars), goals);
+        let mut ok = initial_ok;
+        // Build in source order (definitions post in order), then link reversed.
+        let mut built = Vec::with_capacity(query.goals.len());
+        for g in &query.goals {
+            match instantiate_goal(&mut store, g, &mut vars) {
+                Some(rg) => built.push(rg),
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        for rg in built.into_iter().rev() {
+            goals = cons(rg, goals);
         }
         let query_vars = query
             .var_names
             .iter()
             .cloned()
-            .zip(vars.iter().map(|v| v.expect("every query variable occurs in a goal")))
+            .zip(vars.iter().map(|v| v.unwrap_or(usize::MAX)))
+            .filter(|(_, a)| *a != usize::MAX)
             .collect();
+        let error = store.error.take();
         Solutions {
             program,
             store,
@@ -77,8 +100,14 @@ impl<'p> Solutions<'p> {
             choice_points: Vec::new(),
             query_vars,
             started: false,
-            exhausted: !initial_ok,
+            exhausted: !ok,
+            error,
         }
+    }
+
+    /// The runtime error that stopped the search, if any.
+    pub fn error(&self) -> Option<&EvalError> {
+        self.error.as_ref()
     }
 
     /// Try clauses `from..` of `key` against `call`; on success install the
@@ -89,9 +118,34 @@ impl<'p> Solutions<'p> {
             let mark = self.store.mark();
             let clause = &clauses[j];
             let mut vars = vec![None; clause.nvars as usize];
-            let head = build(&mut self.store, &clause.head, &mut vars);
+            let Some(head) = build(&mut self.store, &clause.head, &mut vars) else {
+                self.store.undo_to(&mark);
+                if self.store.error.is_some() {
+                    return false;
+                }
+                continue;
+            };
             if !self.store.post_eq(head, call) {
                 self.store.undo_to(&mark);
+                continue;
+            }
+            // Instantiate the body (posting its arithmetic definitions).
+            let mut body = Vec::with_capacity(clause.body.len());
+            let mut ok = true;
+            for g in &clause.body {
+                match instantiate_goal(&mut self.store, g, &mut vars) {
+                    Some(rg) => body.push(rg),
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if !ok {
+                self.store.undo_to(&mark);
+                if self.store.error.is_some() {
+                    return false;
+                }
                 continue;
             }
             if j + 1 < clauses.len() {
@@ -104,8 +158,8 @@ impl<'p> Solutions<'p> {
                 });
             }
             let mut goals = rest;
-            for g in clause.body.iter().rev() {
-                goals = cons(instantiate_goal(&mut self.store, g, &mut vars), goals);
+            for rg in body.into_iter().rev() {
+                goals = cons(rg, goals);
             }
             self.goals = goals;
             return true;
@@ -114,22 +168,36 @@ impl<'p> Solutions<'p> {
     }
 
     /// Return to the most recent choice point with clauses left. False if the
-    /// search space is exhausted.
+    /// search space is exhausted (or a store error stopped it).
     fn backtrack(&mut self) -> bool {
         while let Some(cp) = self.choice_points.pop() {
             self.store.undo_to(&cp.mark);
             if self.try_clauses(cp.key, cp.next_clause, cp.call, cp.rest) {
                 return true;
             }
+            if self.store.error.is_some() {
+                return false;
+            }
         }
         false
     }
 
-    /// Run until the goal list is empty (an answer) or the search is exhausted.
+    /// Run until the goal list is empty and the store finalizes (an answer),
+    /// or the search is exhausted / stopped.
     fn run(&mut self) -> bool {
         loop {
+            if self.store.error.is_some() {
+                return false;
+            }
             let Some(node) = self.goals.clone() else {
-                return true;
+                // All goals solved: finalize the store for this answer.
+                if self.store.finalize() {
+                    return true;
+                }
+                if self.store.error.is_some() || self.store.nonlinear.is_some() || !self.backtrack() {
+                    return false;
+                }
+                continue;
             };
             let rest = node.next.clone();
             let ok = match node.goal {
@@ -139,14 +207,18 @@ impl<'p> Solutions<'p> {
                 }
                 RtGoal::Eq(a, b) => {
                     self.goals = rest;
-                    self.store.post_eq(a, b)
+                    self.store.post_eq_goal(a, b)
                 }
                 RtGoal::Dif(a, b) => {
                     self.goals = rest;
-                    self.store.post_dif(a, b)
+                    self.store.post_dif_goal(a, b)
+                }
+                RtGoal::Rel(op, a, b) => {
+                    self.goals = rest;
+                    self.store.post_rel(op, a, b)
                 }
             };
-            if !ok && !self.backtrack() {
+            if !ok && (self.store.error.is_some() || !self.backtrack()) {
                 return false;
             }
         }
@@ -154,6 +226,17 @@ impl<'p> Solutions<'p> {
 
     fn answer(&self) -> Answer {
         render_answer(&self.program.symbols, &self.store, &self.query_vars)
+    }
+
+    /// Take the store's runtime error, rendering a non-linear residue with
+    /// the query's variable names.
+    fn take_error(&mut self) -> Option<EvalError> {
+        if let Some(e) = self.store.error.take() {
+            return Some(e);
+        }
+        let (a, b, op) = self.store.nonlinear.take()?;
+        let rendered = render_terms(&self.program.symbols, &self.store, &self.query_vars, &[a, b]);
+        Some(EvalError::NonLinear { constraint: format!("{} {op} {}", rendered[0], rendered[1]) })
     }
 }
 
@@ -166,6 +249,7 @@ impl Iterator for Solutions<'_> {
         }
         if self.started && !self.backtrack() {
             self.exhausted = true;
+            self.error = self.take_error();
             return None;
         }
         self.started = true;
@@ -173,25 +257,31 @@ impl Iterator for Solutions<'_> {
             Some(self.answer())
         } else {
             self.exhausted = true;
+            self.error = self.take_error();
             None
         }
     }
 }
 
-fn instantiate_goal(store: &mut Store, g: &TGoal, vars: &mut [Option<Addr>]) -> RtGoal {
-    match g {
-        TGoal::Call(t) => RtGoal::Call(build(store, t, vars)),
+fn instantiate_goal(store: &mut Store, g: &TGoal, vars: &mut [Option<Addr>]) -> Option<RtGoal> {
+    Some(match g {
+        TGoal::Call(t) => RtGoal::Call(build(store, t, vars)?),
         TGoal::Eq(a, b) => {
-            let a = build(store, a, vars);
-            let b = build(store, b, vars);
+            let a = build(store, a, vars)?;
+            let b = build(store, b, vars)?;
             RtGoal::Eq(a, b)
         }
         TGoal::Dif(a, b) => {
-            let a = build(store, a, vars);
-            let b = build(store, b, vars);
+            let a = build(store, a, vars)?;
+            let b = build(store, b, vars)?;
             RtGoal::Dif(a, b)
         }
-    }
+        TGoal::Rel(op, a, b) => {
+            let a = build(store, a, vars)?;
+            let b = build(store, b, vars)?;
+            RtGoal::Rel(*op, a, b)
+        }
+    })
 }
 
 fn pred_key(store: &Store, call: Addr) -> PredKey {
@@ -201,3 +291,4 @@ fn pred_key(store: &Store, call: Addr) -> PredKey {
         other => unreachable!("call goals are atoms, got {other:?}"),
     }
 }
+

@@ -2,12 +2,13 @@
 //! pre-numbered variables (structure copying at instantiation), predicate
 //! index, the initial store's constraint facts, and the queries.
 //!
-//! Also the stage-2 boundary: numeric relations, arithmetic terms and
-//! attribute terms are rejected here with [`EvalError::Unsupported`].
+//! Arithmetic terms stay in the templates and are lowered at instantiation:
+//! each becomes a fresh numeric variable plus a linear constraint posted to
+//! the store (design record `2026-08-17-arithmetic-in-terms.md`).
 
 use std::collections::HashMap;
 
-use crate::ast::{self, Clause, Expr, Goal, RelOp};
+use crate::ast::{self, ArithOp, Clause, Expr, Goal, RelOp};
 use crate::number::Number;
 use crate::Span;
 
@@ -23,14 +24,22 @@ pub(crate) enum TTerm {
     Number(Number),
     Const(Symbol),
     Compound(Symbol, Vec<TTerm>),
+    /// Unary minus: lowered to a fresh numeric variable at instantiation.
+    Neg(Box<TTerm>),
+    /// Binary arithmetic: lowered to a fresh numeric variable at instantiation.
+    Arith(ArithOp, Box<TTerm>, Box<TTerm>),
 }
 
 /// A body goal template.
 #[derive(Debug, Clone)]
 pub(crate) enum TGoal {
     Call(TTerm),
+    /// `=`: numeric equation if either side is numeric, else unification.
     Eq(TTerm, TTerm),
+    /// `!=`: numeric disequation if either side is numeric, else `dif`.
     Dif(TTerm, TTerm),
+    /// `< > <= >=`: always numeric.
+    Rel(RelOp, TTerm, TTerm),
 }
 
 /// A compiled clause: head, body, and the number of distinct variables.
@@ -92,31 +101,18 @@ impl VarMap {
 struct Lowerer<'a> {
     symbols: &'a mut Symbols,
     vars: VarMap,
-    clause_no: usize,
-    clause: &'a Clause,
-    span: Option<Span>,
 }
 
 impl Lowerer<'_> {
-    fn unsupported(&self, what: &str) -> EvalError {
-        EvalError::Unsupported {
-            clause: self.clause_no,
-            span: self.span,
-            text: self.clause.to_string(),
-            what: what.to_string(),
-        }
-    }
-
     fn term(&mut self, e: &Expr) -> Result<TTerm, EvalError> {
         Ok(match e {
             Expr::Var(v) => TTerm::Var(self.vars.get(v)),
             Expr::Number(n) => TTerm::Number(n.clone()),
             Expr::Ident(i) => TTerm::Const(self.symbols.intern(i)),
             Expr::Atom(a) => self.atom(a)?,
-            Expr::Neg(_) | Expr::Binary { .. } => {
-                return Err(self.unsupported(
-                    "arithmetic terms are not supported yet (evaluator stage 3)",
-                ));
+            Expr::Neg(e) => TTerm::Neg(Box::new(self.term(e)?)),
+            Expr::Binary { op, left, right } => {
+                TTerm::Arith(*op, Box::new(self.term(left)?), Box::new(self.term(right)?))
             }
         })
     }
@@ -128,22 +124,12 @@ impl Lowerer<'_> {
     }
 
     fn constraint(&mut self, c: &ast::Constraint) -> Result<TGoal, EvalError> {
-        // Stage-2 boundary: only `=` and `!=` on trees. Numeric literals are
-        // trees too, so `X = 3` is fine; `X < 3` and `X + 1 = 3` are not.
-        match c.op {
-            RelOp::Eq | RelOp::Neq => {}
-            _ => {
-                return Err(self.unsupported(&format!(
-                    "numeric relation `{}` is not supported yet (evaluator stage 3)",
-                    c.op
-                )));
-            }
-        }
         let l = self.term(&c.left)?;
         let r = self.term(&c.right)?;
         Ok(match c.op {
             RelOp::Eq => TGoal::Eq(l, r),
-            _ => TGoal::Dif(l, r),
+            RelOp::Neq => TGoal::Dif(l, r),
+            op => TGoal::Rel(op, l, r),
         })
     }
 
@@ -164,14 +150,15 @@ impl Lowerer<'_> {
 }
 
 impl Program {
-    /// Compile clauses into a program. Positions in errors will be unknown;
-    /// prefer [`Program::compile_spanned`] when spans are available.
+    /// Compile clauses into a program.
     pub fn compile(clauses: &[Clause]) -> Result<Program, EvalError> {
         Self::compile_iter(clauses.iter().map(|c| (c, None)))
     }
 
-    /// Compile clauses parsed with [`crate::parse_program_spanned`], so that
-    /// errors carry the offending clause's line and column.
+    /// Compile clauses parsed with [`crate::parse_program_spanned`]. Spans
+    /// are reserved for load-time diagnostics that point into the source;
+    /// currently every construct compiles, so this behaves as
+    /// [`Program::compile`].
     pub fn compile_spanned(clauses: &[(Clause, Span)]) -> Result<Program, EvalError> {
         Self::compile_iter(clauses.iter().map(|(c, s)| (c, Some(*s))))
     }
@@ -184,14 +171,8 @@ impl Program {
         let mut initial = Vec::new();
         let mut queries = Vec::new();
 
-        for (i, (clause, span)) in clauses.enumerate() {
-            let mut lw = Lowerer {
-                symbols: &mut symbols,
-                vars: VarMap::default(),
-                clause_no: i + 1,
-                clause,
-                span,
-            };
+        for (clause, _span) in clauses {
+            let mut lw = Lowerer { symbols: &mut symbols, vars: VarMap::default() };
             match clause {
                 Clause::Fact(atom) => {
                     let head = lw.atom(atom)?;
@@ -265,14 +246,18 @@ impl Program {
             let mut vars = vec![None; *nvars as usize];
             for g in goals {
                 let ok = match g {
-                    TGoal::Eq(a, b) => {
-                        let (a, b) = (build(store, a, &mut vars), build(store, b, &mut vars));
-                        store.post_eq(a, b)
-                    }
-                    TGoal::Dif(a, b) => {
-                        let (a, b) = (build(store, a, &mut vars), build(store, b, &mut vars));
-                        store.post_dif(a, b)
-                    }
+                    TGoal::Eq(a, b) => match (build(store, a, &mut vars), build(store, b, &mut vars)) {
+                        (Some(a), Some(b)) => store.post_eq_goal(a, b),
+                        _ => false,
+                    },
+                    TGoal::Dif(a, b) => match (build(store, a, &mut vars), build(store, b, &mut vars)) {
+                        (Some(a), Some(b)) => store.post_dif_goal(a, b),
+                        _ => false,
+                    },
+                    TGoal::Rel(op, a, b) => match (build(store, a, &mut vars), build(store, b, &mut vars)) {
+                        (Some(a), Some(b)) => store.post_rel(*op, a, b),
+                        _ => false,
+                    },
                     TGoal::Call(_) => unreachable!("constraint facts have no calls"),
                 };
                 if !ok {
@@ -294,9 +279,11 @@ fn push_clause(preds: &mut HashMap<PredKey, Vec<TClause>>, clause: TClause) {
 }
 
 /// Instantiate a template on the heap, allocating fresh variables on first
-/// use (structure copying).
-pub(crate) fn build(store: &mut Store, t: &TTerm, vars: &mut [Option<Addr>]) -> Addr {
-    match t {
+/// use (structure copying). Arithmetic nodes become fresh numeric variables
+/// with their defining constraint posted immediately; `None` if that makes
+/// the store unsatisfiable (or raises a store error).
+pub(crate) fn build(store: &mut Store, t: &TTerm, vars: &mut [Option<Addr>]) -> Option<Addr> {
+    Some(match t {
         TTerm::Var(i) => {
             let slot = &mut vars[*i as usize];
             match slot {
@@ -311,8 +298,20 @@ pub(crate) fn build(store: &mut Store, t: &TTerm, vars: &mut [Option<Addr>]) -> 
         TTerm::Number(n) => store.new_num(n.clone()),
         TTerm::Const(c) => store.new_const(*c),
         TTerm::Compound(f, args) => {
-            let addrs: Vec<Addr> = args.iter().map(|a| build(store, a, vars)).collect();
+            let mut addrs = Vec::with_capacity(args.len());
+            for a in args {
+                addrs.push(build(store, a, vars)?);
+            }
             store.new_struct(*f, addrs)
         }
-    }
+        TTerm::Neg(e) => {
+            let a = build(store, e, vars)?;
+            store.post_neg(a)?
+        }
+        TTerm::Arith(op, l, r) => {
+            let a = build(store, l, vars)?;
+            let b = build(store, r, vars)?;
+            store.post_arith(*op, a, b)?
+        }
+    })
 }
