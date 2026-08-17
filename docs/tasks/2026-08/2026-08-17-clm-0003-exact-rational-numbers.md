@@ -1,7 +1,7 @@
 ---
 date: 2026-08-17
 type: task
-status: planned
+status: done
 affects:
   - docs/architecture/README.md
   - docs/reference/grammar.md

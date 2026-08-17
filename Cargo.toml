@@ -20,6 +20,9 @@ name = "claimr"
 path = "src/main.rs"
 
 [dependencies]
+num-bigint = "0.4"
+num-rational = { version = "0.4", features = ["num-bigint"] }
+num-traits = "0.2"
 rustemo = "0.9.1"
 thiserror = "1"
 

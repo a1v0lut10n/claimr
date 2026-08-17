@@ -14,6 +14,8 @@ declarative programs.
 - **Prolog-like syntax** for facts and rules
 - **Constraint solving** integrated into the logic programming paradigm
 - **First-class constraints** usable in facts, rules, and queries
+- **Exact arithmetic** — numbers are arbitrary-precision rationals, never
+  floats; `18.5` means exactly 37/2 (as in Prolog III)
 - **Implication syntax** (`{ … } => head.`) as syntactic sugar
 - **Parser generated with [rustemo](https://crates.io/crates/rustemo)**, an
   LR parser generator for Rust — the grammar file is the single source of
@@ -112,6 +114,7 @@ claimr/
 ├── src/
 │   ├── lib.rs           # public API: parse_program, parse_clause, ParseError
 │   ├── ast.rs           # AST types
+│   ├── number.rs        # exact rational Number type (no floats)
 │   ├── parser/
 │   │   ├── claimr.rustemo       # THE grammar (authoritative)
 │   │   ├── claimr_actions.rs    # semantic actions: productions -> ast

@@ -1,0 +1,9 @@
+price(apple, 0.5).
+price(melon, 3).
+price(caviar, 1234567890123456789.25).
+
+cheap(X) :- price(X, P), { P < 1 }.
+{ budget(alice) >= 18.5 }.
+
+?- cheap(apple).
+?- price(X, P), { P >= 0.10, P <= 3.0 }.

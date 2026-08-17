@@ -83,3 +83,9 @@ identifier     ::= letter { letter | digit | "_" }
 variable       ::= uppercase_letter { letter | digit | "_" }
 number         ::= digit { digit } [ "." digit { digit } ]
 ```
+
+Semantics of `number`: a literal denotes an **exact rational** — `18.5` is
+37/2, `0.10` is 1/10 — and integers are the denominator-1 case. There is no
+floating-point type in the language (`exact-arithmetic` aspect; decision in
+[`../design/2026-08-17-exact-rational-arithmetic.md`](../design/2026-08-17-exact-rational-arithmetic.md)).
+Non-integers print as fractions in lowest terms (`33/32`).

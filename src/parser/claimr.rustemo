@@ -90,6 +90,7 @@ terminals
 Ident: /[a-z][A-Za-z0-9_]*/;
 Var: /[A-Z][A-Za-z0-9_]*/;
 // number ::= digit { digit } [ "." digit { digit } ]
+// Decimal literals denote EXACT rationals (18.5 is 37/2); there are no floats.
 Number: /[0-9]+(\.[0-9]+)?/;
 
 Neck: ':-';

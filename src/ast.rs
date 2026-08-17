@@ -1,7 +1,9 @@
 //! Abstract syntax tree of a Claimr program — the output of parsing.
 
+use crate::number::Number;
+
 /// A top-level clause of a program.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Clause {
     Fact(Atom),
     Rule { head: Atom, body: Vec<Goal> },
@@ -12,30 +14,31 @@ pub enum Clause {
 }
 
 /// A goal in a rule or query body: an atom to prove, or a constraint block.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Goal {
     Atom(Atom),
     Constraint(ConstraintExpr),
 }
 
 /// A compound term: `name(arg, ...)`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Atom {
     pub name: String,
     pub args: Vec<Expr>,
 }
 
 /// A term expression.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     Atom(Box<Atom>),
     Var(String),
-    Number(f64),
+    /// An exact rational literal (see [`Number`]).
+    Number(Number),
     Ident(String),
 }
 
 /// A single relational constraint `left op right`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Constraint {
     pub left: Expr,
     pub op: RelOp,
@@ -43,13 +46,13 @@ pub struct Constraint {
 }
 
 /// A conjunction of constraints, as written between `{` and `}`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConstraintExpr {
     pub terms: Vec<Constraint>,
 }
 
 /// Relational operators.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RelOp {
     Eq,
     Neq,
