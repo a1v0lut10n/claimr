@@ -1,0 +1,18 @@
+?- append(cons(1, cons(2, nil)), cons(3, nil), L).
+L = cons(1, cons(2, cons(3, nil)))
+?- append(X, Y, cons(a, cons(b, nil))).
+X = nil, Y = cons(a, cons(b, nil))
+X = cons(a, nil), Y = cons(b, nil)
+X = cons(a, cons(b, nil)), Y = nil
+?- member(X, cons(a, cons(b, cons(c, nil)))).
+X = a
+X = b
+X = c
+?- member(b, cons(a, cons(b, cons(c, nil)))).
+true
+?- reverse(cons(1, cons(2, cons(3, nil))), R).
+R = cons(3, cons(2, cons(1, nil)))
+?- length(cons(a, cons(b, nil)), N).
+N = s(s(zero))
+?- length(L, s(s(zero))).
+L = cons(_1, cons(_2, nil))

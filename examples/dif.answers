@@ -1,0 +1,22 @@
+?- adjacent(red, X).
+X = green
+X = blue
+?- triangle(A, B, C).
+A = red, B = green, C = blue
+A = red, B = blue, C = green
+A = green, B = red, C = blue
+A = green, B = blue, C = red
+A = blue, B = red, C = green
+A = blue, B = green, C = red
+?- { X != a }, same(X, b).
+X = b
+?- { X != a }, same(X, a).
+false
+?- { X != Y }, same(X, f(Z)), same(Y, f(W)).
+X = f(Z), Y = f(W), f(Z) != f(W)
+?- { X != Y }, same(X, f(Z)), same(Y, f(W)), same(Z, W).
+false
+?- { f(X, b) != f(a, Y) }, same(X, a).
+X = a, f(a, b) != f(a, Y)
+?- { f(X, b) != f(a, Y) }, same(X, a), same(Y, b).
+false

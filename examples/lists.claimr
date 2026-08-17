@@ -1,0 +1,20 @@
+% Lists as terms (there is no list syntax yet): nil, cons(Head, Tail).
+append(nil, L, L).
+append(cons(H, T), L, cons(H, R)) :- append(T, L, R).
+
+member(X, cons(X, T)).
+member(X, cons(H, T)) :- member(X, T).
+
+reverse(nil, nil).
+reverse(cons(H, T), R) :- reverse(T, RT), append(RT, cons(H, nil), R).
+
+length(nil, zero).
+length(cons(H, T), s(N)) :- length(T, N).
+
+?- append(cons(1, cons(2, nil)), cons(3, nil), L).
+?- append(X, Y, cons(a, cons(b, nil))).
+?- member(X, cons(a, cons(b, cons(c, nil)))).
+?- member(b, cons(a, cons(b, cons(c, nil)))).
+?- reverse(cons(1, cons(2, cons(3, nil))), R).
+?- length(cons(a, cons(b, nil)), N).
+?- length(L, s(s(zero))).

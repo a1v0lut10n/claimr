@@ -15,13 +15,39 @@
 //! ```
 
 pub mod ast;
+pub mod eval;
 pub mod number;
 mod parser;
 
 pub use ast::*;
+pub use eval::{Answer, EvalError, Program, Query, Solutions};
 pub use number::{Number, ParseNumberError};
 
 use rustemo::Parser as _;
+
+/// A position in the source: 1-based line and column, plus byte offset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Span {
+    pub line: usize,
+    pub column: usize,
+    pub offset: usize,
+}
+
+impl From<rustemo::Position> for Span {
+    fn from(p: rustemo::Position) -> Self {
+        Span {
+            line: p.line().unwrap_or(0),
+            column: p.column().map(|c| c + 1).unwrap_or(0),
+            offset: p.pos,
+        }
+    }
+}
+
+impl std::fmt::Display for Span {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.line, self.column)
+    }
+}
 
 /// A syntax error, with its position in the source when known.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -70,8 +96,15 @@ impl From<rustemo::Error> for ParseError {
 
 /// Parse a whole program — a sequence of clauses — from source text.
 ///
-/// The entire input must be consumed; whitespace between clauses is ignored.
+/// The entire input must be consumed; whitespace and comments between clauses
+/// are ignored.
 pub fn parse_program(source: &str) -> Result<Vec<Clause>, ParseError> {
+    parse_program_spanned(source).map(|cs| cs.into_iter().map(|(c, _)| c).collect())
+}
+
+/// Like [`parse_program`], but pairs each clause with the [`Span`] where it
+/// starts — for diagnostics that must point back into the source.
+pub fn parse_program_spanned(source: &str) -> Result<Vec<(Clause, Span)>, ParseError> {
     parser::claimr::ClaimrParser::new()
         .parse(source)
         .map_err(ParseError::from)

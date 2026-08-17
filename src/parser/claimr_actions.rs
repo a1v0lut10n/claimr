@@ -6,8 +6,10 @@
 /// the parser's public output is the `ast` module. Type aliases keep the names
 /// rustemo's generated parser expects (one per grammar rule).
 use rustemo::Token as RustemoToken;
+use rustemo::Context as _;
 use super::claimr::{TokenKind, Context};
 use crate::ast;
+use crate::Span;
 pub type Input = str;
 pub type Ctx<'i> = Context<'i, Input>;
 #[allow(dead_code)]
@@ -28,7 +30,7 @@ pub fn number(_ctx: &Ctx, token: Token) -> Number {
             "Number token text is a valid literal by construction of the terminal regex",
         )
 }
-pub type Program = Vec<ast::Clause>;
+pub type Program = Vec<(ast::Clause, Span)>;
 pub fn program_c1(_ctx: &Ctx, clauses: Clause0) -> Program {
     clauses.unwrap_or_default()
 }
@@ -47,21 +49,25 @@ pub fn clause0_clause1(_ctx: &Ctx, clause1: Clause1) -> Clause0 {
 pub fn clause0_empty(_ctx: &Ctx) -> Clause0 {
     None
 }
-pub type Clause = ast::Clause;
-pub fn clause_fact(_ctx: &Ctx, fact: Fact) -> Clause {
-    fact
+/// A clause with the source position where it starts.
+pub type Clause = (ast::Clause, Span);
+fn span_of(ctx: &Ctx) -> Span {
+    Span::from(ctx.span().start)
 }
-pub fn clause_rule(_ctx: &Ctx, rule: Rule) -> Clause {
-    rule
+pub fn clause_fact(ctx: &Ctx, fact: Fact) -> Clause {
+    (fact, span_of(ctx))
 }
-pub fn clause_constraint_fact(_ctx: &Ctx, constraint_fact: ConstraintFact) -> Clause {
-    constraint_fact
+pub fn clause_rule(ctx: &Ctx, rule: Rule) -> Clause {
+    (rule, span_of(ctx))
 }
-pub fn clause_implication(_ctx: &Ctx, implication: Implication) -> Clause {
-    implication
+pub fn clause_constraint_fact(ctx: &Ctx, constraint_fact: ConstraintFact) -> Clause {
+    (constraint_fact, span_of(ctx))
 }
-pub fn clause_query(_ctx: &Ctx, query: Query) -> Clause {
-    query
+pub fn clause_implication(ctx: &Ctx, implication: Implication) -> Clause {
+    (implication, span_of(ctx))
+}
+pub fn clause_query(ctx: &Ctx, query: Query) -> Clause {
+    (query, span_of(ctx))
 }
 pub type Fact = ast::Clause;
 pub fn fact_c1(_ctx: &Ctx, head: Atom) -> Fact {

@@ -1,0 +1,24 @@
+% Disequations are constraints: they hold from the moment they are stated,
+% and are re-checked whenever a variable they mention is bound.
+color(red).
+color(green).
+color(blue).
+
+% Two adjacent regions must differ.
+adjacent(A, B) :- { A != B }, color(A), color(B).
+
+% Three mutually different colours: the constraints come first, the
+% enumeration after — the search is pruned, not filtered.
+triangle(A, B, C) :- { A != B, B != C, A != C }, color(A), color(B), color(C).
+
+% A disequation between still-unknown structures is suspended.
+same(X, X).
+
+?- adjacent(red, X).
+?- triangle(A, B, C).
+?- { X != a }, same(X, b).
+?- { X != a }, same(X, a).
+?- { X != Y }, same(X, f(Z)), same(Y, f(W)).
+?- { X != Y }, same(X, f(Z)), same(Y, f(W)), same(Z, W).
+?- { f(X, b) != f(a, Y) }, same(X, a).
+?- { f(X, b) != f(a, Y) }, same(X, a), same(Y, b).
