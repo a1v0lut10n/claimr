@@ -22,8 +22,11 @@ declarative programs.
   LR parser generator for Rust — the grammar file is the single source of
   truth for the syntax, and syntax errors carry line/column positions
 
-Current status: the **parser** is implemented (`src/parser/`); evaluation and
-constraint solving are not yet.
+Current status: the **parser** (`src/parser/`) and the **evaluator** for pure
+programs (`src/eval/`: SLD resolution over rational trees, `=`/`!=` on terms,
+answers in solved form) are implemented; **numeric constraint solving is in
+progress** — programs using `< > <= >=`, arithmetic terms or attribute terms
+are rejected at load with a positioned diagnostic until the linear store lands.
 
 ## Grammar
 
@@ -95,27 +98,52 @@ cargo test
 ## Usage
 
 ```bash
-# Parse a Claimr program and print its clauses
-cargo run -- examples/socrates.claimr
+# Run a program: each `?-` query is answered in order
+cargo run -- examples/family.claimr
 
 # Or, after `cargo install --path .`
 claimr path/to/program.claimr
+claimr --limit 5 program.claimr    # cap answers per query (unlimited by default)
+claimr --parse program.claimr      # dump the parsed clauses instead of running
+```
+
+Answers are printed in solved form, one per line, `true` when nothing remains
+to say and `false` when a query has no answers:
+
+```text
+?- grandparent(tom, Who).
+Who = ann
+Who = pat
+?- sibling(ann, S).
+S = pat
+?- { X != Y }, same(X, f(Z)), same(Y, f(W)).
+X = f(Z), Y = f(W), f(Z) != f(W)
+?- omega(X).
+X = f(X)
 ```
 
 As a library:
 
 ```rust
-use claimr::{parse_program, Clause};
+use claimr::{parse_program, Program};
 
-let clauses = parse_program("human(socrates).\n?- human(socrates).\n")?;
-assert!(matches!(clauses[0], Clause::Fact(_)));
+let clauses = parse_program("human(socrates).\nmortal(X) :- human(X).\n?- mortal(W).\n")?;
+let program = Program::compile(&clauses)?;
+for query in program.queries() {
+    for answer in program.solve(query) {
+        println!("{answer}"); // W = socrates
+    }
+}
 ```
 
-Syntax errors come back as `claimr::ParseError` with `line`/`column`:
+Diagnostics are GCC-style `file:line:column: message` — syntax errors from the
+parser, and load errors (`claimr::EvalError`) from the compile step:
 
 ```text
 $ claimr broken.claimr
 broken.claimr:1:21: Expected one of Neq, Le, Ge, Comma, RParen, RBrace, Eq, Lt, Gt.
+$ claimr examples/socrates.claimr
+examples/socrates.claimr:4:1: clause 3 `{ age(socrates) > 70 }.`: numeric relation `>` is not supported yet (evaluator stage 3)
 ```
 
 ## Project layout
@@ -132,8 +160,9 @@ claimr/
 │   │   ├── claimr.rustemo       # THE grammar (authoritative)
 │   │   ├── claimr_actions.rs    # semantic actions: productions -> ast
 │   │   └── mod.rs               # includes the generated parser (OUT_DIR)
-│   └── main.rs          # `claimr` CLI: parse a file, print clauses
-├── examples/            # sample .claimr programs (also parsed by the tests)
+│   ├── eval/            # evaluator: store (heap, trail, dif), unify, compile, SLD machine, answers
+│   └── main.rs          # `claimr` CLI: run a program (or --parse to dump the AST)
+├── examples/            # sample .claimr programs (parsed by the tests; *.answers = golden runs)
 ├── tests/               # integration tests
 └── docs/                # documentation workflow (see docs/README.md)
     ├── reference/grammar.md

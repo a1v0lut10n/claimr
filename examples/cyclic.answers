@@ -1,0 +1,12 @@
+?- omega(X).
+X = f(X)
+?- omega(X), { X = f(f(X)) }.
+X = f(X)
+?- omega(X), omega(Y), same(X, Y).
+X = f(X), Y = f(X)
+?- stream(S).
+S = cons(1, S)
+?- { X = g(Y, Y), Y = h(X) }.
+X = g(Y, Y), Y = h(X)
+?- { X = f(X, a) }, { X = f(X, b) }.
+false

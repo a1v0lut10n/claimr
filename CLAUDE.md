@@ -7,15 +7,27 @@ via the workspace-root symlink).
 ## What is Claimr
 
 A constraint logic programming language (Prolog III inspired) implemented in
-Rust. Single crate `claimr`: a library (`src/lib.rs` public API, `src/ast.rs`
-AST, `src/parser/` — an LR parser generated at build time by rustemo from
-`src/parser/claimr.rustemo`, with hand-maintained semantic actions in
-`claimr_actions.rs`) and a thin CLI binary (`src/main.rs`). Only the parser
-exists so far; evaluation and constraint solving are future work. Source files
-use the `.claimr` extension. **`src/parser/claimr.rustemo` is the authoritative
-grammar**; `docs/reference/grammar.md` is an EBNF view of it and must be kept
-in step. Grammar changes go grammar → actions → example under `examples/` →
-EBNF view (see the `grammar-authority` aspect in `docs/architecture/README.md`).
+Rust. Single crate `claimr`:
+
+- `src/lib.rs` public API, `src/ast.rs` AST, `src/number.rs` exact rational
+  `Number` (no floats anywhere — `exact-arithmetic` aspect);
+- `src/parser/` — an LR parser generated at build time by rustemo from
+  `src/parser/claimr.rustemo`, with hand-maintained semantic actions in
+  `claimr_actions.rs`;
+- `src/eval/` — the evaluator: rational-tree unification, `dif`, compile step,
+  iterative SLD machine, answers in solved form (`components/evaluator.md`).
+  Stage 2 of the evaluator design is done; **numeric constraints, arithmetic
+  terms and attribute terms are rejected at load until stage 3** (the linear
+  store / `solver` component);
+- `src/main.rs` — thin CLI: `claimr file.claimr` runs the program's queries.
+
+Source files use the `.claimr` extension. **`src/parser/claimr.rustemo` is the
+authoritative grammar**; `docs/reference/grammar.md` is an EBNF view of it and
+must be kept in step. Grammar changes go grammar → actions → example under
+`examples/` → EBNF view (see the `grammar-authority` aspect in
+`docs/architecture/README.md`). Semantics decisions live in `docs/design/`
+(evaluator, exact rationals, arithmetic in terms) — read them before touching
+`src/eval/`.
 
 The project was renamed from *claim* to *claimr* (crates.io name clash).
 
@@ -23,12 +35,17 @@ The project was renamed from *claim* to *claimr* (crates.io name clash).
 
 ```bash
 cargo build
-cargo test                                # unit tests + tests/ (parses every examples/*.claimr)
+cargo test                                # unit + integration; parses every examples/*.claimr and
+                                          # golden-runs each one that has an examples/*.answers file
 cargo clippy --all-targets -- -D warnings
-cargo run -- examples/socrates.claimr     # parse a program, print its clauses
+cargo run -- examples/family.claimr       # run a program: prints each query and its answers
+cargo run -- --parse examples/socrates.claimr   # dump the parsed clauses instead
+cargo run -- --limit 5 file.claimr        # cap answers per query (unlimited by default)
 ```
 
-Adding a sample program under `examples/` automatically puts it under test.
+Adding a sample program under `examples/` automatically puts it under parse
+test; adding a sibling `.answers` file (the expected stdout) puts it under
+golden run test.
 The generated parser lives in `OUT_DIR` (never committed); rustemo regenerates
 it when the grammar changes and appends action stubs for new productions to
 `claimr_actions.rs` without touching existing ones.

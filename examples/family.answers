@@ -1,0 +1,16 @@
+?- parent(tom, X).
+X = bob
+X = liz
+?- grandparent(tom, Who).
+Who = ann
+Who = pat
+?- ancestor(tom, jim).
+true
+?- ancestor(X, jim).
+X = pat
+X = tom
+X = bob
+?- sibling(ann, S).
+S = pat
+?- parent(jim, X).
+false

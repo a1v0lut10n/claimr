@@ -1,0 +1,12 @@
+% Terms are rational trees (Prolog II/III): unification has no occurs check,
+% and a cyclic term is a legitimate value, printed as an equation.
+omega(X) :- { X = f(X) }.
+stream(S) :- { S = cons(1, S) }.
+same(X, X).
+
+?- omega(X).
+?- omega(X), { X = f(f(X)) }.
+?- omega(X), omega(Y), same(X, Y).
+?- stream(S).
+?- { X = g(Y, Y), Y = h(X) }.
+?- { X = f(X, a) }, { X = f(X, b) }.
