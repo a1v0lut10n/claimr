@@ -1,0 +1,10 @@
+human(socrates).
+mortal(X) :- human(X).
+
+{ age(socrates) > 70 }.
+eligible(X) :- { age(X) >= 18 }.
+
+{ age(X) >= 18 } => eligible(X).
+
+?- mortal(socrates).
+?- eligible(alice), { age(alice) >= 18 }.

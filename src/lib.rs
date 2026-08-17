@@ -1,11 +1,15 @@
-// claim/src/lib.rs - Complete rewrite for constraint logic parser
+//! Claimr — parser for the Claimr constraint logic language (Prolog III inspired).
+//!
+//! The grammar is documented in `docs/reference/grammar.md`. This module
+//! exposes the AST types plus two entry points: [`all_consuming_parse_clause`]
+//! for a single clause and [`parse_program`] for a whole source file.
 
 use nom::{
     IResult,
     branch::alt,
     bytes::complete::tag,
     character::complete::{alpha1, alphanumeric1, char, digit1, multispace0},
-    combinator::{all_consuming, map, map_res, opt, recognize, verify, cut},
+    combinator::{all_consuming, map, map_res, opt, recognize, verify},
     multi::{many0, separated_list0, separated_list1},
     sequence::{delimited, pair, terminated, tuple},
 };
@@ -82,11 +86,11 @@ fn parse_identifier(input: &str) -> IResult<&str, String> {
 }
 
 fn parse_var(input: &str) -> IResult<&str, String> {
-    verify(parse_identifier, |s: &String| s.chars().next().map_or(false, |c| c.is_uppercase()))(input)
+    verify(parse_identifier, |s: &String| s.chars().next().is_some_and(|c| c.is_uppercase()))(input)
 }
 
 fn parse_ident(input: &str) -> IResult<&str, String> {
-    verify(parse_identifier, |s: &String| s.chars().next().map_or(false, |c| c.is_lowercase()))(input)
+    verify(parse_identifier, |s: &String| s.chars().next().is_some_and(|c| c.is_lowercase()))(input)
 }
 
 fn parse_number(input: &str) -> IResult<&str, f64> {
@@ -280,6 +284,12 @@ pub fn all_consuming_parse_clause(input: &str) -> IResult<&str, Clause> {
     all_consuming(parse_clause)(input)
 }
 
+/// Parse a whole program (a sequence of clauses) and require that all input
+/// is consumed. Whitespace between and around clauses is ignored.
+pub fn parse_program(input: &str) -> IResult<&str, Vec<Clause>> {
+    all_consuming(terminated(many0(parse_clause), multispace0))(input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,6 +332,14 @@ mod tests {
         let result = all_consuming_parse_clause(input);
         println!("{:?}", result);
         assert!(matches!(result, Ok((_, Clause::Implication { .. }))));
+    }
+
+    #[test]
+    fn test_parse_program() {
+        let input = "human(socrates).\nmortal(X) :- human(X).\n\n?- mortal(socrates).\n";
+        let (rest, clauses) = parse_program(input).expect("program parses");
+        assert!(rest.is_empty());
+        assert_eq!(clauses.len(), 3);
     }
 
     #[test]
