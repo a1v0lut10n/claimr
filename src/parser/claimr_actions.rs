@@ -20,9 +20,13 @@ pub type Var = String;
 pub fn var(_ctx: &Ctx, token: Token) -> Var {
     token.value.into()
 }
-pub type Number = f64;
+pub type Number = crate::number::Number;
+/// Decimal literals denote exact rationals: `18.5` is 37/2.
 pub fn number(_ctx: &Ctx, token: Token) -> Number {
-    token.value.parse().expect("Number token is valid f64 text by construction")
+    Number::from_literal(token.value)
+        .expect(
+            "Number token text is a valid literal by construction of the terminal regex",
+        )
 }
 pub type Program = Vec<ast::Clause>;
 pub fn program_c1(_ctx: &Ctx, clauses: Clause0) -> Program {

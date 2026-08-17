@@ -1,7 +1,7 @@
 //! Integration tests: every program under `examples/` must parse in full,
 //! and malformed input must fail with a positioned error.
 
-use claimr::{Clause, parse_program};
+use claimr::{Clause, Expr, Number, parse_program};
 
 fn read_example(name: &str) -> String {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/");
@@ -28,6 +28,19 @@ fn nested_terms_example_parses_completely() {
     assert_eq!(clauses.len(), 7);
     let Clause::Fact(likes) = &clauses[0] else { panic!("first clause is a fact") };
     assert!(matches!(likes.args[1], claimr::Expr::Atom(ref a) if a.name == "father"));
+}
+
+#[test]
+fn numbers_example_parses_exactly() {
+    let clauses = parse_program(&read_example("numbers.claimr")).expect("numbers.claimr should parse");
+    assert_eq!(clauses.len(), 7);
+    let Clause::Fact(apple) = &clauses[0] else { panic!("first clause is a fact") };
+    assert_eq!(apple.args[1], Expr::Number(Number::from_ratio(1, 2).unwrap()));
+    let Clause::Fact(caviar) = &clauses[2] else { panic!("third clause is a fact") };
+    let Expr::Number(n) = &caviar.args[1] else { panic!("price is a number") };
+    assert_eq!(n.to_string(), "4938271560493827157/4"); // exact, beyond f64 precision
+    let Clause::ConstraintFact(c) = &clauses[4] else { panic!("fifth clause is a constraint fact") };
+    assert_eq!(c.terms[0].right, Expr::Number(Number::from_ratio(37, 2).unwrap()));
 }
 
 #[test]
