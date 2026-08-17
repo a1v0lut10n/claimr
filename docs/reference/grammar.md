@@ -1,12 +1,21 @@
 # Claimr grammar
 
-Formal grammar of the Claimr language (Prolog III inspired). This document is
-**authoritative**: `src/lib.rs` implements it and `README.md` quotes an excerpt.
-Change the grammar here first, then the parser, then add an example under
-`examples/` (the test suite parses every `.claimr` file there).
+EBNF view of the Claimr language (Prolog III inspired). **The authoritative
+grammar is [`src/parser/claimr.rustemo`](../../src/parser/claimr.rustemo)** —
+the parser is generated from that file at build time, so it cannot drift from
+it; this document is kept in step by hand for readers who prefer EBNF. Change
+the grammar there first, then the actions (`src/parser/claimr_actions.rs`),
+then add an example under `examples/` (the test suite parses every `.claimr`
+file there), then update this view.
 
 Notation: `{ x }` = zero or more, `[ x ]` = optional, `|` = alternative.
 Whitespace between tokens is insignificant. There is currently no comment syntax.
+
+Two notational differences between this EBNF and the rustemo grammar, neither
+changing the language: `rule` and `constraint_rule` share one syntactic shape
+there (the clause is classified by whether its body contains a `{ … }` goal),
+and a query's bare `{ constraint_expr }` form is a body with a single
+constraint goal.
 
 ## Top-Level Structure
 

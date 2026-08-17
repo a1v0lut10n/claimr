@@ -20,7 +20,7 @@ fn main() -> ExitCode {
     };
 
     match claimr::parse_program(&source) {
-        Ok((_, clauses)) => {
+        Ok(clauses) => {
             for clause in &clauses {
                 println!("{clause:?}");
             }
@@ -28,7 +28,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("claimr: parse error in {path}: {e}");
+            eprintln!("{path}:{e}");
             ExitCode::FAILURE
         }
     }
