@@ -29,6 +29,7 @@ Cross-component invariants — rules that survive replacing any single component
 | Name                | Invariant (summary) |
 |---------------------|---------------------|
 | `grammar-authority` | `src/parser/claimr.rustemo` is the single source of truth for the language's syntax — the parser is generated from it, so it cannot drift; `docs/reference/grammar.md` and the README are views that follow it, never the other way round. Every construct in the grammar has at least one parsed example under `examples/`. |
+| `exact-arithmetic`  | Numbers are exact arbitrary-precision rationals (integers = denominator 1); no floating point anywhere in the language core; decimal literals denote exact rationals; irrational reals exist only semantically as values of under-constrained variables. Decision: [`../design/2026-08-17-exact-rational-arithmetic.md`](../design/2026-08-17-exact-rational-arithmetic.md). |
 
 ## Litmus test
 
