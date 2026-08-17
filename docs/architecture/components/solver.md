@@ -80,16 +80,13 @@ Claimr's constraint store. Two layers:
   (relaxed bounds make them inert) — memory grows with a query's search,
   which is acceptable at Claimr's scale and noted for later work.
 
-## Answer rendering (stage-3 form)
+## Answer rendering
 
-After the tree equations: fixed numeric query variables print `X = c` and
-fixed numeric variables inside terms print as their value; the numeric part
-then lists, for solver variables the query can see (numeric variables
-reachable from the query, attribute terms created by the query, and anything
-their rows or bounded definitions touch — world attribute terms print by
-their term when pulled in): fixed attribute values (`age(bob) = 3`), bounds
-(`X > 3`), equations in solved form (`Y = X + 1`, solved for the most
-recently introduced unit-coefficient variable), two-variable differences as
-`X > Y`, other rows as `X + Y <= 10`, and pending numeric disequations
-(`X != 3`). Fully determined lines are omitted; the world's constraints show
-only when the query touches them. Full projection/elimination is stage 4.
+Answers are produced by the evaluator's projection (`src/eval/project.rs`,
+see [`evaluator.md`](evaluator.md)): the visible part of this store is
+collected as a residual linear system, internal variables are eliminated
+(Gaussian, then Fourier–Motzkin within a budget — a survivor is named
+`_N`, never mis-printed), redundant constraints are removed exactly, and
+the result prints in solved form: fixed values inline, `Y = X + 1`, `X > Y`,
+`X + Y <= 10`, `age(alice) >= 18`, `X != 3`. World constraints appear only
+on unknowns the query touched. Rows and definitions never print directly.

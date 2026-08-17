@@ -1,7 +1,7 @@
 ---
 date: 2026-08-18
 type: task
-status: planned
+status: done
 affects:
   - docs/architecture/components/evaluator.md
   - docs/architecture/components/solver.md

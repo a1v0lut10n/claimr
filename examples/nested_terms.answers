@@ -1,4 +1,4 @@
 ?- likes(mary, Who).
 Who = father(john)
 ?- older(father(john), john), { age(john) >= 18 }.
-age(father(john)) > 60, age(john) >= 18, age(father(john)) > age(john)
+age(father(john)) > 60, age(father(john)) > age(john), age(john) >= 18

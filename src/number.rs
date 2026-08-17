@@ -121,6 +121,30 @@ impl Number {
     pub fn abs(&self) -> Number {
         if self.is_negative() { -self.clone() } else { self.clone() }
     }
+
+    /// Scale factor that makes the numbers integral with no common factor:
+    /// `lcm(denominators) / gcd(numerators)` — for printing linear
+    /// constraints with small integer coefficients. `None` for an empty or
+    /// all-zero list.
+    pub fn integralising_factor<'a>(nums: impl IntoIterator<Item = &'a Number>) -> Option<Number> {
+        use num_integer::Integer;
+        let mut lcm = BigInt::from(1u8);
+        let mut gcd = BigInt::from(0u8);
+        let mut any = false;
+        for n in nums {
+            if n.is_zero() {
+                continue;
+            }
+            any = true;
+            lcm = lcm.lcm(n.denom());
+            gcd = gcd.gcd(&(n.numer() * &lcm / n.denom()));
+        }
+        if !any {
+            return None;
+        }
+        // Recompute the gcd of the scaled numerators exactly.
+        Number::from_ratio(lcm, gcd.max(BigInt::from(1u8)))
+    }
 }
 
 // Exact arithmetic. Owned and borrowed forms; `/` panics on zero (use

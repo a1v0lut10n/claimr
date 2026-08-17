@@ -13,10 +13,10 @@ X = b
 ?- { X != a }, same(X, a).
 false
 ?- { X != Y }, same(X, f(Z)), same(Y, f(W)).
-X = f(Z), Y = f(W), f(Z) != f(W)
+X = f(Z), Y = f(W), Z != W
 ?- { X != Y }, same(X, f(Z)), same(Y, f(W)), same(Z, W).
 false
 ?- { f(X, b) != f(a, Y) }, same(X, a).
-X = a, f(a, b) != f(a, Y)
+X = a, Y != b
 ?- { f(X, b) != f(a, Y) }, same(X, a), same(Y, b).
 false

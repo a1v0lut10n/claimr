@@ -41,6 +41,10 @@ struct Dif {
     a: Addr,
     b: Addr,
     pending: bool,
+    /// The would-bind pairs `(variable, term)` of the last trial unification:
+    /// the disequation is equivalent to "not all of these bindings". Empty if
+    /// the trial also touched the numeric store (no faithful reduced form).
+    reduced: Vec<(Addr, Addr)>,
 }
 
 /// Structural key of an attribute term modulo current bindings.
@@ -60,11 +64,12 @@ pub(crate) struct AttrEntry {
     pub svar: SVar,
 }
 
+/// A pending tree disequation for printing: `(left, right, reduced pairs)`.
+pub type PendingDif = (Addr, Addr, Vec<(Addr, Addr)>);
+
 #[derive(Debug, Clone)]
 pub(crate) struct NumDif {
     pub d: SVar,
-    pub a: Addr,
-    pub b: Addr,
     pub pending: bool,
 }
 
@@ -105,6 +110,7 @@ enum Undo {
     ProductPending(usize),
     Fired(Addr),
     Alias(SVar),
+    AttrTouched(usize),
 }
 
 /// A point in the store's history to return to.
@@ -149,6 +155,9 @@ pub struct Store {
     /// the world, not to the answer.
     pub(crate) baseline_attrs: usize,
     pub(crate) baseline_numdifs: usize,
+    /// World attribute entries looked up during the current query: they are
+    /// visible to the answer like entries the query created.
+    pub(crate) attr_touched: HashSet<usize>,
     /// Heap variables whose "determined" event has fired.
     fired: HashSet<Addr>,
     /// Numeric heap variables touched during the current trial unification.
@@ -263,6 +272,9 @@ impl Store {
                 }
                 Undo::Alias(sv) => {
                     self.aliases.remove(&sv);
+                }
+                Undo::AttrTouched(id) => {
+                    self.attr_touched.remove(&id);
                 }
             }
         }
@@ -463,7 +475,7 @@ impl Store {
     pub fn post_dif(&mut self, a: Addr, b: Addr) -> bool {
         let mark = self.mark();
         let id = self.difs.len();
-        self.difs.push(Dif { a, b, pending: true });
+        self.difs.push(Dif { a, b, pending: true, reduced: Vec::new() });
         if self.check_dif(id) && self.settle() {
             true
         } else {
@@ -481,7 +493,10 @@ impl Store {
     /// been bound (or numerically touched), re-checked when any is bound or
     /// determined.
     fn check_dif(&mut self, id: DifId) -> bool {
-        let Dif { a, b, pending } = self.difs[id].clone();
+        let (a, b, pending) = {
+            let d = &self.difs[id];
+            (d.a, d.b, d.pending)
+        };
         if !pending {
             return true;
         }
@@ -492,28 +507,38 @@ impl Store {
             self.trail.push(Undo::DifPending(id));
             return true;
         }
-        let mut would_bind: Vec<Addr> = self.trail[mark.trail..]
+        // Would-bind pairs: variables the trial bound, with their targets.
+        let pairs: Vec<(Addr, Addr)> = self.trail[mark.trail..]
             .iter()
             .filter_map(|u| match u {
-                Undo::Cell(addr, Cell::Var(x)) if x == addr => Some(*addr),
+                Undo::Cell(addr, Cell::Var(x)) if x == addr => match self.heap[*addr] {
+                    Cell::Var(t) => Some((*addr, t)),
+                    _ => None,
+                },
                 _ => None,
             })
             .collect();
         let numeric_change = self.simplex.changed_since(mark.simplex);
+        let mut would_bind: Vec<Addr> = pairs.iter().map(|(v, _)| *v).collect();
         would_bind.extend(self.touched.iter().copied());
         self.undo_to(&mark);
         if would_bind.is_empty() && !numeric_change {
             return false; // already equal
         }
+        self.difs[id].reduced = if numeric_change { Vec::new() } else { pairs };
         for v in would_bind {
             self.suspend(Waker::Dif(id), v);
         }
         true
     }
 
-    /// The pending disequations, as `(left, right)` addresses.
-    pub fn pending_difs(&self) -> Vec<(Addr, Addr)> {
-        self.difs.iter().filter(|d| d.pending).map(|d| (d.a, d.b)).collect()
+    /// The pending disequations: `(left, right, reduced pairs)`.
+    pub fn pending_difs(&self) -> Vec<PendingDif> {
+        self.difs
+            .iter()
+            .filter(|d| d.pending)
+            .map(|d| (d.a, d.b, d.reduced.clone()))
+            .collect()
     }
 
     // --- settle: wakers, determinations, products --------------------------
@@ -771,7 +796,7 @@ impl Store {
             let d = self.simplex.slack(&e);
             self.defs.insert(d, e);
             let id = self.numdifs.len();
-            self.numdifs.push(NumDif { d, a, b, pending: true });
+            self.numdifs.push(NumDif { d, pending: true });
             match self.simplex.is_determined(d) {
                 Some(c) if c.is_zero() => Some(false),
                 Some(_) => {
@@ -925,39 +950,13 @@ impl Store {
     pub(crate) fn set_baseline(&mut self) {
         self.baseline_attrs = self.attrs.len();
         self.baseline_numdifs = self.numdifs.len();
+        self.attr_touched.clear();
     }
 
-    /// Combined bounds of an alias class (tightest of its members).
-    pub(crate) fn class_bounds(&self, sv: SVar) -> (Option<solver::Delta>, Option<solver::Delta>) {
-        let r = self.root(sv);
-        let mut lower: Option<solver::Delta> = None;
-        let mut upper: Option<solver::Delta> = None;
-        for v in 0..self.simplex.num_vars() {
-            let v = SVar(v);
-            if self.root(v) != r {
-                continue;
-            }
-            if let Some(l) = self.simplex.lower(v) {
-                if lower.as_ref().is_none_or(|cur| l > cur) {
-                    lower = Some(l.clone());
-                }
-            }
-            if let Some(u) = self.simplex.upper(v) {
-                if upper.as_ref().is_none_or(|cur| u < cur) {
-                    upper = Some(u.clone());
-                }
-            }
-        }
-        (lower, upper)
-    }
-
-    /// A row defining some member of `sv`'s alias class, if any is basic.
-    pub(crate) fn class_row(&self, sv: SVar) -> Option<&LinExpr> {
-        let r = self.root(sv);
-        (0..self.simplex.num_vars())
-            .map(SVar)
-            .filter(|v| self.root(*v) == r)
-            .find_map(|v| self.simplex.row(v))
+    /// True if attribute entry `id` is visible to the query's answers:
+    /// created by the query, or a world entry the query looked up.
+    pub(crate) fn attr_visible(&self, id: usize) -> bool {
+        id >= self.baseline_attrs || self.attr_touched.contains(&id)
     }
 
     /// The fixed value of an alias class, if the solver exhibits one.
@@ -1025,8 +1024,14 @@ impl Store {
             self.error = Some(EvalError::CyclicAttributeTerm { term: self.debug_term(d) });
             return None;
         };
-        if let Some(sv) = self.attr_index.get(&key) {
-            return Some(*sv);
+        if let Some(sv) = self.attr_index.get(&key).copied() {
+            // A world entry touched by the query becomes visible to answers.
+            if let Some(id) = self.attrs.iter().position(|e| e.svar == sv) {
+                if id < self.baseline_attrs && self.attr_touched.insert(id) {
+                    self.trail.push(Undo::AttrTouched(id));
+                }
+            }
+            return Some(sv);
         }
         let sv = self.simplex.new_var();
         self.attr_index.insert(key.clone(), sv);

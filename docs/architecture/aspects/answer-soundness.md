@@ -42,10 +42,16 @@ realise the store.
    fail (no clauses ⇒ no solutions); unsupported constructs are rejected at
    load time with a positioned diagnostic, never silently ignored at run
    time. *Test:* stage-boundary tests in `src/eval/tests.rs`.
-4. **Projection is sound.** Constraints omitted from a printed answer are
-   only ones satisfiable independently of what is printed: tree
-   disequations mentioning no query-reachable variable, fully determined
-   numeric lines (their values are shown), and world constraints on unknowns
-   the query does not touch — all checked satisfiable before printing.
-   *Test:* `constraint_facts_form_the_initial_store`,
-   `attribute_terms_and_congruence`, and the golden runs.
+4. **Projection is sound.** What is printed is equivalent, on the public
+   variables, to the store: internal numeric variables are eliminated by
+   equivalence-preserving substitution and Fourier–Motzkin (or, over the
+   budget, kept and named — never silently dropped); redundancy removal
+   drops only constraints entailed by the rest, decided exactly by a
+   simplex; a numeric disequation is dropped only when substitution and
+   elimination leave it unlinked to any public variable; tree
+   disequations mentioning no query-reachable variable, and world
+   constraints on unknowns the query never touched, are omitted as
+   independently satisfiable. *Test:* `internal_variables_are_eliminated`
+   (incl. the disequation case `A != 3`), `redundant_constraints_are_dropped`,
+   `projection_budget_fallback_stays_correct`, `answers_are_deterministic`,
+   and the golden runs.

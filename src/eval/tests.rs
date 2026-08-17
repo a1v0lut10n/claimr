@@ -120,7 +120,7 @@ fn dif_answers_show_pending_disequations() {
          ?- { X != Y }, same(X, f(Z)), same(Y, f(W)), same(Z, W).
          ?- { X != a }, same(X, b).",
     );
-    assert_eq!(out[0], vec!["X = f(Z), Y = f(W), f(Z) != f(W)"]);
+    assert_eq!(out[0], vec!["X = f(Z), Y = f(W), Z != W"]);
     assert!(out[1].is_empty());
     assert_eq!(out[2], vec!["X = b"]);
 }
@@ -216,7 +216,7 @@ fn inequalities_bounds_and_residuals() {
     assert_eq!(first("?- { X + Y <= 10 }."), "X + Y <= 10");
     assert_eq!(first("?- { X > Y, Y > Z }."), "X > Y, Y > Z");
     assert_eq!(first("?- { Y = X + 1 }."), "Y = X + 1");
-    assert_eq!(first("?- { Y = X + 1 }, { X > 0 }."), "X > 0, Y = X + 1");
+    assert_eq!(first("?- { Y = X + 1 }, { X > 0 }."), "Y = X + 1, X > 0");
     // Two-variable equation with a residual: printed in solved form.
     assert_eq!(first("?- { X + Y = 10, 2*X - Y >= 1/3 }."), "Y = 10 - X, 2*X - Y >= 1/3");
 }
@@ -253,7 +253,7 @@ fn attribute_terms_and_congruence() {
          ?- same(X, 3), same(X, f(a)).
          ?- {{ age(X) + 1 >= 19 }}, same(X, bob)."
     ));
-    assert_eq!(out[0], vec!["true"]); // entailed by the world
+    assert_eq!(out[0], vec!["age(socrates) > 70"]); // the world's constraint on the touched unknown
     assert_eq!(out[1], vec!["age(alice) >= 18"]);
     assert_eq!(out[2], vec!["X = socrates, age(socrates) > 70"]);
     assert_eq!(out[3], vec!["age(X) >= 18"]);
@@ -349,4 +349,86 @@ fn no_floating_point_in_the_crate() {
     let mut hits = Vec::new();
     scan(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut hits);
     assert!(hits.is_empty(), "floating point in src/: {hits:#?}");
+}
+
+// --- stage 4: projection and simplification ----------------------------------
+
+#[test]
+fn internal_variables_are_eliminated() {
+    let prog = "p(X) :- { X = Y + Z, Y > 0, Z > 0 }.
+                q(X) :- { X = Y + 1, Y != 2 }.
+                r(X, Y) :- { X > Y, Y > Z, X > Z }.
+                s(X) :- { X > 3, X > 2 }.
+                t(X) :- { X + Y = 10, X + Y = 10 }.
+                u(X) :- { X = 2 * Y, Y >= 1, Y <= 3 }.
+                v(X) :- { X = Y + Z, Y > 0, Z >= 0 }.
+                w(X) :- { X = 3 * Y + 1, Y >= 1 }.
+                b(X) :- { X = Y + Z, Y >= 0, Y <= 1, Z >= 0, Z <= 1 }.";
+    let out = answers(&format!(
+        "{prog}
+         ?- p(A). ?- q(A). ?- r(A, B). ?- s(A). ?- t(A). ?- u(A). ?- v(A). ?- w(A). ?- b(A)."
+    ));
+    assert_eq!(out[0], vec!["A > 0"]);
+    assert_eq!(out[1], vec!["A != 3"]); // the stage-3 projection bug
+    assert_eq!(out[2], vec!["A > B"]);
+    assert_eq!(out[3], vec!["A > 3"]);
+    assert_eq!(out[4], vec!["true"]);
+    assert_eq!(out[5], vec!["A >= 2, A <= 6"]);
+    assert_eq!(out[6], vec!["A > 0"]); // strictness survives FM
+    assert_eq!(out[7], vec!["A >= 4"]); // non-unit coefficient
+    assert_eq!(out[8], vec!["A >= 0, A <= 2"]);
+}
+
+#[test]
+fn redundant_constraints_are_dropped() {
+    assert_eq!(first("?- { X > 3, X > 2 }."), "X > 3");
+    assert_eq!(first("?- { X > Y, Y > Z }."), "X > Y, Y > Z");
+    assert_eq!(first("?- { X + Y <= 10, X + Y <= 20 }."), "X + Y <= 10");
+    assert_eq!(first("?- { 2 * X <= 6 }."), "X <= 3");
+    assert_eq!(first("?- { X > Y, Y > Z, X > Z }."), "X > Y, Y > Z");
+    assert_eq!(first("?- { X = Y + 1, X = Y + 1 }."), "X = Y + 1");
+}
+
+#[test]
+fn tree_disequations_print_in_reduced_form() {
+    let out = answers(
+        "same(X, X).
+         ?- { X != Y }, same(X, f(Z)), same(Y, f(W)).
+         ?- { f(X, b) != f(a, Y) }, same(X, a).
+         ?- { X != Y }, same(X, f(Z, V)), same(Y, f(W, U)).
+         ?- { X != Y }, same(X, f(Z, a)), same(Y, f(W, b)).",
+    );
+    assert_eq!(out[0], vec!["X = f(Z), Y = f(W), Z != W"]);
+    assert_eq!(out[1], vec!["X = a, Y != b"]);
+    // Two pairs: a genuine disjunction, printed as the full terms.
+    assert_eq!(out[2], vec!["X = f(Z, V), Y = f(W, U), f(Z, V) != f(W, U)"]);
+    // Decidably different: dropped.
+    assert_eq!(out[3], vec!["X = f(Z, a), Y = f(W, b)"]);
+}
+
+#[test]
+fn projection_budget_fallback_stays_correct() {
+    // An internal W with 20 lower and 20 upper bounds on public variables
+    // would produce 400 combinations: over the budget, so W is named instead.
+    let args: Vec<String> = (0..20).map(|i| format!("A{i}")).chain((0..20).map(|i| format!("B{i}"))).collect();
+    let mut body = String::from("{ ");
+    for i in 0..20 {
+        body.push_str(&format!("W >= A{i}, W <= B{i}, "));
+    }
+    body.push_str("A0 >= 1 }");
+    let src = format!("p({}) :- {body}. ?- p({}).", args.join(", "), args.join(", "));
+    let out = answers(&src);
+    let ans = &out[0][0];
+    assert!(ans.contains("A0 >= 1"), "{ans}");
+    assert!(ans.contains("_1 >= A0") || ans.contains("A0 <= _1"), "survivor named: {ans}");
+}
+
+#[test]
+fn answers_are_deterministic() {
+    let src = "p(X, Y) :- { X = A + B, Y = A - B, A > 0, B > 0, A != B }.
+               ?- p(U, V).";
+    let first_run = answers(src);
+    for _ in 0..5 {
+        assert_eq!(answers(src), first_run);
+    }
 }
