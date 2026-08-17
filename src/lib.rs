@@ -198,6 +198,112 @@ mod tests {
         }
     }
 
+    // --- arithmetic ---------------------------------------------------------
+
+    fn num(n: i64) -> Expr {
+        Expr::Number(Number::from(n))
+    }
+    fn var(v: &str) -> Expr {
+        Expr::Var(v.into())
+    }
+    fn bin(op: ArithOp, l: Expr, r: Expr) -> Expr {
+        Expr::Binary { op, left: Box::new(l), right: Box::new(r) }
+    }
+    /// The left operand of the single constraint in `{ <src> }.`
+    fn lhs(src: &str) -> Expr {
+        let Clause::ConstraintFact(c) = parse_clause(&format!("{{ {src} = 0 }}.")).unwrap() else {
+            panic!("expected constraint fact for {src}");
+        };
+        c.terms.into_iter().next().unwrap().left
+    }
+
+    #[test]
+    fn precedence_mul_over_add() {
+        assert_eq!(lhs("1 + 2 * 3"), bin(ArithOp::Add, num(1), bin(ArithOp::Mul, num(2), num(3))));
+        assert_eq!(lhs("1 * 2 + 3"), bin(ArithOp::Add, bin(ArithOp::Mul, num(1), num(2)), num(3)));
+        assert_eq!(lhs("X / 2 - Y"), bin(ArithOp::Sub, bin(ArithOp::Div, var("X"), num(2)), var("Y")));
+    }
+
+    #[test]
+    fn left_associativity() {
+        assert_eq!(lhs("1 - 2 - 3"), bin(ArithOp::Sub, bin(ArithOp::Sub, num(1), num(2)), num(3)));
+        assert_eq!(lhs("8 / 4 / 2"), bin(ArithOp::Div, bin(ArithOp::Div, num(8), num(4)), num(2)));
+    }
+
+    #[test]
+    fn parentheses_group_and_vanish() {
+        assert_eq!(lhs("(1 + 2) * 3"), bin(ArithOp::Mul, bin(ArithOp::Add, num(1), num(2)), num(3)));
+        assert_eq!(lhs("((X))"), var("X"));
+    }
+
+    #[test]
+    fn unary_minus_binds_tightest() {
+        assert_eq!(lhs("-X * Y"), bin(ArithOp::Mul, Expr::Neg(Box::new(var("X"))), var("Y")));
+        assert_eq!(lhs("-3"), Expr::Neg(Box::new(num(3))));
+        assert_eq!(lhs("- - X"), Expr::Neg(Box::new(Expr::Neg(Box::new(var("X"))))));
+        assert_eq!(lhs("-(X + 1)"), Expr::Neg(Box::new(bin(ArithOp::Add, var("X"), num(1)))));
+        assert_eq!(lhs("2 - -3"), bin(ArithOp::Sub, num(2), Expr::Neg(Box::new(num(3)))));
+    }
+
+    #[test]
+    fn division_is_a_node_not_a_folded_constant() {
+        assert_eq!(lhs("1/3"), bin(ArithOp::Div, num(1), num(3)));
+    }
+
+    #[test]
+    fn arithmetic_over_attribute_terms() {
+        let age_x = Expr::Atom(Box::new(Atom { name: "age".into(), args: vec![var("X")] }));
+        assert_eq!(lhs("age(X) + 1"), bin(ArithOp::Add, age_x, num(1)));
+    }
+
+    #[test]
+    fn arithmetic_in_atom_arguments() {
+        let Clause::Fact(atom) = parse_clause("p(X + 1, f(-(2 * Y)), 3).").unwrap() else {
+            panic!("expected fact");
+        };
+        assert_eq!(atom.args.len(), 3);
+        assert_eq!(atom.args[0], bin(ArithOp::Add, var("X"), num(1)));
+        let inner = Expr::Neg(Box::new(bin(ArithOp::Mul, num(2), var("Y"))));
+        assert_eq!(atom.args[1], Expr::Atom(Box::new(Atom { name: "f".into(), args: vec![inner] })));
+        // ...and in rule bodies and queries.
+        assert!(matches!(parse_clause("q(X) :- p(X * 2)."), Ok(Clause::Rule { .. })));
+        assert!(matches!(parse_clause("?- p(1 + 1)."), Ok(Clause::Query(_))));
+    }
+
+    #[test]
+    fn multi_constraint_arithmetic() {
+        let Clause::ConstraintFact(c) = parse_clause("{ X + Y = 10, 2*X - Y >= 1/3 }.").unwrap() else {
+            panic!("expected constraint fact");
+        };
+        assert_eq!(c.terms.len(), 2);
+        assert_eq!(c.terms[1].op, RelOp::Ge);
+        assert_eq!(c.terms[1].right, bin(ArithOp::Div, num(1), num(3)));
+    }
+
+    // --- comments -----------------------------------------------------------
+
+    #[test]
+    fn line_comments_are_layout() {
+        let src = "% leading comment
+                   human(socrates). % trailing comment
+                   mortal(X) :- % inside a clause
+                       human(X).
+                   %% double percent, empty clause list follows
+                   ?- mortal(socrates). % at EOF without newline";
+        let clauses = parse_program(src).expect("comments should be layout");
+        assert_eq!(clauses.len(), 3);
+        assert_eq!(parse_program("% only a comment").unwrap(), vec![]);
+        assert_eq!(parse_program("%").unwrap(), vec![]);
+    }
+
+    #[test]
+    fn comment_does_not_swallow_the_next_line() {
+        let clauses = parse_program("p(a). % c1
+q(b).
+").unwrap();
+        assert_eq!(clauses.len(), 2);
+    }
+
     #[test]
     fn error_carries_position() {
         // Missing closing paren: the `.` on line 2 sits at column 21 (1-based).

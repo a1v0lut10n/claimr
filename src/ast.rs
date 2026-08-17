@@ -28,6 +28,10 @@ pub struct Atom {
 }
 
 /// A term expression.
+///
+/// Arithmetic operators are term constructors admissible anywhere a term
+/// goes (Prolog III); an arithmetic term denotes a number at evaluation
+/// time. The parser does no constant folding: `1/3` is `Binary { Div, 1, 3 }`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     Atom(Box<Atom>),
@@ -35,6 +39,19 @@ pub enum Expr {
     /// An exact rational literal (see [`Number`]).
     Number(Number),
     Ident(String),
+    /// Unary minus.
+    Neg(Box<Expr>),
+    /// A binary arithmetic operation.
+    Binary { op: ArithOp, left: Box<Expr>, right: Box<Expr> },
+}
+
+/// Binary arithmetic operators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
 }
 
 /// A single relational constraint `left op right`.

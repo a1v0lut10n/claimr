@@ -9,7 +9,8 @@ then add an example under `examples/` (the test suite parses every `.claimr`
 file there), then update this view.
 
 Notation: `{ x }` = zero or more, `[ x ]` = optional, `|` = alternative.
-Whitespace between tokens is insignificant. There is currently no comment syntax.
+Whitespace between tokens is insignificant, as are line comments: `%` to the
+end of the line, anywhere whitespace may appear.
 
 Two notational differences between this EBNF and the rustemo grammar, neither
 changing the language: `rule` and `constraint_rule` share one syntactic shape
@@ -74,7 +75,13 @@ relop           ::= "=" | "!=" | "<" | ">" | "<=" | ">="
 atom           ::= identifier "(" [ args ] ")"
 args           ::= expr { "," expr }
 
-expr           ::= identifier
+expr           ::= expr "+" expr          (* left-assoc, lowest *)
+                 | expr "-" expr          (* left-assoc, lowest *)
+                 | expr "*" expr          (* left-assoc *)
+                 | expr "/" expr          (* left-assoc *)
+                 | "-" expr               (* unary minus, binds tightest *)
+                 | "(" expr ")"
+                 | identifier
                  | number
                  | atom
                  | variable
@@ -82,7 +89,18 @@ expr           ::= identifier
 identifier     ::= letter { letter | digit | "_" }
 variable       ::= uppercase_letter { letter | digit | "_" }
 number         ::= digit { digit } [ "." digit { digit } ]
+comment        ::= "%" { any character except newline }
 ```
+
+Arithmetic operators are **term constructors** (Prolog III): they are admitted
+wherever a term is — atom arguments (`p(X + 1)`) as well as constraint
+operands (`{ 2*X - Y >= 1/3 }`). Precedence is unary minus, then `*` `/`, then
+`+` `-`; binary operators associate to the left; parentheses group and leave no
+trace in the AST. Negative numbers are unary minus applied to a literal. The
+parser does not fold constants (`1/3` is a division node); an arithmetic term
+denotes a number at evaluation time and its operands must then be numbers —
+see [`../design/2026-08-17-arithmetic-in-terms.md`](../design/2026-08-17-arithmetic-in-terms.md).
+Linearity is a solver check, not a grammar rule.
 
 Semantics of `number`: a literal denotes an **exact rational** — `18.5` is
 37/2, `0.10` is 1/10 — and integers are the denominator-1 case. There is no

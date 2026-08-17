@@ -13,8 +13,10 @@
 //     constraint goal.
 //   * a query's `"{" constraint_expr "}"` alternative is a body with a single
 //     constraint goal, so `Query` simply takes a `Body`.
-// Whitespace between tokens is skipped by the default lexer (no Layout rule).
-// There is currently no comment syntax.
+// Whitespace and `%` line comments are layout (see the Layout rule) and may
+// appear anywhere between tokens.
+// Arithmetic operators are term constructors admissible anywhere a term goes
+// (Prolog III); see docs/design/2026-08-17-arithmetic-in-terms.md.
 
 // ---------------------------------------------------------------------------
 // Top-level structure
@@ -73,11 +75,28 @@ Atom: name=Ident '(' args=Args? ')';
 
 Args: exprs=Expr+[Comma];
 
-Expr: atom=Atom      {AtomExpr}
-    | var=Var        {VarExpr}
-    | number=Number  {NumberExpr}
-    | name=Ident     {IdentExpr}
+// Terms, including arithmetic. Precedence: unary minus > `* /` > `+ -`;
+// binary operators are left-associative. Arithmetic is admitted wherever a
+// term is (atom arguments, constraint operands); linearity is a solver
+// concern, not a grammar one.
+Expr: left=Expr '+' right=Expr  {Add, left, 1}
+    | left=Expr '-' right=Expr  {Sub, left, 1}
+    | left=Expr '*' right=Expr  {Mul, left, 2}
+    | left=Expr '/' right=Expr  {Div, left, 2}
+    | '-' operand=Expr          {Neg, 3}
+    | '(' inner=Expr ')'        {Paren}
+    | atom=Atom                 {AtomExpr}
+    | var=Var                   {VarExpr}
+    | number=Number             {NumberExpr}
+    | name=Ident                {IdentExpr}
     ;
+
+// ---------------------------------------------------------------------------
+// Layout: whitespace and line comments (`% ...` to end of line)
+// ---------------------------------------------------------------------------
+
+Layout: LayoutItem*;
+LayoutItem: WS | Comment;
 
 // ---------------------------------------------------------------------------
 // Terminals
@@ -108,3 +127,11 @@ Lt: '<';
 Gt: '>';
 Le: '<=';
 Ge: '>=';
+Plus: '+';
+Minus: '-';
+Star: '*';
+Slash: '/';
+
+// Layout terminals
+WS: /\s+/;
+Comment: /%[^\n]*/;
