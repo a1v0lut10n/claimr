@@ -15,15 +15,17 @@ declarative programs.
 - **Constraint solving** integrated into the logic programming paradigm
 - **First-class constraints** usable in facts, rules, and queries
 - **Implication syntax** (`{ … } => head.`) as syntactic sugar
-- **Parser implemented with [nom](https://crates.io/crates/nom)**, a parser
-  combinator library for Rust
+- **Parser generated with [rustemo](https://crates.io/crates/rustemo)**, an
+  LR parser generator for Rust — the grammar file is the single source of
+  truth for the syntax, and syntax errors carry line/column positions
 
-Current status: the **parser** is implemented (`src/lib.rs`); evaluation and
+Current status: the **parser** is implemented (`src/parser/`); evaluation and
 constraint solving are not yet.
 
 ## Grammar
 
-The full grammar lives in [`docs/reference/grammar.md`](docs/reference/grammar.md).
+The authoritative grammar is [`src/parser/claimr.rustemo`](src/parser/claimr.rustemo);
+[`docs/reference/grammar.md`](docs/reference/grammar.md) is an EBNF view of it.
 The top-level shape:
 
 ```ebnf
@@ -90,8 +92,15 @@ As a library:
 ```rust
 use claimr::{parse_program, Clause};
 
-let (_, clauses) = parse_program("human(socrates).\n?- human(socrates).\n")?;
+let clauses = parse_program("human(socrates).\n?- human(socrates).\n")?;
 assert!(matches!(clauses[0], Clause::Fact(_)));
+```
+
+Syntax errors come back as `claimr::ParseError` with `line`/`column`:
+
+```text
+$ claimr broken.claimr
+broken.claimr:1:21: Expected one of Neq, Le, Ge, Comma, RParen, RBrace, Eq, Lt, Gt.
 ```
 
 ## Project layout
@@ -99,8 +108,14 @@ assert!(matches!(clauses[0], Clause::Fact(_)));
 ```
 claimr/
 ├── Cargo.toml
+├── build.rs             # generates the parser from the grammar (rustemo)
 ├── src/
-│   ├── lib.rs           # AST types + nom parser (library crate `claimr`)
+│   ├── lib.rs           # public API: parse_program, parse_clause, ParseError
+│   ├── ast.rs           # AST types
+│   ├── parser/
+│   │   ├── claimr.rustemo       # THE grammar (authoritative)
+│   │   ├── claimr_actions.rs    # semantic actions: productions -> ast
+│   │   └── mod.rs               # includes the generated parser (OUT_DIR)
 │   └── main.rs          # `claimr` CLI: parse a file, print clauses
 ├── examples/            # sample .claimr programs (also parsed by the tests)
 ├── tests/               # integration tests
@@ -113,10 +128,15 @@ claimr/
 ## Development
 
 ```bash
-cargo build
+cargo build                                # also regenerates the parser if the grammar changed
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
+
+To change the language: edit `src/parser/claimr.rustemo`, then adjust
+`src/parser/claimr_actions.rs` (rustemo appends stubs for new productions and
+preserves your edits), add an example under `examples/`, and update the EBNF
+view in `docs/reference/grammar.md`.
 
 Documentation, decision records, and the development journal follow the
 aivolution documentation workflow — see [`docs/README.md`](docs/README.md).

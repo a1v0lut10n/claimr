@@ -1,0 +1,9 @@
+likes(mary, father(john)).
+parent(father(john), john).
+grandparent(X, Z) :- parent(X, Y), parent(Y, Z).
+
+{ age(father(john)) > 60 }.
+older(X, Y) :- { age(X) > age(Y) }.
+
+?- likes(mary, Who).
+?- older(father(john), john), { age(john) >= 18 }.

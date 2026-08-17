@@ -1,0 +1,109 @@
+// Claimr grammar — the AUTHORITATIVE definition of the language.
+// ================================================================
+// Parsed by rustemo (LR(1)); the parser is generated at build time (see
+// build.rs). `docs/reference/grammar.md` is a rendered view of this file —
+// change the grammar here first, then the actions, then add an example under
+// examples/ (the test suite parses every `.claimr` file there).
+//
+// Faithful transcription of the original EBNF (Prolog III inspired). Two
+// notational differences from the EBNF, neither changing the language:
+//   * `rule` and `constraint_rule` share one syntactic shape (a body whose
+//     goals may include `{ … }` constraint blocks); the action classifies the
+//     clause as Rule or ConstraintRule by whether the body contains a
+//     constraint goal.
+//   * a query's `"{" constraint_expr "}"` alternative is a body with a single
+//     constraint goal, so `Query` simply takes a `Body`.
+// Whitespace between tokens is skipped by the default lexer (no Layout rule).
+// There is currently no comment syntax.
+
+// ---------------------------------------------------------------------------
+// Top-level structure
+// ---------------------------------------------------------------------------
+
+Program: clauses=Clause*;
+
+Clause: Fact | Rule | ConstraintFact | Implication | Query;
+
+// ---------------------------------------------------------------------------
+// Clauses
+// ---------------------------------------------------------------------------
+
+Fact: head=Atom '.';
+
+Rule: head=Atom ':-' body=Body '.';
+
+ConstraintFact: '{' constraints=ConstraintExpr '}' '.';
+
+// Implication syntax (optional sugar): { c } => head.
+Implication: '{' constraints=ConstraintExpr '}' '=>' head=Atom '.';
+
+Query: '?-' body=Body '.';
+
+// ---------------------------------------------------------------------------
+// Bodies and goals
+// ---------------------------------------------------------------------------
+
+Body: goals=Goal+[Comma];
+
+Goal: atom=Atom                        {AtomGoal}
+    | '{' constraints=ConstraintExpr '}' {ConstraintGoal}
+    ;
+
+// ---------------------------------------------------------------------------
+// Constraints
+// ---------------------------------------------------------------------------
+
+ConstraintExpr: terms=Constraint+[Comma];
+
+Constraint: left=Expr op=RelOp right=Expr;
+
+RelOp: '='  {Eq}
+     | '!=' {Neq}
+     | '<'  {Lt}
+     | '>'  {Gt}
+     | '<=' {Le}
+     | '>=' {Ge}
+     ;
+
+// ---------------------------------------------------------------------------
+// Atoms and terms
+// ---------------------------------------------------------------------------
+
+Atom: name=Ident '(' args=Args? ')';
+
+Args: exprs=Expr+[Comma];
+
+Expr: atom=Atom      {AtomExpr}
+    | var=Var        {VarExpr}
+    | number=Number  {NumberExpr}
+    | name=Ident     {IdentExpr}
+    ;
+
+// ---------------------------------------------------------------------------
+// Terminals
+// ---------------------------------------------------------------------------
+
+terminals
+
+// identifier ::= letter { letter | digit | "_" }, lowercase-initial;
+// variable   ::= uppercase_letter { letter | digit | "_" }
+Ident: /[a-z][A-Za-z0-9_]*/;
+Var: /[A-Z][A-Za-z0-9_]*/;
+// number ::= digit { digit } [ "." digit { digit } ]
+Number: /[0-9]+(\.[0-9]+)?/;
+
+Neck: ':-';
+QueryPrefix: '?-';
+Implies: '=>';
+Dot: '.';
+Comma: ',';
+LParen: '(';
+RParen: ')';
+LBrace: '{';
+RBrace: '}';
+Eq: '=';
+Neq: '!=';
+Lt: '<';
+Gt: '>';
+Le: '<=';
+Ge: '>=';

@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Aivolution GmbH"]
-description = "Claimr — a constraint logic programming language, Prolog III inspired, parsed with nom."
+description = "Claimr — a constraint logic programming language, Prolog III inspired, parsed with a rustemo-generated LR parser."
 repository = "https://github.com/a1v0lut10n/claimr"
 license = "MIT"
 readme = "README.md"
-keywords = ["constraint", "logic-programming", "prolog", "parser", "nom"]
+keywords = ["constraint", "logic-programming", "prolog", "parser", "rustemo"]
 categories = ["parser-implementations", "compilers"]
 
 [lib]
@@ -20,5 +20,8 @@ name = "claimr"
 path = "src/main.rs"
 
 [dependencies]
-nom = "7"
+rustemo = "0.9.1"
 thiserror = "1"
+
+[build-dependencies]
+rustemo-compiler = "0.9.1"
