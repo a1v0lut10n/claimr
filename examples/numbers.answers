@@ -1,0 +1,5 @@
+?- cheap(apple).
+true
+?- price(X, P), { P >= 1/10, P <= 3 }.
+X = apple, P = 1/2
+X = melon, P = 3

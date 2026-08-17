@@ -51,20 +51,26 @@ fn limit_caps_an_infinite_query() {
 }
 
 #[test]
-fn load_errors_are_positioned_and_exit_1() {
+fn errors_are_reported_and_exit_1() {
     let dir = std::env::temp_dir().join(format!("claimr-err-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("bad.claimr");
-    std::fs::write(&file, "ok(1).\n\n  eligible(X) :- { age(X) >= 18 }.\n").unwrap();
-    let out = claimr().arg(&file).output().unwrap();
-    assert_eq!(out.status.code(), Some(1));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains(":3:3: clause 2 `eligible(X) :- { age(X) >= 18 }.`: numeric relation `>=`"), "{err}");
-    // Syntax errors too.
+    // Syntax error: positioned, exit 1.
     std::fs::write(&file, "ok(1)\n").unwrap();
     let out = claimr().arg(&file).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains(":2:1: Expected"));
+    // Unsatisfiable initial store: load error, exit 1.
+    std::fs::write(&file, "{ X > 3, X < 2 }.\n?- ok(1).\n").unwrap();
+    let out = claimr().arg(&file).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("constraint facts are unsatisfiable"));
+    // Non-linear residue at answer time: runtime error naming the query, exit 1.
+    std::fs::write(&file, "?- { Y = X * Z }.\n").unwrap();
+    let out = claimr().arg(&file).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("in `?- { Y = X * Z }.`: non-linear constraint"), "{err}");
     // Usage errors exit 2.
     let out = claimr().output().unwrap();
     assert_eq!(out.status.code(), Some(2));

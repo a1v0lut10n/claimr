@@ -22,11 +22,12 @@ declarative programs.
   LR parser generator for Rust — the grammar file is the single source of
   truth for the syntax, and syntax errors carry line/column positions
 
-Current status: the **parser** (`src/parser/`) and the **evaluator** for pure
-programs (`src/eval/`: SLD resolution over rational trees, `=`/`!=` on terms,
-answers in solved form) are implemented; **numeric constraint solving is in
-progress** — programs using `< > <= >=`, arithmetic terms or attribute terms
-are rejected at load with a positioned diagnostic until the linear store lands.
+Current status: the **parser** (`src/parser/`), the **evaluator**
+(`src/eval/`: SLD resolution over rational trees, `=`/`!=` on terms, answers
+in solved form) and the **linear constraint solver** (`src/solver/`: exact
+rational simplex, attribute terms such as `age(X)`, delayed non-linear
+products) are implemented. Open: richer answer simplification, a REPL,
+non-linear and finite-domain constraints.
 
 ## Grammar
 
@@ -108,14 +109,21 @@ claimr --parse program.claimr      # dump the parsed clauses instead of running
 ```
 
 Answers are printed in solved form, one per line, `true` when nothing remains
-to say and `false` when a query has no answers:
+to say and `false` when a query has no answers. Constraints that remain open
+are part of the answer:
 
 ```text
 ?- grandparent(tom, Who).
 Who = ann
 Who = pat
-?- sibling(ann, S).
-S = pat
+?- { X + Y = 10, X - Y = 2 }.
+X = 6, Y = 4
+?- average(3, 4, A).
+A = 7/2
+?- eligible(alice).
+age(alice) >= 18
+?- { X > 3 }, { X < 5 }, { X != 4 }.
+X > 3, X < 5, X != 4
 ?- { X != Y }, same(X, f(Z)), same(Y, f(W)).
 X = f(Z), Y = f(W), f(Z) != f(W)
 ?- omega(X).
@@ -136,14 +144,16 @@ for query in program.queries() {
 }
 ```
 
-Diagnostics are GCC-style `file:line:column: message` — syntax errors from the
-parser, and load errors (`claimr::EvalError`) from the compile step:
+Diagnostics are GCC-style `file:line:column: message` for syntax errors;
+load errors (an unsatisfiable set of constraint facts) and runtime errors
+(a non-linear constraint still undetermined at answer time — Claimr never
+approximates) name the file and the query:
 
 ```text
 $ claimr broken.claimr
 broken.claimr:1:21: Expected one of Neq, Le, Ge, Comma, RParen, RBrace, Eq, Lt, Gt.
-$ claimr examples/socrates.claimr
-examples/socrates.claimr:4:1: clause 3 `{ age(socrates) > 70 }.`: numeric relation `>` is not supported yet (evaluator stage 3)
+$ claimr nonlinear.claimr
+nonlinear.claimr: in `?- { Y = X * Z }.`: non-linear constraint `X * Z` is still undetermined; claimr does not approximate (evaluator stage 3 supports linear constraints only)
 ```
 
 ## Project layout
@@ -160,7 +170,8 @@ claimr/
 │   │   ├── claimr.rustemo       # THE grammar (authoritative)
 │   │   ├── claimr_actions.rs    # semantic actions: productions -> ast
 │   │   └── mod.rs               # includes the generated parser (OUT_DIR)
-│   ├── eval/            # evaluator: store (heap, trail, dif), unify, compile, SLD machine, answers
+│   ├── eval/            # evaluator: store (heap, trail, dif, numeric glue), unify, compile, SLD machine, answers
+│   ├── solver/          # exact linear solver: delta-rationals, linear expressions, simplex
 │   └── main.rs          # `claimr` CLI: run a program (or --parse to dump the AST)
 ├── examples/            # sample .claimr programs (parsed by the tests; *.answers = golden runs)
 ├── tests/               # integration tests

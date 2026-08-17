@@ -91,12 +91,17 @@ fn main() -> ExitCode {
     for query in program.queries() {
         println!("{}", query.text());
         let mut count = 0usize;
-        for answer in program.solve(query) {
+        let mut solutions = program.solve(query);
+        for answer in solutions.by_ref() {
             println!("{answer}");
             count += 1;
             if opts.limit.is_some_and(|l| count >= l) {
                 break;
             }
+        }
+        if let Some(e) = solutions.error() {
+            eprintln!("{path}: in `{}`: {e}", query.text());
+            return ExitCode::FAILURE;
         }
         if count == 0 {
             println!("false");

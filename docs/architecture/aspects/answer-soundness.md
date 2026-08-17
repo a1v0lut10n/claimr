@@ -18,26 +18,34 @@ realise the store.
 ## Invariants (testable rules)
 
 1. **No step on an unsatisfiable store.** A resolution step (head
-   unification plus any `{ … }` goals reached in the body) is taken only if
-   the store — tree equations, disequations, and (from stage 3) numeric
-   constraints — remains satisfiable; otherwise the step fails and the
-   machine backtracks. *Test:* every `post_eq`/`post_dif`/solver posting is
-   transactional (returns `false` and restores the store on failure), and the
-   machine never proceeds past a `false`. Realised in
-   [`evaluator`](../components/evaluator.md) (`store.rs`, `machine.rs`).
-2. **No unsatisfiable answer.** An answer is printed only from a store in
-   which every constraint has been checked exactly — trial unification for
-   disequations, exact rational arithmetic (see
-   [`exact-arithmetic`](../README.md#aspects)) for numeric constraints. There
-   is no approximate satisfiability check anywhere. *Test:* golden runs
-   (`tests/run_examples.rs`) and machine tests assert that queries whose
-   only derivations violate a disequation yield `false`, and that reported
-   disequations are re-checkable.
+   unification, the clause's arithmetic definitions, and any `{ … }` goals
+   reached in the body) is taken only if the store — tree equations,
+   disequations, linear numeric constraints — remains satisfiable; otherwise
+   the step fails and the machine backtracks. *Test:* every
+   `post_eq`/`post_dif`/`post_rel`/`post_arith` is transactional (returns
+   `false`/`None` and restores the store, simplex bounds included, on
+   failure), and the machine never proceeds past a failure. Realised in
+   [`evaluator`](../components/evaluator.md) (`store.rs`, `machine.rs`) and
+   [`solver`](../components/solver.md).
+2. **No unsatisfiable answer.** An answer is printed only after
+   `Store::finalize`: every numeric variable and numeric disequation is
+   decided exactly (two-sided feasibility probes), every pending tree
+   disequation is re-checked by trial unification, and any still-pending
+   non-linear product stops the query with `EvalError::NonLinear` instead of
+   printing. There is no approximate satisfiability check anywhere (see
+   [`exact-arithmetic`](exact-arithmetic.md)). *Test:* golden runs
+   (`tests/run_examples.rs`) and machine tests (`numeric_disequations_are_exact`,
+   `determined_variables_wake_difs_and_congruence`, `delayed_products`)
+   assert that queries whose only derivations violate a disequation — even
+   one implied only through the store — yield `false`.
 3. **Nothing satisfiable is dropped as an error.** Undefined predicates
    fail (no clauses ⇒ no solutions); unsupported constructs are rejected at
    load time with a positioned diagnostic, never silently ignored at run
    time. *Test:* stage-boundary tests in `src/eval/tests.rs`.
 4. **Projection is sound.** Constraints omitted from a printed answer are
-   only ones satisfiable independently of the printed variables (currently:
-   disequations mentioning no variable reachable from the query). *Test:*
-   `constraint_facts_form_the_initial_store` and the dif golden run.
+   only ones satisfiable independently of what is printed: tree
+   disequations mentioning no query-reachable variable, fully determined
+   numeric lines (their values are shown), and world constraints on unknowns
+   the query does not touch — all checked satisfiable before printing.
+   *Test:* `constraint_facts_form_the_initial_store`,
+   `attribute_terms_and_congruence`, and the golden runs.

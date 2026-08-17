@@ -14,5 +14,5 @@ eligible(X) :- { age(X) + 1 >= 19 }.   % attribute term in arithmetic
 discounted(P, D) :- { D = P - P / 10, D > 0 }.
 
 ?- sum(1, 2, S).
-?- average(3, 4, A), { A > 3.5 }.
+?- average(3, 4, A), { A >= 3.5 }.
 ?- discounted(100, D), { -D < -50 }.
