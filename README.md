@@ -15,7 +15,8 @@ declarative programs.
 - **Constraint solving** integrated into the logic programming paradigm
 - **First-class constraints** usable in facts, rules, and queries
 - **Exact arithmetic** — numbers are arbitrary-precision rationals, never
-  floats; `18.5` means exactly 37/2 (as in Prolog III)
+  floats; `18.5` means exactly 37/2, and `+ - * /` are term constructors
+  usable anywhere a term goes (as in Prolog III)
 - **Implication syntax** (`{ … } => head.`) as syntactic sugar
 - **Parser generated with [rustemo](https://crates.io/crates/rustemo)**, an
   LR parser generator for Rust — the grammar file is the single source of
@@ -44,7 +45,13 @@ implication    ::= "{" constraint_expr "}" "=>" atom "."
 constraint_expr ::= constraint_term { "," constraint_term }
 constraint_term ::= expr relop expr
 relop           ::= "=" | "!=" | "<" | ">" | "<=" | ">="
+
+expr           ::= expr ("+" | "-") expr | expr ("*" | "/") expr | "-" expr
+                 | "(" expr ")" | identifier | number | atom | variable
 ```
+
+Arithmetic operators are term constructors, usable anywhere a term goes
+(Prolog III style); `%` starts a comment that runs to the end of the line.
 
 ## Examples
 
@@ -52,14 +59,20 @@ See [`examples/socrates.claimr`](examples/socrates.claimr) for a complete
 program; the integration tests parse every file under `examples/`.
 
 ```claimr
+% Facts and rules
 human(socrates).
 mortal(X) :- human(X).
 
+% Constraints — exact rational arithmetic, usable in terms and constraints
 { age(socrates) > 70 }.
 eligible(X) :- { age(X) >= 18 }.
+average(X, Y, (X + Y) / 2).
+{ X + Y = 10, 2*X - Y >= 1/3 }.
 
+% Implication sugar
 { age(X) >= 18 } => eligible(X).
 
+% Queries
 ?- mortal(socrates).
 ?- eligible(alice), { age(alice) >= 18 }.
 ```

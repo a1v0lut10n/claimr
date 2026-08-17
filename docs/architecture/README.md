@@ -19,8 +19,10 @@ Nameable building blocks — a crate, module, or binary you can point at.
 | `cli`     | `src/main.rs` — the `claimr` binary: parses a file and prints its clauses. |
 | `grammar` | `src/parser/claimr.rustemo` — the formal grammar of the language, from which the parser is generated. `docs/reference/grammar.md` is a rendered EBNF view of it. |
 
-Future components (evaluator, constraint solver, REPL) are added here when
-they exist.
+| `evaluator` | *(planned)* `src/eval/` — runtime term model (rational trees), unification, SLD resolution with chronological backtracking, program loading and query answering. Design: [`../design/2026-08-17-evaluator.md`](../design/2026-08-17-evaluator.md). |
+| `solver`    | *(planned)* `src/solver/` — the constraint store: linear arithmetic over exact rationals (equalities, inequalities, delayed disequations), numeric attribute terms, satisfiability and determined-variable detection, projection to solved form for answers. Design: [`../design/2026-08-17-evaluator.md`](../design/2026-08-17-evaluator.md). |
+
+A REPL component is added when it exists.
 
 ## Aspects
 
@@ -30,6 +32,7 @@ Cross-component invariants — rules that survive replacing any single component
 |---------------------|---------------------|
 | `grammar-authority` | `src/parser/claimr.rustemo` is the single source of truth for the language's syntax — the parser is generated from it, so it cannot drift; `docs/reference/grammar.md` and the README are views that follow it, never the other way round. Every construct in the grammar has at least one parsed example under `examples/`. |
 | `exact-arithmetic`  | Numbers are exact arbitrary-precision rationals (integers = denominator 1); no floating point anywhere in the language core; decimal literals denote exact rationals; irrational reals exist only semantically as values of under-constrained variables. Decision: [`../design/2026-08-17-exact-rational-arithmetic.md`](../design/2026-08-17-exact-rational-arithmetic.md). |
+| `answer-soundness`  | Every answer the evaluator reports is a satisfiable system: a resolution step is taken only if the store (unification equations included) remains solvable, and reported constraints are exact — no approximate check ever admits an unsatisfiable answer or drops a satisfiable one. Design: [`../design/2026-08-17-evaluator.md`](../design/2026-08-17-evaluator.md). |
 
 ## Litmus test
 

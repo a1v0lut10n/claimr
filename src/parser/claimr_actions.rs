@@ -196,3 +196,29 @@ pub fn expr_number_expr(_ctx: &Ctx, number: Number) -> Expr {
 pub fn expr_ident_expr(_ctx: &Ctx, name: Ident) -> Expr {
     ast::Expr::Ident(name)
 }
+fn binary(op: ast::ArithOp, left: Expr, right: Expr) -> Expr {
+    ast::Expr::Binary {
+        op,
+        left: Box::new(left),
+        right: Box::new(right),
+    }
+}
+pub fn expr_add(_ctx: &Ctx, left: Expr, right: Expr) -> Expr {
+    binary(ast::ArithOp::Add, left, right)
+}
+pub fn expr_sub(_ctx: &Ctx, left: Expr, right: Expr) -> Expr {
+    binary(ast::ArithOp::Sub, left, right)
+}
+pub fn expr_mul(_ctx: &Ctx, left: Expr, right: Expr) -> Expr {
+    binary(ast::ArithOp::Mul, left, right)
+}
+pub fn expr_div(_ctx: &Ctx, left: Expr, right: Expr) -> Expr {
+    binary(ast::ArithOp::Div, left, right)
+}
+pub fn expr_neg(_ctx: &Ctx, operand: Expr) -> Expr {
+    ast::Expr::Neg(Box::new(operand))
+}
+/// Parentheses only group; they leave no trace in the AST.
+pub fn expr_paren(_ctx: &Ctx, inner: Expr) -> Expr {
+    inner
+}
