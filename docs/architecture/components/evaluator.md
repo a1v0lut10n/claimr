@@ -15,7 +15,7 @@ answers in solved form. Public surface (re-exported from `claimr`):
 `Program::compile` / `Program::compile_spanned`, `Program::queries`,
 `Program::solve` → `Solutions` (a lazy iterator of `Answer`s), `EvalError`.
 
-## Current state (evaluator stages 2–3 — CLM-0005, CLM-0006)
+## Current state (evaluator stages 2–4 — CLM-0005, CLM-0006, CLM-0007)
 
 - **`symbol.rs`** — interned functor/constant names.
 - **`store.rs`** — the tree part of the constraint store: a cell heap
@@ -27,7 +27,9 @@ answers in solved form. Public surface (re-exported from `claimr`):
   so cyclic terms terminate — and **disequations** (`dif`) decided by trial
   unification: fail ⇒ satisfied and dropped; success without a new binding ⇒
   violated; otherwise suspended on the variables that would have been bound
-  and re-checked when any is bound or determined. `post_eq` / `post_dif` are
+  and re-checked when any is bound or determined; each check records the
+  would-bind pairs, which give the disequation's **reduced form** for
+  printing (`Z != W` for `f(Z) != f(W)`). `post_eq` / `post_dif` are
   transactional. The store's numeric half — solver variables for numeric heap
   variables, attribute terms, numeric disequations, delayed products,
   `finalize` before answers — is documented in
@@ -53,23 +55,37 @@ answers in solved form. Public surface (re-exported from `claimr`):
   before an answer is yielded `Store::finalize` runs (exact determination
   and disequation checks; a non-linear residue stops the query with
   `EvalError::NonLinear`, exposed by `Solutions::error`).
+- **`project.rs`** — answer projection and simplification (stage 4): the
+  visible numeric store as a residual system over alias-class roots (bounds
+  with non-public definitions expanded, definitions of public defined
+  variables, pending numeric disequations), restricted to constraints
+  connected to public variables; internal variables eliminated by Gaussian
+  substitution (equalities) then Fourier–Motzkin (inequalities, cheapest
+  variable first, within `FM_BUDGET` = 256 constraints — beyond it the
+  variable survives and is named `_N`); disequations follow the
+  substitution and are dropped only when unlinked to anything public;
+  normalisation to integer variable coefficients, duplicate removal, and
+  exact removal of every inequality entailed by the rest (a fresh
+  `Simplex` per candidate); equalities oriented to solved form.
 - **`answer.rs`** — answers in **solved form**: `X = t` per bound query
   variable (in variable order; a determined numeric variable prints its
   value, also inside terms), aliases `A = B`, then pending tree
-  disequations reachable from the query variables (internal-only
-  disequations are projected away — sound over an infinite universe), then
-  equations for named cyclic nodes (`X = f(X)`, `_1 = …`), then the numeric
-  store the query can see (see [`solver.md`](solver.md#answer-rendering-stage-3-form));
-  `true` when nothing remains. Iterative printer.
+  disequations reachable from the query variables in reduced form when
+  there is one (internal-only disequations are projected away — sound over
+  an infinite universe), then equations for named cyclic nodes (`X = f(X)`,
+  `_1 = …`), then the projected numeric system: fixed public attribute
+  values, equalities `Y = X + 1`, inequalities (`X > Y`, `X >= 2`,
+  `X + Y <= 10`; lower bounds first), numeric disequations (`X != 3`), all
+  in a deterministic order; `true` when nothing remains. Public numeric
+  variables are the numeric variables reachable from the query and the
+  attribute terms the query created *or looked up*. Iterative printer.
 
 The CLI (`cli` component) loads a file and runs its queries in order,
 `--limit N` capping answers per query; a runtime error stops it with exit 1.
 
 ## Not yet (later stages)
 
-Answer projection / variable elimination beyond "what the query can see"
-and disequation simplification to reduced form (stage 4); non-linear
-constraints beyond delayed products; integer/finite-domain constraints; a
+Non-linear constraints beyond delayed products; integer/finite-domain constraints; a
 REPL; cut, negation, disjunction, built-ins, first-argument indexing, heap
 and tableau garbage collection beyond trail-driven undo, tail-call
 optimisation.

@@ -124,11 +124,17 @@ A = 7/2
 age(alice) >= 18
 ?- { X > 3 }, { X < 5 }, { X != 4 }.
 X > 3, X < 5, X != 4
+?- p(A).                     % p(X) :- { X = Y + Z, Y > 0, Z > 0 }.
+A > 0
 ?- { X != Y }, same(X, f(Z)), same(Y, f(W)).
-X = f(Z), Y = f(W), f(Z) != f(W)
+X = f(Z), Y = f(W), Z != W
 ?- omega(X).
 X = f(X)
 ```
+
+Answers are the store *projected onto the query*: internal variables are
+eliminated (Gaussian substitution and Fourier–Motzkin), redundant
+constraints dropped, and what remains is printed in solved form.
 
 As a library:
 

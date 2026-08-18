@@ -4,13 +4,14 @@
 //! which is the finite representation of a rational tree. The printer is
 //! iterative so deep terms cannot overflow the stack.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
-use crate::solver::{Delta, LinExpr, SVar};
+use crate::solver::{LinExpr, SVar};
 use crate::Number;
 
-use super::store::{Addr, Cell, Store};
+use super::project::{project, Projected};
+use super::store::{Addr, Cell, PendingDif, Store};
 use super::symbol::Symbols;
 
 /// One answer to a query.
@@ -28,6 +29,15 @@ impl Answer {
     /// True if the answer carries nothing (`true`).
     pub fn is_true(&self) -> bool {
         self.equations.is_empty() && self.disequations.is_empty() && self.constraints.is_empty()
+    }
+
+    /// All lines of the answer, in print order.
+    pub fn parts(&self) -> impl Iterator<Item = &str> {
+        self.equations
+            .iter()
+            .chain(self.disequations.iter())
+            .chain(self.constraints.iter())
+            .map(String::as_str)
     }
 }
 
@@ -198,24 +208,22 @@ pub(crate) fn render_answer(
     let mut p = Printer::new(symbols, store);
     let mut equations = Vec::new();
 
-    // Projection (design D7, stage-2 form): a pending disequation belongs to
-    // the answer only if it mentions a variable reachable from the query
-    // variables. Disequations over internal variables alone are always
-    // satisfiable (finitely many, over an infinite universe) and are dropped.
+    // Projection of tree disequations (design D7): one belongs to the answer
+    // only if it mentions a variable reachable from the query variables.
+    // Disequations over internal variables alone are always satisfiable
+    // (finitely many, over an infinite universe) and are dropped.
     let reachable = reachable_vars(store, query_vars.iter().map(|(_, a)| *a));
-    let difs: Vec<(Addr, Addr)> = store
+    let difs: Vec<PendingDif> = store
         .pending_difs()
         .into_iter()
-        .filter(|(a, b)| {
-            reachable_vars(store, [*a, *b]).iter().any(|v| reachable.contains(v))
-        })
+        .filter(|(a, b, _)| reachable_vars(store, [*a, *b]).iter().any(|v| reachable.contains(v)))
         .collect();
 
     // Pass 1: cycle detection over everything we will print.
     for (_, addr) in query_vars {
         p.find_cycles(*addr);
     }
-    for (a, b) in &difs {
+    for (a, b, _) in &difs {
         p.find_cycles(*a);
         p.find_cycles(*b);
     }
@@ -256,16 +264,23 @@ pub(crate) fn render_answer(
         if !matches!(store.cell(d), Cell::Var(_)) {
             let rendered = p.render(d);
             equations.push(format!("{name} = {rendered}"));
-        } else if let Some(c) = store.numvar.get(&d).and_then(|sv| store.cheap_value(*sv)) {
+        } else if let Some(c) = store.numvar.get(&d).and_then(|sv| store.class_value(*sv)) {
             equations.push(format!("{name} = {c}"));
         }
     }
 
-    // Pass 4: disequations.
+    // Pass 4: tree disequations, in reduced form when there is one.
     let mut disequations = Vec::new();
-    for (a, b) in difs {
-        let l = p.render(a);
-        let r = p.render(b);
+    for (a, b, reduced) in difs {
+        let (l, r) = if reduced.len() == 1 {
+            let (v, t) = reduced[0];
+            // Two variables: earlier-created first, for stable output.
+            let t_is_var = matches!(store.cell(store.deref(t)), Cell::Var(_));
+            let (v, t) = if t_is_var && store.deref(t) < store.deref(v) { (t, v) } else { (v, t) };
+            (p.render(v), p.render(t))
+        } else {
+            (p.render(a), p.render(b))
+        };
         disequations.push(format!("{l} != {r}"));
     }
 
@@ -276,41 +291,34 @@ pub(crate) fn render_answer(
         equations.push(format!("{name} = {rendered}"));
     }
 
-    // Pass 6: the numeric store, restricted to what the query can see.
+    // Pass 6: the numeric store, projected onto what the query can see and
+    // simplified (design D7, stage 4).
     let constraints = render_numeric(&mut p, store, &reachable);
 
     Answer { equations, disequations, constraints }
 }
 
-/// Numeric constraints over solver variables the query can see: determined
-/// values (`age(bob) = 3`), bounds (`X > 3`), linear equations (`Y = X + 1`),
-/// constraint rows (`X + Y <= 10`), numeric disequations. Alias classes print
-/// as one variable; fully determined lines are omitted (their values already
-/// show); constraints of the world (the initial store) show only when they
-/// touch something the query mentions.
-fn render_numeric(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>) -> Vec<String> {
-    let root = |sv: SVar| store.root(sv);
-    let fixed = |sv: SVar| store.class_value(sv);
-
-    // Names for alias classes (by root), in a deterministic order.
+/// The public numeric variables (alias-class roots) with their names: numeric
+/// heap variables reachable from the query, and attribute terms created by
+/// the query whose variables are all visible.
+fn public_names(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>) -> BTreeMap<SVar, String> {
     let mut names: BTreeMap<SVar, String> = BTreeMap::new();
     let mut heap_named: Vec<(SVar, Addr)> = reachable
         .iter()
-        .filter_map(|v| store.numvar.get(v).map(|sv| (root(*sv), *v)))
+        .filter_map(|v| store.numvar.get(v).map(|sv| (store.root(*sv), *v)))
         .collect();
     heap_named.sort();
     for (r, v) in heap_named {
         let n = p.name_for(v);
         names.entry(r).or_insert(n);
     }
-    // Attribute terms created by the query whose variables are all visible.
     let mut attr_named: Vec<(SVar, Addr)> = store
         .attrs
         .iter()
         .enumerate()
-        .filter(|(i, _)| *i >= store.baseline_attrs)
+        .filter(|(i, _)| store.attr_visible(*i))
         .filter(|(_, e)| reachable_vars(store, [e.term]).iter().all(|v| reachable.contains(v)))
-        .map(|(_, e)| (root(e.svar), e.term))
+        .map(|(_, e)| (store.root(e.svar), e.term))
         .collect();
     attr_named.sort();
     attr_named.dedup_by_key(|(r, _)| *r);
@@ -320,84 +328,29 @@ fn render_numeric(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>)
             slot.insert(rendered);
         }
     }
+    names
+}
+
+fn render_numeric(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>) -> Vec<String> {
+    let mut names = public_names(p, store, reachable);
     if names.is_empty() {
         return Vec::new();
     }
-    // Any attribute term (world or query) can name its class if the closure
-    // pulls it in — better than an internal `_N`.
+    let public: BTreeSet<SVar> = names.keys().copied().collect();
+    let Projected { eqs, ineqs, difs, survivors } = project(store, &public);
+    // World attribute terms pulled in as survivors print by their term;
+    // other survivors get internal names.
     let mut attr_render: BTreeMap<SVar, Addr> = BTreeMap::new();
     for e in &store.attrs {
-        attr_render.entry(root(e.svar)).or_insert(e.term);
+        attr_render.entry(store.root(e.svar)).or_insert(e.term);
     }
-    // Normalise an expression: expand defined variables (arithmetic results
-    // and constraint slacks) by their definitions — permanent identities —
-    // map variables to roots, substitute fixed classes by their values, merge
-    // like terms.
-    fn normalise_into(store: &Store, e: &LinExpr, k: &Number, out: &mut LinExpr, depth: usize) {
-        out.constant += &(&e.constant * k);
-        for (v, a) in &e.terms {
-            let ak = a * k;
-            if depth < 64 {
-                if let Some(def) = store.defs.get(v) {
-                    normalise_into(store, def, &ak, out, depth + 1);
-                    continue;
-                }
-            }
-            let r = store.root(*v);
-            match store.class_value(r) {
-                Some(c) => out.constant += &(&c * &ak),
-                None => out.add_term(r, &ak),
-            }
-        }
-    }
-    let normalise = |e: &LinExpr| -> LinExpr {
-        let mut out = LinExpr::constant(Number::zero());
-        normalise_into(store, e, &Number::one(), &mut out, 0);
-        out
-    };
-    let is_def = |sv: SVar| store.defs.contains_key(&sv);
-
-    // Close over rows and bounded definitions touching named classes; name
-    // internal classes `_N` as needed.
-    let mut changed = true;
-    while changed {
-        changed = false;
-        let known: Vec<SVar> = names.keys().copied().collect();
-        for r in known {
-            if fixed(r).is_some() {
-                continue;
-            }
-            if let Some(row) = store.class_row(r) {
-                for v in normalise(row).terms.keys() {
-                    if !names.contains_key(v) && !is_def(*v) {
-                        let n = match attr_render.get(v) {
-                            Some(term) => p.render(*term),
-                            None => p.fresh_name(),
-                        };
-                        names.insert(*v, n);
-                        changed = true;
-                    }
-                }
-            }
-        }
-        for (s, def) in &store.defs {
-            if store.simplex.lower(*s).is_none() && store.simplex.upper(*s).is_none() {
-                continue;
-            }
-            let e = normalise(def);
-            if e.is_constant() || !e.terms.keys().any(|v| names.contains_key(v)) {
-                continue;
-            }
-            for v in e.terms.keys() {
-                if !names.contains_key(v) && !is_def(*v) {
-                    let n = match attr_render.get(v) {
-                        Some(term) => p.render(*term),
-                        None => p.fresh_name(),
-                    };
-                    names.insert(*v, n);
-                    changed = true;
-                }
-            }
+    for v in &survivors {
+        if !names.contains_key(v) {
+            let n = match attr_render.get(v) {
+                Some(term) => p.render(*term),
+                None => p.fresh_name(),
+            };
+            names.insert(*v, n);
         }
     }
 
@@ -440,124 +393,72 @@ fn render_numeric(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>)
         }
         Some(out)
     };
-    // A constraint line `terms op c` in a readable shape: an equality is
-    // solved for its most recently introduced unit-coefficient variable
-    // (`Y = X + 1`); a two-variable difference prints as `X op Y`; otherwise
-    // `expr op c`.
-    let render_line = |terms: &LinExpr, op: &str, c: &Number| -> Option<String> {
-        if op == "=" {
-            let pick = terms
-                .terms
-                .iter()
-                .rev()
-                .find(|(_, a)| a.abs() == Number::one())
-                .or_else(|| terms.terms.iter().next_back())
-                .map(|(v, a)| (*v, a.clone()))?;
-            let (v, a) = pick;
-            let name = names.get(&v)?;
-            // a·v + rest = c  ⇒  v = (c − rest) / a
-            let mut rest = terms.clone();
-            rest.take(v);
-            rest.negate();
-            rest.constant = c.clone();
-            let inv = a.recip()?;
-            rest.scale(&inv);
-            return Some(format!("{name} = {}", render_expr(&rest)?));
-        }
+    // `terms op c` in a readable shape: a single variable `X op c`; a
+    // two-variable difference `X op Y`; otherwise `expr op c`.
+    let render_rel = |e: &LinExpr, op: &str| -> Option<String> {
+        let c = -&e.constant;
+        let mut terms = e.clone();
+        terms.constant = Number::zero();
         if terms.terms.len() == 2 && c.is_zero() {
             let mut it = terms.terms.iter();
             let (v1, a1) = it.next().unwrap();
             let (v2, a2) = it.next().unwrap();
-            let (pos, neg) = if *a1 == Number::one() && *a2 == -Number::one() {
-                (v1, v2)
-            } else if *a2 == Number::one() && *a1 == -Number::one() {
-                (v2, v1)
-            } else {
-                return Some(format!("{} {op} {c}", render_expr(terms)?));
-            };
-            return Some(format!("{} {op} {}", names.get(pos)?, names.get(neg)?));
+            if *a1 == Number::one() && *a2 == -Number::one() {
+                return Some(format!("{} {op} {}", names.get(v1)?, names.get(v2)?));
+            }
+            if *a2 == Number::one() && *a1 == -Number::one() {
+                return Some(format!("{} {op} {}", names.get(v2)?, names.get(v1)?));
+            }
         }
-        Some(format!("{} {op} {c}", render_expr(terms)?))
+        Some(format!("{} {op} {c}", render_expr(&terms)?))
     };
-    let bound_lines = |terms: &LinExpr, lower: Option<Delta>, upper: Option<Delta>, out: &mut Vec<String>| {
-        if let (Some(l), Some(u)) = (&lower, &upper) {
-            if l == u && l.is_exact() {
-                if let Some(line) = render_line(terms, "=", &l.c) {
-                    out.push(line);
-                }
-                return;
-            }
-        }
-        if let Some(l) = lower {
-            let op = if l.k.is_positive() { ">" } else { ">=" };
-            if let Some(line) = render_line(terms, op, &l.c) {
-                out.push(line);
-            }
-        }
-        if let Some(u) = upper {
-            let op = if u.k.is_negative() { "<" } else { "<=" };
-            if let Some(line) = render_line(terms, op, &u.c) {
-                out.push(line);
-            }
-        }
-    };
+    let first_var = |e: &LinExpr| e.terms.keys().next().copied().unwrap_or(SVar(usize::MAX));
 
     let mut out = Vec::new();
-    // Fixed heap variables print inline (query variables in the equations
-    // pass, inner ones as their value); fixed attribute terms print here.
-    let attr_classes: HashSet<SVar> = store.attrs.iter().map(|e| root(e.svar)).collect();
+    // Fixed public attribute terms: their value.
     for (r, name) in &names {
-        if let Some(c) = fixed(*r) {
-            if attr_classes.contains(r) {
-                out.push(format!("{name} = {c}"));
-            }
-            continue;
-        }
-        let (lower, upper) = store.class_bounds(*r);
-        bound_lines(&LinExpr::var(*r), lower, upper, &mut out);
-        if let Some(row) = store.class_row(*r) {
-            let e = normalise(row);
-            let trivial = e.as_var() == Some(*r) || e.terms.contains_key(r);
-            if !trivial {
-                if let Some(rhs) = render_expr(&e) {
-                    out.push(format!("{name} = {rhs}"));
+        if attr_render.contains_key(r) {
+            if let Some(c) = store.class_value(*r) {
+                if !reachable.iter().any(|v| store.numvar.get(v).map(|sv| store.root(*sv)) == Some(*r)) {
+                    out.push(format!("{name} = {c}"));
                 }
             }
         }
     }
-    let mut defs: Vec<(&SVar, &LinExpr)> = store.defs.iter().collect();
-    defs.sort_by_key(|(s, _)| **s);
-    for (s, def) in defs {
-        let (lower, upper) = (store.simplex.lower(*s).cloned(), store.simplex.upper(*s).cloned());
-        if lower.is_none() && upper.is_none() {
-            continue;
+    // Equalities in solved form, by subject.
+    for (subject, rhs) in &eqs {
+        if let (Some(name), Some(r)) = (names.get(subject), render_expr(rhs)) {
+            out.push(format!("{name} = {r}"));
         }
-        let e = normalise(def);
-        if e.is_constant() || !e.terms.keys().any(|v| names.contains_key(v)) {
-            continue;
-        }
-        // s = e = terms + k  ⇒  terms op c - k
-        let k = e.constant.clone();
-        let mut terms = e.clone();
-        terms.constant = Number::zero();
-        let shift = |d: Option<Delta>| d.map(|d| Delta::new(&d.c - &k, d.k));
-        bound_lines(&terms, shift(lower), shift(upper), &mut out);
     }
-    for (i, nd) in store.numdifs.iter().enumerate() {
-        if !nd.pending || i < store.baseline_numdifs {
-            continue;
-        }
-        let vars = reachable_vars(store, [nd.a, nd.b]);
-        if !vars.iter().all(|v| reachable.contains(v)) {
-            continue;
-        }
-        let l = p.render(nd.a);
-        let r = p.render(nd.b);
-        out.push(format!("{l} != {r}"));
-    }
+    // Inequalities, deterministic order.
+    let mut lines: Vec<(SVar, bool, String)> = ineqs
+        .iter()
+        .filter_map(|(e, strict)| {
+            // e >= 0 (or > 0): orient by the leading coefficient's sign so a
+            // single variable reads `X >= c` / `X <= c`; lower bounds first.
+            let leading_negative = e.terms.iter().next().is_some_and(|(_, a)| a.is_negative());
+            let (expr, op) = if leading_negative {
+                let mut n = e.clone();
+                n.negate();
+                (n, if *strict { "<" } else { "<=" })
+            } else {
+                (e.clone(), if *strict { ">" } else { ">=" })
+            };
+            render_rel(&expr, op).map(|s| (first_var(&expr), leading_negative, s))
+        })
+        .collect();
+    lines.sort();
+    out.extend(lines.into_iter().map(|(_, _, s)| s));
+    // Numeric disequations.
+    let mut dlines: Vec<(SVar, String)> = difs
+        .iter()
+        .filter_map(|e| render_rel(e, "!=").map(|s| (first_var(e), s)))
+        .collect();
+    dlines.sort();
+    out.extend(dlines.into_iter().map(|(_, s)| s));
     out
 }
-
 /// Unbound variables reachable from `roots` through bindings and structures.
 fn reachable_vars(store: &Store, roots: impl IntoIterator<Item = Addr>) -> HashSet<Addr> {
     let mut vars = HashSet::new();

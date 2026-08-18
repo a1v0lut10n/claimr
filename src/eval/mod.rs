@@ -11,6 +11,7 @@ mod answer;
 mod compile;
 mod error;
 mod machine;
+mod project;
 mod store;
 mod symbol;
 
