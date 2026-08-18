@@ -149,6 +149,15 @@ fn interactive_flag_runs_then_continues() {
 }
 
 #[test]
+fn exit_words_leave_the_loop() {
+    for word in ["exit.", "quit.", "halt.", "exit", "quit"] {
+        let (out, _, code) = run(&[], &format!("p(a).\n{word}\n?- p(X).\n"));
+        assert_eq!(code, 0, "{word}");
+        assert!(!out.contains("X = a"), "{word} should leave before the query: {out}");
+    }
+}
+
+#[test]
 fn eof_and_help_exit_cleanly() {
     let (out, _, code) = run(&[], ":help\n");
     assert_eq!(code, 0);

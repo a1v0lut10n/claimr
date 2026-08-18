@@ -59,7 +59,8 @@ After an answer: `;` then Enter for the next, Enter or `.` to stop.
   :limit N     cap answers per query in :all mode (0 = unlimited)
   :all         toggle between stepping answers and printing them all
   :help        this text
-  :quit        leave (also Ctrl-D)";
+  :quit        leave (also `exit.`, `halt.`, Ctrl-D, or Ctrl-C twice at an empty prompt)
+Ctrl-C interrupts a running query.";
 
 impl Repl {
     /// A REPL with an empty session. `limit` seeds `:limit`.
@@ -140,9 +141,10 @@ impl Repl {
     /// Run the loop until `:quit` or end of input.
     pub fn run(&mut self) {
         if self.interactive {
-            println!("claimr {} — :help for commands, :quit to leave.", env!("CARGO_PKG_VERSION"));
+            println!("claimr {} — :help for commands; :quit, exit. or Ctrl-D to leave.", env!("CARGO_PKG_VERSION"));
         }
         let mut buffer = String::new();
+        let mut interrupted_at_prompt = false;
         loop {
             let prompt = if buffer.is_empty() { "claimr> " } else { "    ... " };
             match self.read_line(prompt) {
@@ -153,11 +155,22 @@ impl Repl {
                     return;
                 }
                 Read::Interrupted => {
-                    buffer.clear();
                     self.interrupt.store(false, Ordering::Relaxed);
+                    if !buffer.is_empty() {
+                        buffer.clear();
+                        println!("(input discarded)");
+                        interrupted_at_prompt = false;
+                    } else if interrupted_at_prompt {
+                        // Second Ctrl-C in a row at an empty prompt: leave.
+                        return;
+                    } else {
+                        println!("(Ctrl-C interrupts a running query; to leave: :quit, exit. or Ctrl-D — or Ctrl-C again)");
+                        interrupted_at_prompt = true;
+                    }
                     continue;
                 }
                 Read::Line(line) => {
+                    interrupted_at_prompt = false;
                     if buffer.is_empty() {
                         let trimmed = line.trim();
                         if trimmed.is_empty() || trimmed.starts_with('%') {
@@ -168,6 +181,10 @@ impl Repl {
                                 return;
                             }
                             continue;
+                        }
+                        // The words people reach for to leave, with or without a `.`.
+                        if matches!(trimmed.trim_end_matches('.').trim(), "exit" | "quit" | "halt") {
+                            return;
                         }
                     }
                     buffer.push_str(&line);
