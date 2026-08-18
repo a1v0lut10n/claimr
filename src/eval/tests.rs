@@ -432,3 +432,34 @@ fn answers_are_deterministic() {
         assert_eq!(answers(src), first_run);
     }
 }
+
+#[test]
+fn interrupt_flag_stops_a_runaway_query() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    // `p() :- p().` never terminates; the flag stops it between steps.
+    let clauses = parse_program("p() :- p(). ?- p().").unwrap();
+    let program = Program::compile(&clauses).unwrap();
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut sols = program.solve(&program.queries()[0]).with_interrupt(flag.clone());
+    // Set the flag from another thread shortly after starting.
+    let setter = {
+        let flag = flag.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            flag.store(true, Ordering::Relaxed);
+        })
+    };
+    assert!(sols.next().is_none());
+    assert!(sols.interrupted());
+    assert!(sols.error().is_none());
+    setter.join().unwrap();
+    // A finished query is not "may_continue".
+    let clauses = parse_program("q(a). q(b). ?- q(X).").unwrap();
+    let program = Program::compile(&clauses).unwrap();
+    let mut sols = program.solve(&program.queries()[0]);
+    assert_eq!(sols.next().unwrap().to_string(), "X = a");
+    assert!(sols.may_continue());
+    assert_eq!(sols.next().unwrap().to_string(), "X = b");
+    assert!(!sols.may_continue());
+}

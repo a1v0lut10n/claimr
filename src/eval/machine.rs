@@ -8,6 +8,8 @@
 //! determination, disequation re-checks) — `answer-soundness`.
 
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use super::answer::{Answer, render_answer, render_terms};
 use super::compile::{build, PredKey, Program, Query, TGoal};
@@ -59,6 +61,10 @@ pub struct Solutions<'p> {
     started: bool,
     exhausted: bool,
     error: Option<EvalError>,
+    /// Optional interrupt flag, polled between resolution steps.
+    interrupt: Option<Arc<AtomicBool>>,
+    interrupted: bool,
+    steps: u64,
 }
 
 impl<'p> Solutions<'p> {
@@ -102,12 +108,47 @@ impl<'p> Solutions<'p> {
             started: false,
             exhausted: !ok,
             error,
+            interrupt: None,
+            interrupted: false,
+            steps: 0,
         }
     }
 
     /// The runtime error that stopped the search, if any.
     pub fn error(&self) -> Option<&EvalError> {
         self.error.as_ref()
+    }
+
+    /// Poll `flag` between resolution steps; when it is set the search stops
+    /// (no further answers, no error) and [`Solutions::interrupted`] is true.
+    pub fn with_interrupt(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.interrupt = Some(flag);
+        self
+    }
+
+    /// True if the search was stopped through the interrupt flag.
+    pub fn interrupted(&self) -> bool {
+        self.interrupted
+    }
+
+    /// True if asking for another answer could still find one: the search
+    /// has untried alternatives. False after exhaustion or when the last
+    /// answer left no choice point (it was final).
+    pub fn may_continue(&self) -> bool {
+        !self.exhausted && !self.choice_points.is_empty()
+    }
+
+    fn check_interrupt(&mut self) -> bool {
+        self.steps += 1;
+        if self.steps % 256 == 0 {
+            if let Some(flag) = &self.interrupt {
+                if flag.load(Ordering::Relaxed) {
+                    self.interrupted = true;
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Try clauses `from..` of `key` against `call`; on success install the
@@ -186,7 +227,7 @@ impl<'p> Solutions<'p> {
     /// or the search is exhausted / stopped.
     fn run(&mut self) -> bool {
         loop {
-            if self.store.error.is_some() {
+            if self.store.error.is_some() || self.check_interrupt() {
                 return false;
             }
             let Some(node) = self.goals.clone() else {

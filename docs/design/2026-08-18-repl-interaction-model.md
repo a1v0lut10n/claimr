@@ -36,13 +36,18 @@ Prolog's stepping fits answers.
   runs the file as today (batch); `claimr -i file` (or `--interactive`)
   runs the file — its clauses loaded, its queries answered as in batch —
   and then drops into the REPL with the file's program as the session.
-- **Prompt and input.** The prompt is `?- `. Input is one clause in claimr
-  syntax, terminated by `.`, possibly spanning lines (continuation prompt
-  `   `). A bare `Goal, { … }.` at the prompt is a query (the `?-` prefix
-  is optional and accepted). Comments and blank lines are ignored.
+- **Prompt and input.** The prompt is `claimr> ` (continuation `    ... `).
+  Input is **exactly claimr file syntax**: one clause terminated by `.`,
+  possibly spanning lines; `?- …` is a query, anything else is a clause.
+  The `?-` is *not* optional: a bare `p(a).` is a valid fact *and* a valid
+  query, and a prompt that reads bare goals as queries (Prolog's) cannot
+  also accept definitions — Prolog's toplevel takes no definitions at all.
+  Consistency with files wins over three keystrokes. Comments and blank
+  lines are ignored.
 - **Answers are stepped Prolog-style.** The first answer is printed and, if
-  the search could continue, the loop waits: `;` (or `n`) asks for the next
-  answer; Enter, `.` or `q` stops the query — the same keys as Prolog. When the search is exhausted after an answer,
+  the search could continue, the loop waits: `;` (or `n`) followed by Enter
+  asks for the next answer; a bare Enter, `.` or `q` stops the query — the
+  same keys as Prolog (read as a line, not a single keypress). When the search is exhausted after an answer,
   nothing more is printed; when a query has no (further) answer, `false.` is
   printed. Answers themselves are exactly the batch answers (`Solutions`
   is shared; nothing is recomputed differently), followed by ` ;` when
