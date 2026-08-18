@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Errors raised while compiling or running a program.
 
 use std::fmt;

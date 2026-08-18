@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Integration tests: every program under `examples/` must parse in full,
 //! and malformed input must fail with a positioned error.
 

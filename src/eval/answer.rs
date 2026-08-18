@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Answers in solved form: `X = t` for every bound query variable, aliases
 //! `X = Y` for query variables that became one, pending disequations, and
 //! `true` when nothing remains. Cyclic terms print as equations (`X = f(X)`),

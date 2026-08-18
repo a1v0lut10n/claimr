@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! The linear constraint solver over exact rationals — the pure part of the
 //! `solver` component (design: `docs/design/2026-08-17-evaluator.md` D5,
 //! `docs/tasks/2026-08/2026-08-18-clm-0006-linear-store.md`).

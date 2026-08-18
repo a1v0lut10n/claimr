@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! The SLD machine: goals left to right, clauses in program order,
 //! chronological backtracking through choice points and the store's trail.
 //! Iterative — resolution depth never touches the Rust stack.

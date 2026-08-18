@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! The interactive loop, driven through a pipe (no TTY): stepping, session
 //! extension, commands, loading, errors, `-i` mode.
 

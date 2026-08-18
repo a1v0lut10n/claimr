@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Lowering `ast::Clause`s to the runtime program: clause templates with
 //! pre-numbered variables (structure copying at instantiation), predicate
 //! index, the initial store's constraint facts, and the queries.

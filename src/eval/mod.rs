@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! The evaluator — stage 2 of the evaluator design
 //! (`docs/design/2026-08-17-evaluator.md`): rational-tree unification, `dif`
 //! by trial unification with suspension, a compile step from the AST, an

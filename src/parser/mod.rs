@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Parser module — rustemo-generated LR parser for the Claimr grammar.
 //!
 //! - `claimr.rustemo` is the authoritative grammar.

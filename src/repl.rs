@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! The interactive loop (design: `docs/design/2026-08-18-repl-interaction-model.md`).
 //!
 //! `claimr> ` prompt; input is exactly file syntax — a clause terminated by

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! General simplex with bounds (Dutertre & de Moura, CAV 2006), exact.
 //!
 //! State: every variable has a current value (a δ-rational) and optional

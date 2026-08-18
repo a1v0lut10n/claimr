@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Exact numbers: arbitrary-precision rationals.
 //!
 //! Every number in Claimr is an exact rational; integers are the
