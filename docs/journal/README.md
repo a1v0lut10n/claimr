@@ -1,6 +1,5 @@
 # Development journal
 
-One entry per significant event (requirements captured, decisions made, plans
-agreed, milestones executed), sharded by month: `yyyy-mm/yyyy-mm-dd-<slug>.md`.
-**Immutable** — write-once; correct the record with a new entry. Schema:
-aivolution-meta `docs/schemas/journal-entry.md`.
+Convention projected from Software Engineering: one file per
+significant event, `YYYY-MM/YYYY-MM-DD-short-title.md`,
+with a short Context, Details, and Links section.
