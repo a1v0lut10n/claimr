@@ -34,6 +34,8 @@ pub struct Repl {
     interrupt: Arc<AtomicBool>,
     input: Input,
     interactive: bool,
+    /// Whether the stepping hint has been shown this session.
+    hinted: bool,
 }
 
 enum Input {
@@ -88,6 +90,7 @@ impl Repl {
             interrupt,
             input,
             interactive,
+            hinted: false,
         })
     }
 
@@ -331,19 +334,33 @@ impl Repl {
                         println!("{a}.");
                         break;
                     }
+                    // More answers may follow: wait for `;` (next) or Enter (stop).
+                    // On a terminal the user's keystrokes are echoed, so the line
+                    // ends up reading `W = socrates ;` by itself; on a pipe we
+                    // print the markers.
                     print!("{a}");
+                    if self.interactive && !self.hinted {
+                        print!("   (more may follow: type ; then Enter for the next, Enter alone to stop)");
+                        self.hinted = true;
+                    }
                     let _ = io::stdout().flush();
                     match self.read_line(" ") {
                         Read::Line(l) if matches!(l.trim(), ";" | "n" | "next") => {
-                            println!(" ;");
+                            if !self.interactive {
+                                println!(" ;");
+                            }
                         }
                         Read::Interrupted => {
-                            println!(".");
+                            if !self.interactive {
+                                println!(".");
+                            }
                             self.interrupt.store(false, Ordering::Relaxed);
                             break;
                         }
                         _ => {
-                            println!(".");
+                            if !self.interactive {
+                                println!(".");
+                            }
                             break;
                         }
                     }
