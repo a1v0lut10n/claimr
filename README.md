@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="static/img/claimr-logo.svg" alt="Claimr logo" width="480">
+  <img src="https://raw.githubusercontent.com/a1v0lut10n/claimr/main/static/img/claimr-logo.svg" alt="Claimr logo" width="480">
 </p>
 
 # Claimr — a constraint logic programming language

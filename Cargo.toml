@@ -10,6 +10,10 @@ license = "Apache-2.0"
 readme = "README.md"
 keywords = ["constraint", "logic-programming", "prolog", "parser", "rustemo"]
 categories = ["parser-implementations", "compilers"]
+# The crate ships the source, examples (the tests parse and run them), README,
+# LICENSE and NOTICE; the documentation workflow tree and branding raster are
+# repository-only.
+exclude = ["docs/", "CLAUDE.md", "static/img/claimr-logo.png", ".claude/"]
 
 [lib]
 name = "claimr"
