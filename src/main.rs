@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! `claimr` command-line entry point.
 //!
 //! - `claimr <file.claimr>` loads the program (parse, compile, initial store)

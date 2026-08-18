@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Generates the claimr parser from `src/parser/claimr.rustemo` with rustemo.
 //!
 //! The parser tables go to `OUT_DIR` (regenerated, not committed); the actions

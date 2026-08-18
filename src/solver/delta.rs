@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! δ-rationals: values `c + kδ` for an infinitesimal positive δ, so that a
 //! strict bound `x < c` is the non-strict bound `x <= c - δ`. Ordering is
 //! lexicographic on `(c, k)`.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Sparse linear expressions `Σ aᵢ·xᵢ + c` with exact rational coefficients.
 
 use std::collections::BTreeMap;

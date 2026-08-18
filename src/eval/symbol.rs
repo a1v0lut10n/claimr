@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Interned symbols for functor and constant names.
 
 use std::collections::HashMap;

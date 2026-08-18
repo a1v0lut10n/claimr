@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Golden runs: every `examples/<name>.claimr` that has an
 //! `examples/<name>.answers` sibling is executed through the `claimr` binary
 //! and its output compared byte-for-byte. Also covers `--limit` and the CLI's

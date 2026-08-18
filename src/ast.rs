@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Abstract syntax tree of a Claimr program — the output of parsing.
 
 use std::fmt;

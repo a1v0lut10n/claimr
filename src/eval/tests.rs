@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Machine-level tests through the public API.
 
 use crate::{parse_program, parse_program_spanned, EvalError, Program};

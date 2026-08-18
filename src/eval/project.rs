@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Answer projection and simplification (evaluator stage 4, design D7).
 //!
 //! From the store after `finalize`, build the residual numeric system the

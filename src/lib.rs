@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Claimr — a constraint logic programming language (Prolog III inspired).
 //!
 //! This crate currently provides the front end: the [`ast`] (with exact

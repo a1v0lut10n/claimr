@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! The constraint store: a term heap, variable bindings, the trail (Van
 //! Caneghem's *pile de restauration*), suspension of wakers on variables,
 //! unification over rational trees, `dif` — and the numeric part: solver
