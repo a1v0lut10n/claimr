@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="static/img/claimr-logo.svg" alt="Claimr logo" width="480">
+</p>
+
 # Claimr — a constraint logic programming language
 
 Claimr is a constraint logic programming language implemented in Rust,
