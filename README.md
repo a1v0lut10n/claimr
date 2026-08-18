@@ -139,7 +139,7 @@ claimr> :quit
 | `:clear` | empty the session |
 | `:limit N` | cap answers per query in `:all` mode (0 = unlimited) |
 | `:all` | toggle between stepping answers and printing them all |
-| `:help`, `:quit` | (Ctrl-D also quits; Ctrl-C interrupts a running query) |
+| `:help`, `:quit` | leave with `:quit`, `exit.`, Ctrl-D, or Ctrl-C twice at an empty prompt; Ctrl-C interrupts a running query |
 
 A pipe on stdin drives the same loop: `printf '?- p(X).\n;\n' | claimr`.
 

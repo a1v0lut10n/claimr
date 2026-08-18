@@ -66,9 +66,13 @@ Prolog's stepping fits answers.
   session), `:limit N` (cap answers printed per query in `:all` mode),
   `:all` toggles stepping vs. printing all answers, `:help`, `:quit` (also
   Ctrl-D at the prompt).
-- **Interruption.** Ctrl-C during a query aborts it back to the prompt
-  (`interrupted.`); Ctrl-C at the prompt clears the current input line. The
-  machine polls a shared flag between resolution steps.
+- **Interruption and leaving.** Ctrl-C during a query aborts it back to
+  the prompt (`interrupted.`); Ctrl-C at the prompt discards a partial
+  input line, and at an *empty* prompt prints how to leave — a second
+  Ctrl-C in a row then leaves (Ctrl-C is not an exit by itself, and ⌘C on
+  macOS is copy). Leaving: `:quit`, Ctrl-D, or the words people reach for
+  — `exit`, `quit`, `halt`, with or without a `.`. The machine polls a
+  shared flag between resolution steps.
 - **Diagnostics** keep the batch conventions: syntax errors show
   `line:col:` relative to the typed input; runtime errors print as in batch
   (`in \`?- …\`: …`); loading a file reports `file:line:col:`.
