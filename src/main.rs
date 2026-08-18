@@ -1,31 +1,42 @@
 //! `claimr` command-line entry point.
 //!
-//! `claimr <file.claimr>` loads the program (parse, compile, initial store)
-//! and runs its `?-` queries in order, printing each query and its answers.
-//! `--parse` prints the parsed clauses instead; `--limit N` caps the answers
-//! printed per query (unlimited by default). Diagnostics are GCC-style
-//! `file:line:column: message`.
+//! - `claimr <file.claimr>` loads the program (parse, compile, initial store)
+//!   and runs its `?-` queries in order, printing each query and its answers.
+//! - `claimr` with no file starts the interactive loop; `claimr -i <file>`
+//!   runs the file, then continues interactively with its program.
+//! - `--parse` prints the parsed clauses instead; `--limit N` caps the answers
+//!   printed per query (unlimited by default; seeds the REPL's `:limit`).
+//!
+//! Diagnostics are GCC-style `file:line:column: message`.
 
-use std::{env, fs, process::ExitCode};
+mod repl;
+
+use std::{env, fs, path::Path, process::ExitCode};
 
 use claimr::{parse_program_spanned, Program};
 
-const USAGE: &str = "usage: claimr [--parse] [--limit N] <file.claimr>";
+const USAGE: &str = "\
+usage: claimr [--parse] [--limit N] <file.claimr>   run a program
+       claimr [--limit N]                            interactive loop
+       claimr -i <file.claimr>                       run, then interactive";
 
 struct Options {
     parse_only: bool,
+    interactive: bool,
     limit: Option<usize>,
-    path: String,
+    path: Option<String>,
 }
 
 fn parse_args() -> Result<Options, String> {
     let mut parse_only = false;
+    let mut interactive = false;
     let mut limit = None;
     let mut path = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--parse" => parse_only = true,
+            "-i" | "--interactive" => interactive = true,
             "--limit" => {
                 let n = args.next().ok_or("--limit needs a number")?;
                 limit = Some(n.parse::<usize>().map_err(|_| format!("bad --limit value {n:?}"))?);
@@ -39,8 +50,13 @@ fn parse_args() -> Result<Options, String> {
             }
         }
     }
-    let path = path.ok_or(USAGE)?;
-    Ok(Options { parse_only, limit, path })
+    if interactive && path.is_none() {
+        return Err(format!("-i needs a file\n{USAGE}"));
+    }
+    if parse_only && path.is_none() {
+        return Err(format!("--parse needs a file\n{USAGE}"));
+    }
+    Ok(Options { parse_only, interactive, limit, path })
 }
 
 fn main() -> ExitCode {
@@ -51,8 +67,26 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let path = &opts.path;
 
+    // Interactive: no file, or -i file.
+    if opts.path.is_none() || opts.interactive {
+        let mut repl = match repl::Repl::new(opts.limit) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("claimr: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        if let Some(path) = &opts.path {
+            if !repl.load(Path::new(path)) {
+                return ExitCode::FAILURE;
+            }
+        }
+        repl.run();
+        return ExitCode::SUCCESS;
+    }
+
+    let path = opts.path.as_deref().expect("batch mode has a path");
     let source = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {

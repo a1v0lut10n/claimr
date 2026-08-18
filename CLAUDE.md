@@ -22,7 +22,11 @@ Rust. Single crate `claimr`:
   attribute terms, numeric disequations, delayed products;
   `components/solver.md`). Evaluator stages 2–3 are done; stage 4 (answer
   projection/simplification) and a REPL are open;
-- `src/main.rs` — thin CLI: `claimr file.claimr` runs the program's queries.
+- `src/main.rs` + `src/repl.rs` — the CLI: `claimr file.claimr` runs the
+  program's queries (batch); `claimr` / `claimr -i file` is the REPL
+  (`docs/design/2026-08-18-repl-interaction-model.md`: file syntax at the
+  prompt, `?- …` queries stepped with `;`, other clauses extend the session,
+  `:load/:reload/:list/:clear/:limit/:all/:help/:quit`, Ctrl-C interrupts).
 
 Source files use the `.claimr` extension. **`src/parser/claimr.rustemo` is the
 authoritative grammar**; `docs/reference/grammar.md` is an EBNF view of it and
@@ -44,6 +48,8 @@ cargo clippy --all-targets -- -D warnings
 cargo run -- examples/family.claimr       # run a program: prints each query and its answers
 cargo run -- --parse examples/socrates.claimr   # dump the parsed clauses instead
 cargo run -- --limit 5 file.claimr        # cap answers per query (unlimited by default)
+cargo run                                 # the REPL (claimr> prompt); `cargo run -- -i file` runs then continues
+printf '?- p(X).\n;\n' | cargo run -q     # the REPL through a pipe (how tests/repl.rs drives it)
 ```
 
 Adding a sample program under `examples/` automatically puts it under parse

@@ -50,6 +50,11 @@ answers in solved form. Public surface (re-exported from `claimr`):
   order, chronological backtracking through choice points and the trail;
   **iterative** (explicit goal list and choice-point stack — resolution depth
   never uses the Rust stack). An undefined predicate has no clauses and fails.
+  `Solutions::with_interrupt(Arc<AtomicBool>)` installs a flag polled every
+  256 steps (the REPL's Ctrl-C); `Solutions::interrupted()` reports a stop
+  through it; `Solutions::may_continue()` tells a caller whether asking for
+  another answer could still find one (choice points remain) — what the
+  REPL's `;` prompt is based on.
   A step is taken only if head unification, the clause's arithmetic
   definitions and any constraint goals reached leave the store satisfiable;
   before an answer is yielded `Store::finalize` runs (exact determination
@@ -82,6 +87,9 @@ answers in solved form. Public surface (re-exported from `claimr`):
 
 The CLI (`cli` component) loads a file and runs its queries in order,
 `--limit N` capping answers per query; a runtime error stops it with exit 1.
+The REPL (`src/repl.rs`, design record `2026-08-18-repl-interaction-model.md`)
+recompiles the session program on every change and per query (programs are
+small; an incremental compile is a later optimisation).
 
 ## Not yet (later stages)
 

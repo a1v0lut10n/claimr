@@ -106,7 +106,42 @@ cargo run -- examples/family.claimr
 claimr path/to/program.claimr
 claimr --limit 5 program.claimr    # cap answers per query (unlimited by default)
 claimr --parse program.claimr      # dump the parsed clauses instead of running
+claimr                             # the interactive loop
+claimr -i program.claimr           # run the program, then continue interactively
 ```
+
+Interactively, you type claimr syntax exactly as in a file — `?- goals.` is
+answered, any other clause (a fact, a rule, a `{ … }.` constraint) is added
+to the session — and answers are stepped Prolog-style: `;` for the next one,
+Enter to stop.
+
+```text
+$ claimr
+claimr> human(socrates).
+claimr> human(plato).
+claimr> mortal(X) :- human(X).
+claimr> ?- mortal(W).
+W = socrates ;
+W = plato.
+claimr> eligible(X) :- { age(X) >= 18 }.
+claimr> ?- eligible(bob).
+age(bob) >= 18.
+claimr> :load examples/family.claimr
+...
+claimr> :quit
+```
+
+| Command | |
+|---|---|
+| `:load FILE` | append the file's clauses to the session and answer its queries |
+| `:reload` | re-read the loaded files, dropping clauses typed at the prompt |
+| `:list` | print the session's clauses |
+| `:clear` | empty the session |
+| `:limit N` | cap answers per query in `:all` mode (0 = unlimited) |
+| `:all` | toggle between stepping answers and printing them all |
+| `:help`, `:quit` | (Ctrl-D also quits; Ctrl-C interrupts a running query) |
+
+A pipe on stdin drives the same loop: `printf '?- p(X).\n;\n' | claimr`.
 
 Answers are printed in solved form, one per line, `true` when nothing remains
 to say and `false` when a query has no answers. Constraints that remain open
@@ -178,7 +213,8 @@ claimr/
 │   │   └── mod.rs               # includes the generated parser (OUT_DIR)
 │   ├── eval/            # evaluator: store (heap, trail, dif, numeric glue), unify, compile, SLD machine, answers
 │   ├── solver/          # exact linear solver: delta-rationals, linear expressions, simplex
-│   └── main.rs          # `claimr` CLI: run a program (or --parse to dump the AST)
+│   ├── repl.rs          # the interactive loop
+│   └── main.rs          # `claimr` CLI: run a program, --parse, or the REPL
 ├── examples/            # sample .claimr programs (parsed by the tests; *.answers = golden runs)
 ├── tests/               # integration tests
 └── docs/                # documentation workflow (see docs/README.md)
