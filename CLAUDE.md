@@ -70,3 +70,14 @@ The cross-repo documentation workflow (taxonomy, schemas, mutation patterns)
 is owned by aivolution-meta (`docs/README.md` there); this repo's
 `docs/README.md` carries repo-specific additions only. Journal entries go in
 `docs/journal/yyyy-mm/`, and are drafted and confirmed before writing.
+
+## Conventions from Aivolution SWE
+
+Generated from Aivolution SWE's conventions (mastermind:
+mastermind).
+
+- Journal significant events under `docs/journal/`.
+- Record decisions as ADRs under `docs/decisions/`.
+- Plan non-trivial work under `docs/implementation/`.
+- Everything lands reviewably; nothing is written
+silently.
