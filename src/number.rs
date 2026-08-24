@@ -111,17 +111,29 @@ impl Number {
 
     /// The multiplicative inverse, or `None` for zero.
     pub fn recip(&self) -> Option<Number> {
-        if self.is_zero() { None } else { Some(Number(self.0.recip())) }
+        if self.is_zero() {
+            None
+        } else {
+            Some(Number(self.0.recip()))
+        }
     }
 
     /// Exact division, or `None` when dividing by zero.
     pub fn checked_div(&self, rhs: &Number) -> Option<Number> {
-        if rhs.is_zero() { None } else { Some(Number(&self.0 / &rhs.0)) }
+        if rhs.is_zero() {
+            None
+        } else {
+            Some(Number(&self.0 / &rhs.0))
+        }
     }
 
     /// Absolute value.
     pub fn abs(&self) -> Number {
-        if self.is_negative() { -self.clone() } else { self.clone() }
+        if self.is_negative() {
+            -self.clone()
+        } else {
+            self.clone()
+        }
     }
 
     /// Scale factor that makes the numbers integral with no common factor:
@@ -178,20 +190,30 @@ impl_binop!(Div, div, /);
 
 impl Neg for Number {
     type Output = Number;
-    fn neg(self) -> Number { Number(-self.0) }
+    fn neg(self) -> Number {
+        Number(-self.0)
+    }
 }
 impl Neg for &Number {
     type Output = Number;
-    fn neg(self) -> Number { Number(-&self.0) }
+    fn neg(self) -> Number {
+        Number(-&self.0)
+    }
 }
 impl AddAssign<&Number> for Number {
-    fn add_assign(&mut self, rhs: &Number) { self.0 += &rhs.0; }
+    fn add_assign(&mut self, rhs: &Number) {
+        self.0 += &rhs.0;
+    }
 }
 impl SubAssign<&Number> for Number {
-    fn sub_assign(&mut self, rhs: &Number) { self.0 -= &rhs.0; }
+    fn sub_assign(&mut self, rhs: &Number) {
+        self.0 -= &rhs.0;
+    }
 }
 impl MulAssign<&Number> for Number {
-    fn mul_assign(&mut self, rhs: &Number) { self.0 *= &rhs.0; }
+    fn mul_assign(&mut self, rhs: &Number) {
+        self.0 *= &rhs.0;
+    }
 }
 
 impl fmt::Display for Number {
@@ -237,7 +259,9 @@ macro_rules! impl_from_int {
         }
     )*};
 }
-impl_from_int!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
+impl_from_int!(
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
+);
 
 impl From<BigInt> for Number {
     fn from(v: BigInt) -> Self {
@@ -304,14 +328,22 @@ mod tests {
     fn arbitrary_precision() {
         let big = "123456789012345678901234567890.987654321098765432109876543210";
         let v = n(big);
-        assert_eq!(v.numer().to_string(), "12345678901234567890123456789098765432109876543210987654321");
+        assert_eq!(
+            v.numer().to_string(),
+            "12345678901234567890123456789098765432109876543210987654321"
+        );
         assert_eq!(v.denom().to_string(), "100000000000000000000000000000");
     }
 
     #[test]
     fn rejects_malformed_literals() {
-        for bad in ["", ".", "1.", ".5", "1.2.3", "abc", "1e5", "--1", "1/2", " 1"] {
-            assert!(Number::from_literal(bad).is_err(), "{bad:?} should be rejected");
+        for bad in [
+            "", ".", "1.", ".5", "1.2.3", "abc", "1e5", "--1", "1/2", " 1",
+        ] {
+            assert!(
+                Number::from_literal(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
         }
         assert!(Number::from_ratio(1, 0).is_none());
     }

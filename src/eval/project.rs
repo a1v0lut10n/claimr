@@ -11,8 +11,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use crate::solver::{LinExpr, RelOp, SVar, Simplex};
 use crate::Number;
+use crate::solver::{LinExpr, RelOp, SVar, Simplex};
 
 use super::store::Store;
 
@@ -69,7 +69,10 @@ pub(crate) fn project(store: &Store, public: &BTreeSet<SVar>) -> Projected {
     // elimination connected to public ones are satisfiable independently.
     cs.retain(|c| {
         c.kind != Kind::Ne
-            || c.expr.terms.keys().all(|v| public.contains(v) || survivors.contains(v))
+            || c.expr
+                .terms
+                .keys()
+                .all(|v| public.contains(v) || survivors.contains(v))
     });
     normalise_all(&mut cs);
     dedupe(&mut cs);
@@ -96,7 +99,10 @@ fn collect(store: &Store, public: &BTreeSet<SVar>) -> Vec<Constraint> {
                 // v = c
                 let mut c = e.clone();
                 c.constant -= &l.c;
-                out.push(Constraint { expr: c, kind: Kind::Eq });
+                out.push(Constraint {
+                    expr: c,
+                    kind: Kind::Eq,
+                });
                 continue;
             }
         }
@@ -104,14 +110,28 @@ fn collect(store: &Store, public: &BTreeSet<SVar>) -> Vec<Constraint> {
             // v - c (- kδ) >= 0
             let mut c = e.clone();
             c.constant -= &l.c;
-            out.push(Constraint { expr: c, kind: if l.k.is_positive() { Kind::Gt } else { Kind::Ge } });
+            out.push(Constraint {
+                expr: c,
+                kind: if l.k.is_positive() {
+                    Kind::Gt
+                } else {
+                    Kind::Ge
+                },
+            });
         }
         if let Some(u) = upper {
             // c - v >= 0
             let mut c = e.clone();
             c.negate();
             c.constant += &u.c;
-            out.push(Constraint { expr: c, kind: if u.k.is_negative() { Kind::Gt } else { Kind::Ge } });
+            out.push(Constraint {
+                expr: c,
+                kind: if u.k.is_negative() {
+                    Kind::Gt
+                } else {
+                    Kind::Ge
+                },
+            });
         }
     }
     // Definitions of public defined variables are genuine equalities.
@@ -128,7 +148,10 @@ fn collect(store: &Store, public: &BTreeSet<SVar>) -> Vec<Constraint> {
         }
         d.constant += &def.constant;
         e.sub(&d);
-        out.push(Constraint { expr: e, kind: Kind::Eq });
+        out.push(Constraint {
+            expr: e,
+            kind: Kind::Eq,
+        });
     }
     // Pending numeric disequations.
     for (i, nd) in store.numdifs.iter().enumerate() {
@@ -137,7 +160,10 @@ fn collect(store: &Store, public: &BTreeSet<SVar>) -> Vec<Constraint> {
         }
         let mut e = LinExpr::default();
         expand(store, public, nd.d, &Number::one(), &mut e, 0);
-        out.push(Constraint { expr: e, kind: Kind::Ne });
+        out.push(Constraint {
+            expr: e,
+            kind: Kind::Ne,
+        });
     }
     // Drop constant (trivially true) constraints.
     out.retain(|c| !c.expr.is_constant());
@@ -146,7 +172,14 @@ fn collect(store: &Store, public: &BTreeSet<SVar>) -> Vec<Constraint> {
 
 /// `out += k · v`, expanding definitions of non-public variables and
 /// substituting fixed classes.
-fn expand(store: &Store, public: &BTreeSet<SVar>, v: SVar, k: &Number, out: &mut LinExpr, depth: usize) {
+fn expand(
+    store: &Store,
+    public: &BTreeSet<SVar>,
+    v: SVar,
+    k: &Number,
+    out: &mut LinExpr,
+    depth: usize,
+) {
     let r = store.root(v);
     // A non-public defined variable *is* its definition (a fixed one still
     // carries a constraint through its bounds, so expand before substituting).
@@ -184,7 +217,11 @@ fn connected(cs: Vec<Constraint>, public: &BTreeSet<SVar>) -> Vec<Constraint> {
             }
         }
     }
-    cs.into_iter().zip(kept).filter(|(_, k)| *k).map(|(c, _)| c).collect()
+    cs.into_iter()
+        .zip(kept)
+        .filter(|(_, k)| *k)
+        .map(|(c, _)| c)
+        .collect()
 }
 
 /// Substitute `v = rhs` (rhs without v) into `e`.
@@ -235,7 +272,9 @@ fn gaussian(cs: &mut Vec<Constraint>, internal: &BTreeSet<SVar>, public: &BTreeS
             if c.kind != Kind::Eq {
                 continue;
             }
-            if c.expr.terms.keys().any(|v| done.contains(v)) && c.expr.terms.keys().all(|v| done.contains(v)) {
+            if c.expr.terms.keys().any(|v| done.contains(v))
+                && c.expr.terms.keys().all(|v| done.contains(v))
+            {
                 continue;
             }
             let mut fallback = None;
@@ -323,7 +362,10 @@ fn fourier_motzkin(cs: &mut Vec<Constraint>, internal: &BTreeSet<SVar>) -> BTree
                 if e.is_constant() {
                     continue; // a consequence between constants; the store was feasible
                 }
-                cs.push(Constraint { expr: e, kind: if strict { Kind::Gt } else { Kind::Ge } });
+                cs.push(Constraint {
+                    expr: e,
+                    kind: if strict { Kind::Gt } else { Kind::Ge },
+                });
             }
         }
     }
@@ -346,8 +388,14 @@ fn cheapest(cs: &[Constraint], remaining: &BTreeSet<SVar>) -> Option<SVar> {
     remaining
         .iter()
         .map(|v| {
-            let l = cs.iter().filter(|c| c.kind != Kind::Ne && c.expr.coeff(*v).is_some_and(|a| a.is_positive())).count();
-            let u = cs.iter().filter(|c| c.kind != Kind::Ne && c.expr.coeff(*v).is_some_and(|a| a.is_negative())).count();
+            let l = cs
+                .iter()
+                .filter(|c| c.kind != Kind::Ne && c.expr.coeff(*v).is_some_and(|a| a.is_positive()))
+                .count();
+            let u = cs
+                .iter()
+                .filter(|c| c.kind != Kind::Ne && c.expr.coeff(*v).is_some_and(|a| a.is_negative()))
+                .count();
             (l * u as isize as usize, *v, l + u)
         })
         .min_by_key(|(cost, v, n)| (*cost as isize - *n as isize, *v))
@@ -400,14 +448,15 @@ fn drop_redundant(cs: &mut Vec<Constraint>) {
         let mut sx = Simplex::new();
         let mut map: BTreeMap<SVar, SVar> = BTreeMap::new();
         let mut var = |v: SVar, sx: &mut Simplex| *map.entry(v).or_insert_with(|| sx.new_var());
-        let rewrite = |e: &LinExpr, sx: &mut Simplex, var: &mut dyn FnMut(SVar, &mut Simplex) -> SVar| {
-            let mut out = LinExpr::constant(e.constant.clone());
-            for (v, a) in &e.terms {
-                let w = var(*v, sx);
-                out.add_term(w, a);
-            }
-            out
-        };
+        let rewrite =
+            |e: &LinExpr, sx: &mut Simplex, var: &mut dyn FnMut(SVar, &mut Simplex) -> SVar| {
+                let mut out = LinExpr::constant(e.constant.clone());
+                for (v, a) in &e.terms {
+                    let w = var(*v, sx);
+                    out.add_term(w, a);
+                }
+                out
+            };
         let mut feasible = true;
         for (j, c) in cs.iter().enumerate() {
             if j == i || c.kind == Kind::Ne {
@@ -444,7 +493,10 @@ fn drop_redundant(cs: &mut Vec<Constraint>) {
 
 /// Orient equalities to solved form and split by kind.
 fn orient(cs: Vec<Constraint>, public: &BTreeSet<SVar>, survivors: BTreeSet<SVar>) -> Projected {
-    let mut out = Projected { survivors, ..Default::default() };
+    let mut out = Projected {
+        survivors,
+        ..Default::default()
+    };
     for c in cs {
         match c.kind {
             Kind::Eq => {
@@ -494,9 +546,18 @@ mod tests {
     fn fm_eliminates_a_two_sided_variable() {
         // X = Y + Z (as Y = X - Z), Y > 0, Z > 0  =>  X > 0   with Y=1, Z=2 internal, X=0 public
         let mut cs = vec![
-            Constraint { expr: lin(&[(0, "1"), (1, "-1"), (2, "-1")], "0"), kind: Kind::Eq },
-            Constraint { expr: lin(&[(1, "1")], "0"), kind: Kind::Gt },
-            Constraint { expr: lin(&[(2, "1")], "0"), kind: Kind::Gt },
+            Constraint {
+                expr: lin(&[(0, "1"), (1, "-1"), (2, "-1")], "0"),
+                kind: Kind::Eq,
+            },
+            Constraint {
+                expr: lin(&[(1, "1")], "0"),
+                kind: Kind::Gt,
+            },
+            Constraint {
+                expr: lin(&[(2, "1")], "0"),
+                kind: Kind::Gt,
+            },
         ];
         let internal: BTreeSet<SVar> = [SVar(1), SVar(2)].into();
         let public: BTreeSet<SVar> = [SVar(0)].into();
@@ -506,23 +567,44 @@ mod tests {
         normalise_all(&mut cs);
         dedupe(&mut cs);
         drop_redundant(&mut cs);
-        assert_eq!(cs, vec![Constraint { expr: lin(&[(0, "1")], "0"), kind: Kind::Gt }]);
+        assert_eq!(
+            cs,
+            vec![Constraint {
+                expr: lin(&[(0, "1")], "0"),
+                kind: Kind::Gt
+            }]
+        );
     }
 
     #[test]
     fn redundancy_is_exact() {
         // X > 3, X > 2 => X > 3 ; X > Y, Y > Z, X > Z => drop X > Z
         let mut cs = vec![
-            Constraint { expr: lin(&[(0, "1")], "-3"), kind: Kind::Gt },
-            Constraint { expr: lin(&[(0, "1")], "-2"), kind: Kind::Gt },
+            Constraint {
+                expr: lin(&[(0, "1")], "-3"),
+                kind: Kind::Gt,
+            },
+            Constraint {
+                expr: lin(&[(0, "1")], "-2"),
+                kind: Kind::Gt,
+            },
         ];
         drop_redundant(&mut cs);
         assert_eq!(cs.len(), 1);
         assert_eq!(cs[0].expr.constant, -Number::from(3));
         let mut cs = vec![
-            Constraint { expr: lin(&[(0, "1"), (1, "-1")], "0"), kind: Kind::Gt },
-            Constraint { expr: lin(&[(1, "1"), (2, "-1")], "0"), kind: Kind::Gt },
-            Constraint { expr: lin(&[(0, "1"), (2, "-1")], "0"), kind: Kind::Gt },
+            Constraint {
+                expr: lin(&[(0, "1"), (1, "-1")], "0"),
+                kind: Kind::Gt,
+            },
+            Constraint {
+                expr: lin(&[(1, "1"), (2, "-1")], "0"),
+                kind: Kind::Gt,
+            },
+            Constraint {
+                expr: lin(&[(0, "1"), (2, "-1")], "0"),
+                kind: Kind::Gt,
+            },
         ];
         drop_redundant(&mut cs);
         assert_eq!(cs.len(), 2);
@@ -533,8 +615,14 @@ mod tests {
         // Many lowers and uppers on an internal variable: exceed the budget.
         let mut cs = Vec::new();
         for i in 0..20 {
-            cs.push(Constraint { expr: lin(&[(0, "1"), (i + 1, "-1")], "0"), kind: Kind::Ge }); // v0 >= v_i
-            cs.push(Constraint { expr: lin(&[(0, "-1"), (i + 21, "1")], "0"), kind: Kind::Ge }); // v0 <= v_j
+            cs.push(Constraint {
+                expr: lin(&[(0, "1"), (i + 1, "-1")], "0"),
+                kind: Kind::Ge,
+            }); // v0 >= v_i
+            cs.push(Constraint {
+                expr: lin(&[(0, "-1"), (i + 21, "1")], "0"),
+                kind: Kind::Ge,
+            }); // v0 <= v_j
         }
         let internal: BTreeSet<SVar> = [SVar(0)].into();
         let survivors = fourier_motzkin(&mut cs, &internal);

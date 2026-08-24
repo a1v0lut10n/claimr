@@ -85,7 +85,11 @@ impl Simplex {
     // --- variables and rows -----------------------------------------------
 
     pub fn new_var(&mut self) -> SVar {
-        self.vars.push(VarState { lower: None, upper: None, value: Delta::zero() });
+        self.vars.push(VarState {
+            lower: None,
+            upper: None,
+            value: Delta::zero(),
+        });
         self.row_of.push(None);
         SVar(self.vars.len() - 1)
     }
@@ -141,7 +145,10 @@ impl Simplex {
         debug_assert!(self.row_of[v.0].is_none());
         debug_assert!(self.vars[v.0].lower.is_none() && self.vars[v.0].upper.is_none());
         let expr = self.substitute(expr);
-        debug_assert!(!expr.terms.contains_key(&v), "definition must not be self-referential");
+        debug_assert!(
+            !expr.terms.contains_key(&v),
+            "definition must not be self-referential"
+        );
         // v must not occur in any other row (it is fresh), so no substitution needed.
         self.vars[v.0].value = self.eval(&expr);
         self.rows.push(Row { basic: v, expr });
@@ -179,7 +186,11 @@ impl Simplex {
 
     fn save(&mut self, v: SVar) {
         let st = &self.vars[v.0];
-        self.trail.push(BoundUndo { var: v, lower: st.lower.clone(), upper: st.upper.clone() });
+        self.trail.push(BoundUndo {
+            var: v,
+            lower: st.lower.clone(),
+            upper: st.upper.clone(),
+        });
     }
 
     // --- assertions --------------------------------------------------------
@@ -302,7 +313,9 @@ impl Simplex {
                     }
                 }
             }
-            let Some((xi, below)) = violated else { return true };
+            let Some((xi, below)) = violated else {
+                return true;
+            };
             let ri = self.row_of[xi.0].unwrap();
             // Smallest-index non-basic variable that can move xi toward its bound.
             let mut pivot: Option<SVar> = None;
@@ -358,7 +371,10 @@ impl Simplex {
         expr.negate();
         expr.add_term(xi, &Number::one());
         expr.scale(&inv);
-        self.rows[ri] = Row { basic: xj, expr: expr.clone() };
+        self.rows[ri] = Row {
+            basic: xj,
+            expr: expr.clone(),
+        };
         self.row_of[xi.0] = None;
         self.row_of[xj.0] = Some(ri);
         for (k, row) in self.rows.iter_mut().enumerate() {
@@ -382,7 +398,11 @@ impl Simplex {
         // Cheap case: coinciding bounds.
         if let (Some(l), Some(u)) = (&self.vars[x.0].lower, &self.vars[x.0].upper) {
             if l == u {
-                return if l.is_exact() { Some(l.c.clone()) } else { None };
+                return if l.is_exact() {
+                    Some(l.c.clone())
+                } else {
+                    None
+                };
             }
         }
         let v = self.vars[x.0].value.clone();
@@ -551,8 +571,26 @@ mod tests {
             assert!(s.assert_lower(*x, Delta::zero()));
         }
         let rows = [
-            (vec![(v[0], "0.25"), (v[1], "-8"), (v[2], "-1"), (v[3], "9"), (v[4], "1")], "0"),
-            (vec![(v[0], "0.5"), (v[1], "-12"), (v[2], "-0.5"), (v[3], "3"), (v[5], "1")], "0"),
+            (
+                vec![
+                    (v[0], "0.25"),
+                    (v[1], "-8"),
+                    (v[2], "-1"),
+                    (v[3], "9"),
+                    (v[4], "1"),
+                ],
+                "0",
+            ),
+            (
+                vec![
+                    (v[0], "0.5"),
+                    (v[1], "-12"),
+                    (v[2], "-0.5"),
+                    (v[3], "3"),
+                    (v[5], "1"),
+                ],
+                "0",
+            ),
             (vec![(v[2], "1"), (v[6], "1")], "-1"),
         ];
         for (terms, c) in rows {
@@ -560,10 +598,16 @@ mod tests {
             assert!(s.assert_constraint(&e, RelOp::Eq));
         }
         // Push the objective-like combination around; must terminate.
-        let obj = lin(&[(v[0], "-0.75"), (v[1], "20"), (v[2], "-0.5"), (v[3], "6")], "0");
+        let obj = lin(
+            &[(v[0], "-0.75"), (v[1], "20"), (v[2], "-0.5"), (v[3], "6")],
+            "0",
+        );
         assert!(s.assert_constraint(&obj, RelOp::Le));
         let m = s.mark();
-        let tight = lin(&[(v[0], "-0.75"), (v[1], "20"), (v[2], "-0.5"), (v[3], "6")], "0.5");
+        let tight = lin(
+            &[(v[0], "-0.75"), (v[1], "20"), (v[2], "-0.5"), (v[3], "6")],
+            "0.5",
+        );
         let _ = s.assert_constraint(&tight, RelOp::Le); // either way, must return
         s.undo_to(m);
         assert!(s.check());

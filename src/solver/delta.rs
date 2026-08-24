@@ -23,7 +23,10 @@ impl Delta {
 
     /// A plain rational.
     pub fn exact(c: Number) -> Self {
-        Delta { c, k: Number::zero() }
+        Delta {
+            c,
+            k: Number::zero(),
+        }
     }
 
     pub fn zero() -> Self {
@@ -37,7 +40,10 @@ impl Delta {
 
     /// Scale by a rational.
     pub fn scale(&self, a: &Number) -> Delta {
-        Delta { c: &self.c * a, k: &self.k * a }
+        Delta {
+            c: &self.c * a,
+            k: &self.k * a,
+        }
     }
 }
 
@@ -50,13 +56,19 @@ impl From<Number> for Delta {
 impl<'a> Add<&'a Delta> for &'a Delta {
     type Output = Delta;
     fn add(self, rhs: &Delta) -> Delta {
-        Delta { c: &self.c + &rhs.c, k: &self.k + &rhs.k }
+        Delta {
+            c: &self.c + &rhs.c,
+            k: &self.k + &rhs.k,
+        }
     }
 }
 impl<'a> Sub<&'a Delta> for &'a Delta {
     type Output = Delta;
     fn sub(self, rhs: &Delta) -> Delta {
-        Delta { c: &self.c - &rhs.c, k: &self.k - &rhs.k }
+        Delta {
+            c: &self.c - &rhs.c,
+            k: &self.k - &rhs.k,
+        }
     }
 }
 impl<'a> Mul<&'a Number> for &'a Delta {
@@ -68,7 +80,10 @@ impl<'a> Mul<&'a Number> for &'a Delta {
 impl Neg for &Delta {
     type Output = Delta;
     fn neg(self) -> Delta {
-        Delta { c: -&self.c, k: -&self.k }
+        Delta {
+            c: -&self.c,
+            k: -&self.k,
+        }
     }
 }
 

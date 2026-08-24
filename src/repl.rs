@@ -12,12 +12,12 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use claimr::{parse_program_spanned, Clause, EvalError, ParseError, Program};
-use rustyline::error::ReadlineError;
+use claimr::{Clause, EvalError, ParseError, Program, parse_program_spanned};
 use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 
 /// Where a session clause came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +71,8 @@ impl Repl {
     pub fn new(limit: Option<usize>) -> Result<Self, String> {
         let interactive = io::stdin().is_terminal();
         let input = if interactive {
-            let editor = DefaultEditor::new().map_err(|e| format!("cannot start line editor: {e}"))?;
+            let editor =
+                DefaultEditor::new().map_err(|e| format!("cannot start line editor: {e}"))?;
             Input::Editor(Box::new(editor))
         } else {
             Input::Pipe(io::stdin().lock())
@@ -118,7 +119,8 @@ impl Repl {
             if matches!(clause, Clause::Query(_)) {
                 queries.push(clause);
             } else {
-                self.clauses.push((clause, Origin::File(path.to_path_buf())));
+                self.clauses
+                    .push((clause, Origin::File(path.to_path_buf())));
             }
         }
         if let Err(e) = self.recompile() {
@@ -146,12 +148,19 @@ impl Repl {
     /// Run the loop until `:quit` or end of input.
     pub fn run(&mut self) {
         if self.interactive {
-            println!("claimr {} — :help for commands; :quit, exit. or Ctrl-D to leave.", env!("CARGO_PKG_VERSION"));
+            println!(
+                "claimr {} — :help for commands; :quit, exit. or Ctrl-D to leave.",
+                env!("CARGO_PKG_VERSION")
+            );
         }
         let mut buffer = String::new();
         let mut interrupted_at_prompt = false;
         loop {
-            let prompt = if buffer.is_empty() { "claimr> " } else { "    ... " };
+            let prompt = if buffer.is_empty() {
+                "claimr> "
+            } else {
+                "    ... "
+            };
             match self.read_line(prompt) {
                 Read::Eof => {
                     if self.interactive {
@@ -169,7 +178,9 @@ impl Repl {
                         // Second Ctrl-C in a row at an empty prompt: leave.
                         return;
                     } else {
-                        println!("(Ctrl-C interrupts a running query; to leave: :quit, exit. or Ctrl-D — or Ctrl-C again)");
+                        println!(
+                            "(Ctrl-C interrupts a running query; to leave: :quit, exit. or Ctrl-D — or Ctrl-C again)"
+                        );
                         interrupted_at_prompt = true;
                     }
                     continue;
@@ -188,7 +199,10 @@ impl Repl {
                             continue;
                         }
                         // The words people reach for to leave, with or without a `.`.
-                        if matches!(trimmed.trim_end_matches('.').trim(), "exit" | "quit" | "halt") {
+                        if matches!(
+                            trimmed.trim_end_matches('.').trim(),
+                            "exit" | "quit" | "halt"
+                        ) {
                             return;
                         }
                     }
@@ -279,7 +293,14 @@ impl Repl {
             },
             "all" => {
                 self.all_mode = !self.all_mode;
-                println!("{}", if self.all_mode { "printing all answers" } else { "stepping answers" });
+                println!(
+                    "{}",
+                    if self.all_mode {
+                        "printing all answers"
+                    } else {
+                        "stepping answers"
+                    }
+                );
             }
             _ => eprintln!("unknown command `:{name}` — :help for the list"),
         }
@@ -342,7 +363,9 @@ impl Repl {
                     // print the markers.
                     print!("{a}");
                     if self.interactive && !self.hinted {
-                        print!("   (more may follow: type ; then Enter for the next, Enter alone to stop)");
+                        print!(
+                            "   (more may follow: type ; then Enter for the next, Enter alone to stop)"
+                        );
                         self.hinted = true;
                     }
                     let _ = io::stdout().flush();
@@ -396,7 +419,11 @@ fn completeness(buffer: &str) -> Completeness {
         Ok(cs) => Completeness::Complete(cs.into_iter().map(|(c, _)| c).collect()),
         Err(e) => {
             let at_end = e.offset.is_some_and(|o| o >= buffer.trim_end().len());
-            if at_end { Completeness::Incomplete } else { Completeness::Error(e) }
+            if at_end {
+                Completeness::Incomplete
+            } else {
+                Completeness::Error(e)
+            }
         }
     }
 }
@@ -407,26 +434,53 @@ mod tests {
 
     #[test]
     fn completeness_detection() {
-        assert!(matches!(completeness("human(socrates)."), Completeness::Complete(_)));
-        assert!(matches!(completeness("mortal(X) :- human(X)"), Completeness::Incomplete));
-        assert!(matches!(completeness("mortal(X) :-\n"), Completeness::Incomplete));
+        assert!(matches!(
+            completeness("human(socrates)."),
+            Completeness::Complete(_)
+        ));
+        assert!(matches!(
+            completeness("mortal(X) :- human(X)"),
+            Completeness::Incomplete
+        ));
+        assert!(matches!(
+            completeness("mortal(X) :-\n"),
+            Completeness::Incomplete
+        ));
         assert!(matches!(completeness("?- p(X)"), Completeness::Incomplete));
-        assert!(matches!(completeness("?- { X = 1.5 }."), Completeness::Complete(_)));
-        assert!(matches!(completeness("?- { X = 1 }. % done"), Completeness::Complete(_)));
+        assert!(matches!(
+            completeness("?- { X = 1.5 }."),
+            Completeness::Complete(_)
+        ));
+        assert!(matches!(
+            completeness("?- { X = 1 }. % done"),
+            Completeness::Complete(_)
+        ));
         assert!(matches!(completeness("?- p(X) q."), Completeness::Error(_)));
-        assert!(matches!(completeness("{ age(x) > 3 }."), Completeness::Complete(_)));
+        assert!(matches!(
+            completeness("{ age(x) > 3 }."),
+            Completeness::Complete(_)
+        ));
         // `1.` at the end of a query is a number then the terminator.
-        assert!(matches!(completeness("?- { X = 1 }."), Completeness::Complete(_)));
+        assert!(matches!(
+            completeness("?- { X = 1 }."),
+            Completeness::Complete(_)
+        ));
         assert!(matches!(completeness("?- p(1"), Completeness::Incomplete));
     }
 
     #[test]
     fn file_syntax_at_the_prompt() {
-        let Completeness::Complete(cs) = completeness("?- p(X), q(X).") else { panic!() };
+        let Completeness::Complete(cs) = completeness("?- p(X), q(X).") else {
+            panic!()
+        };
         assert!(matches!(cs[0], Clause::Query(_)));
-        let Completeness::Complete(cs) = completeness("p(a).") else { panic!() };
+        let Completeness::Complete(cs) = completeness("p(a).") else {
+            panic!()
+        };
         assert!(matches!(cs[0], Clause::Fact(_)));
-        let Completeness::Complete(cs) = completeness("p(X) :- q(X).") else { panic!() };
+        let Completeness::Complete(cs) = completeness("p(X) :- q(X).") else {
+            panic!()
+        };
         assert!(matches!(cs[0], Clause::Rule { .. }));
     }
 }

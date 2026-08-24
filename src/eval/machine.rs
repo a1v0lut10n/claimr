@@ -10,11 +10,11 @@
 //! determination, disequation re-checks) — `answer-soundness`.
 
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::answer::{Answer, render_answer, render_terms};
-use super::compile::{build, PredKey, Program, Query, TGoal};
+use super::compile::{PredKey, Program, Query, TGoal, build};
 use super::error::EvalError;
 use super::store::{Addr, Cell, Mark, Store};
 use crate::ast::RelOp;
@@ -237,7 +237,8 @@ impl<'p> Solutions<'p> {
                 if self.store.finalize() {
                     return true;
                 }
-                if self.store.error.is_some() || self.store.nonlinear.is_some() || !self.backtrack() {
+                if self.store.error.is_some() || self.store.nonlinear.is_some() || !self.backtrack()
+                {
                     return false;
                 }
                 continue;
@@ -278,8 +279,15 @@ impl<'p> Solutions<'p> {
             return Some(e);
         }
         let (a, b, op) = self.store.nonlinear.take()?;
-        let rendered = render_terms(&self.program.symbols, &self.store, &self.query_vars, &[a, b]);
-        Some(EvalError::NonLinear { constraint: format!("{} {op} {}", rendered[0], rendered[1]) })
+        let rendered = render_terms(
+            &self.program.symbols,
+            &self.store,
+            &self.query_vars,
+            &[a, b],
+        );
+        Some(EvalError::NonLinear {
+            constraint: format!("{} {op} {}", rendered[0], rendered[1]),
+        })
     }
 }
 
@@ -334,4 +342,3 @@ fn pred_key(store: &Store, call: Addr) -> PredKey {
         other => unreachable!("call goals are atoms, got {other:?}"),
     }
 }
-

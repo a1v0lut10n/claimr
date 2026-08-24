@@ -10,10 +10,19 @@ use crate::number::Number;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Clause {
     Fact(Atom),
-    Rule { head: Atom, body: Vec<Goal> },
+    Rule {
+        head: Atom,
+        body: Vec<Goal>,
+    },
     ConstraintFact(ConstraintExpr),
-    ConstraintRule { head: Atom, body: Vec<Goal> },
-    Implication { constraint: ConstraintExpr, head: Atom },
+    ConstraintRule {
+        head: Atom,
+        body: Vec<Goal>,
+    },
+    Implication {
+        constraint: ConstraintExpr,
+        head: Atom,
+    },
     Query(Vec<Goal>),
 }
 
@@ -46,7 +55,11 @@ pub enum Expr {
     /// Unary minus.
     Neg(Box<Expr>),
     /// A binary arithmetic operation.
-    Binary { op: ArithOp, left: Box<Expr>, right: Box<Expr> },
+    Binary {
+        op: ArithOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 }
 
 /// Binary arithmetic operators.

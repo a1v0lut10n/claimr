@@ -10,9 +10,9 @@
 
 use std::collections::HashMap;
 
+use crate::Span;
 use crate::ast::{self, ArithOp, Clause, Expr, Goal, RelOp};
 use crate::number::Number;
-use crate::Span;
 
 use super::error::EvalError;
 use super::machine::Solutions;
@@ -121,7 +121,11 @@ impl Lowerer<'_> {
 
     fn atom(&mut self, a: &ast::Atom) -> Result<TTerm, EvalError> {
         let f = self.symbols.intern(&a.name);
-        let args = a.args.iter().map(|e| self.term(e)).collect::<Result<Vec<_>, _>>()?;
+        let args = a
+            .args
+            .iter()
+            .map(|e| self.term(e))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(TTerm::Compound(f, args))
     }
 
@@ -174,12 +178,22 @@ impl Program {
         let mut queries = Vec::new();
 
         for (clause, _span) in clauses {
-            let mut lw = Lowerer { symbols: &mut symbols, vars: VarMap::default() };
+            let mut lw = Lowerer {
+                symbols: &mut symbols,
+                vars: VarMap::default(),
+            };
             match clause {
                 Clause::Fact(atom) => {
                     let head = lw.atom(atom)?;
                     let nvars = lw.vars.names.len() as u32;
-                    push_clause(&mut preds, TClause { head, body: vec![], nvars });
+                    push_clause(
+                        &mut preds,
+                        TClause {
+                            head,
+                            body: vec![],
+                            nvars,
+                        },
+                    );
                 }
                 Clause::Rule { head, body } | Clause::ConstraintRule { head, body } => {
                     let head = lw.atom(head)?;
@@ -218,7 +232,12 @@ impl Program {
             }
         }
 
-        let program = Program { symbols, preds, initial, queries };
+        let program = Program {
+            symbols,
+            preds,
+            initial,
+            queries,
+        };
         // The initial store must be satisfiable, or the program has no models.
         let mut store = Store::new();
         if !program.post_initial(&mut store) {
@@ -248,18 +267,24 @@ impl Program {
             let mut vars = vec![None; *nvars as usize];
             for g in goals {
                 let ok = match g {
-                    TGoal::Eq(a, b) => match (build(store, a, &mut vars), build(store, b, &mut vars)) {
-                        (Some(a), Some(b)) => store.post_eq_goal(a, b),
-                        _ => false,
-                    },
-                    TGoal::Dif(a, b) => match (build(store, a, &mut vars), build(store, b, &mut vars)) {
-                        (Some(a), Some(b)) => store.post_dif_goal(a, b),
-                        _ => false,
-                    },
-                    TGoal::Rel(op, a, b) => match (build(store, a, &mut vars), build(store, b, &mut vars)) {
-                        (Some(a), Some(b)) => store.post_rel(*op, a, b),
-                        _ => false,
-                    },
+                    TGoal::Eq(a, b) => {
+                        match (build(store, a, &mut vars), build(store, b, &mut vars)) {
+                            (Some(a), Some(b)) => store.post_eq_goal(a, b),
+                            _ => false,
+                        }
+                    }
+                    TGoal::Dif(a, b) => {
+                        match (build(store, a, &mut vars), build(store, b, &mut vars)) {
+                            (Some(a), Some(b)) => store.post_dif_goal(a, b),
+                            _ => false,
+                        }
+                    }
+                    TGoal::Rel(op, a, b) => {
+                        match (build(store, a, &mut vars), build(store, b, &mut vars)) {
+                            (Some(a), Some(b)) => store.post_rel(*op, a, b),
+                            _ => false,
+                        }
+                    }
                     TGoal::Call(_) => unreachable!("constraint facts have no calls"),
                 };
                 if !ok {

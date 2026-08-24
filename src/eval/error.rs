@@ -32,7 +32,10 @@ impl fmt::Display for EvalError {
                 "non-linear constraint `{constraint}` is still undetermined; claimr does not approximate (evaluator stage 3 supports linear constraints only)"
             ),
             EvalError::CyclicAttributeTerm { term } => {
-                write!(f, "cyclic attribute term `{term}` in numeric position is not supported")
+                write!(
+                    f,
+                    "cyclic attribute term `{term}` in numeric position is not supported"
+                )
             }
         }
     }
