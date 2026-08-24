@@ -15,7 +15,12 @@ fn run(args: &[&str], input: &str) -> (String, String, i32) {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn claimr");
-    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
     (
         String::from_utf8(out.stdout).unwrap(),
@@ -65,8 +70,14 @@ fn all_mode_and_limit() {
          stepping answers\n?- nat(X).\nX = zero.\n"
     );
     // --limit seeds :limit.
-    let (out, _, _) = run(&["--limit", "2"], "nat(zero).\nnat(s(N)) :- nat(N).\n:all\n?- nat(X).\n");
-    assert_eq!(out, "printing all answers\n?- nat(X).\nX = zero\nX = s(zero)\n");
+    let (out, _, _) = run(
+        &["--limit", "2"],
+        "nat(zero).\nnat(s(N)) :- nat(N).\n:all\n?- nat(X).\n",
+    );
+    assert_eq!(
+        out,
+        "printing all answers\n?- nat(X).\nX = zero\nX = s(zero)\n"
+    );
 }
 
 #[test]
@@ -100,12 +111,23 @@ fn load_reload_clear() {
         ),
     );
     // Loading answers the file's queries (all answers, as batch does)...
-    assert!(out.starts_with("?- parent(tom, X).\nX = bob\nX = liz\n"), "{out}");
+    assert!(
+        out.starts_with("?- parent(tom, X).\nX = bob\nX = liz\n"),
+        "{out}"
+    );
     // ...then the prompt-typed fact is visible, dropped by :reload (which
     // re-answers the file's queries), and :clear empties everything.
     assert!(out.contains("?- parent(zeus, C).\nC = athena.\n"), "{out}");
-    assert_eq!(out.matches("?- parent(tom, X).\nX = bob\nX = liz\n").count(), 2, "{out}");
-    assert!(out.ends_with("?- parent(zeus, C).\nfalse.\n?- parent(tom, C).\nfalse.\n"), "{out}");
+    assert_eq!(
+        out.matches("?- parent(tom, X).\nX = bob\nX = liz\n")
+            .count(),
+        2,
+        "{out}"
+    );
+    assert!(
+        out.ends_with("?- parent(zeus, C).\nfalse.\n?- parent(tom, C).\nfalse.\n"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -120,7 +142,10 @@ fn errors_at_the_prompt() {
     );
     assert_eq!(code, 0);
     assert!(err.contains("error: 1:9: Expected"), "{err}");
-    assert!(err.contains("in `?- { Y = X * Z }.`: non-linear constraint `X * Z`"), "{err}");
+    assert!(
+        err.contains("in `?- { Y = X * Z }.`: non-linear constraint `X * Z`"),
+        "{err}"
+    );
     assert!(err.contains("unknown command `:bogus`"), "{err}");
     assert!(!out.contains("never"), "quit stops the loop: {out}");
 }
@@ -142,7 +167,10 @@ fn interactive_flag_runs_then_continues() {
     let family = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/family.claimr");
     let (out, _, code) = run(&["-i", family.to_str().unwrap()], "?- sibling(pat, S).\n");
     assert_eq!(code, 0);
-    assert!(out.starts_with("?- parent(tom, X).\nX = bob\nX = liz\n"), "{out}");
+    assert!(
+        out.starts_with("?- parent(tom, X).\nX = bob\nX = liz\n"),
+        "{out}"
+    );
     assert!(out.ends_with("?- sibling(pat, S).\nS = ann.\n"), "{out}");
     // Batch mode is unchanged.
     let (batch, _, _) = run(&[family.to_str().unwrap()], "");
@@ -155,7 +183,10 @@ fn exit_words_leave_the_loop() {
     for word in ["exit.", "quit.", "halt.", "exit", "quit"] {
         let (out, _, code) = run(&[], &format!("p(a).\n{word}\n?- p(X).\n"));
         assert_eq!(code, 0, "{word}");
-        assert!(!out.contains("X = a"), "{word} should leave before the query: {out}");
+        assert!(
+            !out.contains("X = a"),
+            "{word} should leave before the query: {out}"
+        );
     }
 }
 

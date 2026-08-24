@@ -19,8 +19,8 @@
 pub mod ast;
 pub mod eval;
 pub mod number;
-pub mod solver;
 mod parser;
+pub mod solver;
 
 pub use ast::*;
 pub use eval::{Answer, EvalError, Program, Query, Solutions};
@@ -135,12 +135,18 @@ mod tests {
 
     #[test]
     fn parses_fact() {
-        assert!(matches!(parse_clause("human(socrates)."), Ok(Clause::Fact(_))));
+        assert!(matches!(
+            parse_clause("human(socrates)."),
+            Ok(Clause::Fact(_))
+        ));
     }
 
     #[test]
     fn parses_rule() {
-        assert!(matches!(parse_clause("mortal(X) :- human(X)."), Ok(Clause::Rule { .. })));
+        assert!(matches!(
+            parse_clause("mortal(X) :- human(X)."),
+            Ok(Clause::Rule { .. })
+        ));
     }
 
     #[test]
@@ -200,12 +206,17 @@ mod tests {
     #[test]
     fn nested_atoms_as_arguments() {
         let clause = parse_clause("likes(mary, father(john)).").unwrap();
-        let Clause::Fact(atom) = clause else { panic!("expected fact") };
+        let Clause::Fact(atom) = clause else {
+            panic!("expected fact")
+        };
         assert_eq!(atom.name, "likes");
         assert_eq!(atom.args[0], Expr::Ident("mary".into()));
         assert_eq!(
             atom.args[1],
-            Expr::Atom(Box::new(Atom { name: "father".into(), args: vec![Expr::Ident("john".into())] }))
+            Expr::Atom(Box::new(Atom {
+                name: "father".into(),
+                args: vec![Expr::Ident("john".into())]
+            }))
         );
     }
 
@@ -216,7 +227,10 @@ mod tests {
         };
         assert_eq!(c.terms[0].left, Expr::Var("X".into()));
         assert_eq!(c.terms[0].op, RelOp::Ge);
-        assert_eq!(c.terms[0].right, Expr::Number(Number::from_ratio(37, 2).unwrap()));
+        assert_eq!(
+            c.terms[0].right,
+            Expr::Number(Number::from_ratio(37, 2).unwrap())
+        );
         assert_eq!(c.terms[1].op, RelOp::Neq);
         assert_eq!(c.terms[1].right, Expr::Number(Number::from(3)));
     }
@@ -224,10 +238,15 @@ mod tests {
     #[test]
     fn all_relops() {
         for (src, op) in [
-            ("=", RelOp::Eq), ("!=", RelOp::Neq), ("<", RelOp::Lt),
-            (">", RelOp::Gt), ("<=", RelOp::Le), (">=", RelOp::Ge),
+            ("=", RelOp::Eq),
+            ("!=", RelOp::Neq),
+            ("<", RelOp::Lt),
+            (">", RelOp::Gt),
+            ("<=", RelOp::Le),
+            (">=", RelOp::Ge),
         ] {
-            let Clause::ConstraintFact(c) = parse_clause(&format!("{{ X {src} 1 }}.")).unwrap() else {
+            let Clause::ConstraintFact(c) = parse_clause(&format!("{{ X {src} 1 }}.")).unwrap()
+            else {
                 panic!("expected constraint fact for {src}");
             };
             assert_eq!(c.terms[0].op, op, "operator {src}");
@@ -243,7 +262,11 @@ mod tests {
         Expr::Var(v.into())
     }
     fn bin(op: ArithOp, l: Expr, r: Expr) -> Expr {
-        Expr::Binary { op, left: Box::new(l), right: Box::new(r) }
+        Expr::Binary {
+            op,
+            left: Box::new(l),
+            right: Box::new(r),
+        }
     }
     /// The left operand of the single constraint in `{ <src> }.`
     fn lhs(src: &str) -> Expr {
@@ -255,30 +278,60 @@ mod tests {
 
     #[test]
     fn precedence_mul_over_add() {
-        assert_eq!(lhs("1 + 2 * 3"), bin(ArithOp::Add, num(1), bin(ArithOp::Mul, num(2), num(3))));
-        assert_eq!(lhs("1 * 2 + 3"), bin(ArithOp::Add, bin(ArithOp::Mul, num(1), num(2)), num(3)));
-        assert_eq!(lhs("X / 2 - Y"), bin(ArithOp::Sub, bin(ArithOp::Div, var("X"), num(2)), var("Y")));
+        assert_eq!(
+            lhs("1 + 2 * 3"),
+            bin(ArithOp::Add, num(1), bin(ArithOp::Mul, num(2), num(3)))
+        );
+        assert_eq!(
+            lhs("1 * 2 + 3"),
+            bin(ArithOp::Add, bin(ArithOp::Mul, num(1), num(2)), num(3))
+        );
+        assert_eq!(
+            lhs("X / 2 - Y"),
+            bin(ArithOp::Sub, bin(ArithOp::Div, var("X"), num(2)), var("Y"))
+        );
     }
 
     #[test]
     fn left_associativity() {
-        assert_eq!(lhs("1 - 2 - 3"), bin(ArithOp::Sub, bin(ArithOp::Sub, num(1), num(2)), num(3)));
-        assert_eq!(lhs("8 / 4 / 2"), bin(ArithOp::Div, bin(ArithOp::Div, num(8), num(4)), num(2)));
+        assert_eq!(
+            lhs("1 - 2 - 3"),
+            bin(ArithOp::Sub, bin(ArithOp::Sub, num(1), num(2)), num(3))
+        );
+        assert_eq!(
+            lhs("8 / 4 / 2"),
+            bin(ArithOp::Div, bin(ArithOp::Div, num(8), num(4)), num(2))
+        );
     }
 
     #[test]
     fn parentheses_group_and_vanish() {
-        assert_eq!(lhs("(1 + 2) * 3"), bin(ArithOp::Mul, bin(ArithOp::Add, num(1), num(2)), num(3)));
+        assert_eq!(
+            lhs("(1 + 2) * 3"),
+            bin(ArithOp::Mul, bin(ArithOp::Add, num(1), num(2)), num(3))
+        );
         assert_eq!(lhs("((X))"), var("X"));
     }
 
     #[test]
     fn unary_minus_binds_tightest() {
-        assert_eq!(lhs("-X * Y"), bin(ArithOp::Mul, Expr::Neg(Box::new(var("X"))), var("Y")));
+        assert_eq!(
+            lhs("-X * Y"),
+            bin(ArithOp::Mul, Expr::Neg(Box::new(var("X"))), var("Y"))
+        );
         assert_eq!(lhs("-3"), Expr::Neg(Box::new(num(3))));
-        assert_eq!(lhs("- - X"), Expr::Neg(Box::new(Expr::Neg(Box::new(var("X"))))));
-        assert_eq!(lhs("-(X + 1)"), Expr::Neg(Box::new(bin(ArithOp::Add, var("X"), num(1)))));
-        assert_eq!(lhs("2 - -3"), bin(ArithOp::Sub, num(2), Expr::Neg(Box::new(num(3)))));
+        assert_eq!(
+            lhs("- - X"),
+            Expr::Neg(Box::new(Expr::Neg(Box::new(var("X")))))
+        );
+        assert_eq!(
+            lhs("-(X + 1)"),
+            Expr::Neg(Box::new(bin(ArithOp::Add, var("X"), num(1))))
+        );
+        assert_eq!(
+            lhs("2 - -3"),
+            bin(ArithOp::Sub, num(2), Expr::Neg(Box::new(num(3))))
+        );
     }
 
     #[test]
@@ -288,7 +341,10 @@ mod tests {
 
     #[test]
     fn arithmetic_over_attribute_terms() {
-        let age_x = Expr::Atom(Box::new(Atom { name: "age".into(), args: vec![var("X")] }));
+        let age_x = Expr::Atom(Box::new(Atom {
+            name: "age".into(),
+            args: vec![var("X")],
+        }));
         assert_eq!(lhs("age(X) + 1"), bin(ArithOp::Add, age_x, num(1)));
     }
 
@@ -300,15 +356,25 @@ mod tests {
         assert_eq!(atom.args.len(), 3);
         assert_eq!(atom.args[0], bin(ArithOp::Add, var("X"), num(1)));
         let inner = Expr::Neg(Box::new(bin(ArithOp::Mul, num(2), var("Y"))));
-        assert_eq!(atom.args[1], Expr::Atom(Box::new(Atom { name: "f".into(), args: vec![inner] })));
+        assert_eq!(
+            atom.args[1],
+            Expr::Atom(Box::new(Atom {
+                name: "f".into(),
+                args: vec![inner]
+            }))
+        );
         // ...and in rule bodies and queries.
-        assert!(matches!(parse_clause("q(X) :- p(X * 2)."), Ok(Clause::Rule { .. })));
+        assert!(matches!(
+            parse_clause("q(X) :- p(X * 2)."),
+            Ok(Clause::Rule { .. })
+        ));
         assert!(matches!(parse_clause("?- p(1 + 1)."), Ok(Clause::Query(_))));
     }
 
     #[test]
     fn multi_constraint_arithmetic() {
-        let Clause::ConstraintFact(c) = parse_clause("{ X + Y = 10, 2*X - Y >= 1/3 }.").unwrap() else {
+        let Clause::ConstraintFact(c) = parse_clause("{ X + Y = 10, 2*X - Y >= 1/3 }.").unwrap()
+        else {
             panic!("expected constraint fact");
         };
         assert_eq!(c.terms.len(), 2);
@@ -334,9 +400,12 @@ mod tests {
 
     #[test]
     fn comment_does_not_swallow_the_next_line() {
-        let clauses = parse_program("p(a). % c1
+        let clauses = parse_program(
+            "p(a). % c1
 q(b).
-").unwrap();
+",
+        )
+        .unwrap();
         assert_eq!(clauses.len(), 2);
     }
 

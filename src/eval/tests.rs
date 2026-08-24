@@ -2,7 +2,7 @@
 
 //! Machine-level tests through the public API.
 
-use crate::{parse_program, parse_program_spanned, EvalError, Program};
+use crate::{EvalError, Program, parse_program, parse_program_spanned};
 
 fn answers(src: &str) -> Vec<Vec<String>> {
     let clauses = parse_program(src).expect("parses");
@@ -86,7 +86,10 @@ fn constraint_facts_form_the_initial_store() {
     assert_eq!(out[1], vec!["Z != a"]);
     // Unsatisfiable facts: no models.
     let clauses = parse_program("{ a != a }. p(1).").unwrap();
-    assert_eq!(Program::compile(&clauses).unwrap_err(), EvalError::InitialStoreUnsatisfiable);
+    assert_eq!(
+        Program::compile(&clauses).unwrap_err(),
+        EvalError::InitialStoreUnsatisfiable
+    );
     let clauses = parse_program("{ X = a }. { X != a }. p(1).").unwrap();
     // Different clauses have different X: satisfiable.
     assert!(Program::compile(&clauses).is_ok());
@@ -152,12 +155,21 @@ fn deep_derivations_do_not_touch_the_rust_stack() {
                 term = format!("s({term})");
             }
             let calls: Vec<String> = (0..10).map(|_| format!("count({term})")).collect();
-            let src = format!("count(zero). count(s(N)) :- count(N). ?- {}.", calls.join(", "));
+            let src = format!(
+                "count(zero). count(s(N)) :- count(N). ?- {}.",
+                calls.join(", ")
+            );
             let out = answers(&src);
             assert_eq!(out[0], vec!["true"]);
             // And a long goal list: 20 000 goals in one query.
             let many: Vec<&str> = std::iter::repeat_n("p", 20_000).collect();
-            let src = format!("p(). ?- {}.", many.iter().map(|p| format!("{p}()")).collect::<Vec<_>>().join(", "));
+            let src = format!(
+                "p(). ?- {}.",
+                many.iter()
+                    .map(|p| format!("{p}()"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
             assert_eq!(answers(&src)[0], vec!["true"]);
         })
         .unwrap()
@@ -176,7 +188,10 @@ fn linear_equations_determine_variables() {
     assert_eq!(first("?- { X + Y = 10, X - Y = 2 }."), "X = 6, Y = 4");
     assert_eq!(first("?- { 3 * X = 1 }."), "X = 1/3");
     assert_eq!(first("?- { X = 1 / 3 }."), "X = 1/3");
-    assert_eq!(first("?- { X = -(2 * Y) }, { Y = 1.5 }."), "X = -3, Y = 3/2");
+    assert_eq!(
+        first("?- { X = -(2 * Y) }, { Y = 1.5 }."),
+        "X = -3, Y = 3/2"
+    );
     assert_eq!(first("?- { X = 0.1 + 0.2 }, { X = 0.3 }."), "X = 3/10");
     assert_eq!(first("?- { X = 1 / 0 }."), "");
 }
@@ -220,7 +235,10 @@ fn inequalities_bounds_and_residuals() {
     assert_eq!(first("?- { Y = X + 1 }."), "Y = X + 1");
     assert_eq!(first("?- { Y = X + 1 }, { X > 0 }."), "Y = X + 1, X > 0");
     // Two-variable equation with a residual: printed in solved form.
-    assert_eq!(first("?- { X + Y = 10, 2*X - Y >= 1/3 }."), "Y = 10 - X, 2*X - Y >= 1/3");
+    assert_eq!(
+        first("?- { X + Y = 10, 2*X - Y >= 1/3 }."),
+        "Y = 10 - X, 2*X - Y >= 1/3"
+    );
 }
 
 #[test]
@@ -229,10 +247,16 @@ fn numeric_disequations_are_exact() {
     assert_eq!(first("same(X, X). ?- { X != 3 }, same(X, 3)."), "");
     assert_eq!(first("same(X, X). ?- { X != 3 }, same(X, 4)."), "X = 4");
     assert_eq!(first("?- { X != 3 }."), "X != 3");
-    assert_eq!(first("?- { X > 3 }, { X < 5 }, { X != 4 }."), "X > 3, X < 5, X != 4");
+    assert_eq!(
+        first("?- { X > 3 }, { X < 5 }, { X != 4 }."),
+        "X > 3, X < 5, X != 4"
+    );
     assert_eq!(first("?- { X + Y = 10 }, { X - Y = 2 }, { X != 6 }."), "");
     // Implied through the store only at answer time: still exact.
-    assert_eq!(first("?- { X != Y }, { X >= 1 }, { X <= 1 }, { Y >= 1 }, { Y <= 1 }."), "");
+    assert_eq!(
+        first("?- { X != Y }, { X >= 1 }, { X <= 1 }, { Y >= 1 }, { Y <= 1 }."),
+        ""
+    );
 }
 
 #[test]
@@ -296,7 +320,10 @@ fn delayed_products() {
 fn determined_variables_wake_difs_and_congruence() {
     // dif on numeric variables decided when they become determined.
     assert_eq!(first("?- { X != Y }, { X = 1 }, { Y = 1 }."), "");
-    assert_eq!(first("?- { X != Y }, { X = 1 }, { Y = 2 }."), "X = 1, Y = 2");
+    assert_eq!(
+        first("?- { X != Y }, { X = 1 }, { Y = 2 }."),
+        "X = 1, Y = 2"
+    );
     // tree dif over structures containing numeric variables.
     assert_eq!(first("?- { f(X) != f(3) }, { X >= 3, X <= 3 }."), "");
     assert_eq!(first("?- { f(X) != f(3) }, { X >= 4 }."), "X >= 4");
@@ -323,7 +350,10 @@ fn numeric_examples_from_the_readme_run() {
 #[test]
 fn compile_spanned_still_works_and_initial_store_checks_numerics() {
     let clauses = parse_program_spanned("{ X > 3, X < 2 }. p(1).").unwrap();
-    assert_eq!(Program::compile_spanned(&clauses).unwrap_err(), EvalError::InitialStoreUnsatisfiable);
+    assert_eq!(
+        Program::compile_spanned(&clauses).unwrap_err(),
+        EvalError::InitialStoreUnsatisfiable
+    );
     let clauses = parse_program_spanned("{ age(a) > 3 }. p(1). ?- p(X).").unwrap();
     assert!(Program::compile_spanned(&clauses).is_ok());
 }
@@ -341,7 +371,8 @@ fn no_floating_point_in_the_crate() {
                 let text = std::fs::read_to_string(&path).unwrap();
                 for (i, line) in text.lines().enumerate() {
                     let code = line.split("//").next().unwrap_or("");
-                    if (code.contains("f64") || code.contains("f32")) && !path.ends_with("tests.rs") {
+                    if (code.contains("f64") || code.contains("f32")) && !path.ends_with("tests.rs")
+                    {
                         hits.push(format!("{}:{}: {}", path.display(), i + 1, line.trim()));
                     }
                 }
@@ -349,7 +380,10 @@ fn no_floating_point_in_the_crate() {
         }
     }
     let mut hits = Vec::new();
-    scan(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut hits);
+    scan(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut hits,
+    );
     assert!(hits.is_empty(), "floating point in src/: {hits:#?}");
 }
 
@@ -412,17 +446,27 @@ fn tree_disequations_print_in_reduced_form() {
 fn projection_budget_fallback_stays_correct() {
     // An internal W with 20 lower and 20 upper bounds on public variables
     // would produce 400 combinations: over the budget, so W is named instead.
-    let args: Vec<String> = (0..20).map(|i| format!("A{i}")).chain((0..20).map(|i| format!("B{i}"))).collect();
+    let args: Vec<String> = (0..20)
+        .map(|i| format!("A{i}"))
+        .chain((0..20).map(|i| format!("B{i}")))
+        .collect();
     let mut body = String::from("{ ");
     for i in 0..20 {
         body.push_str(&format!("W >= A{i}, W <= B{i}, "));
     }
     body.push_str("A0 >= 1 }");
-    let src = format!("p({}) :- {body}. ?- p({}).", args.join(", "), args.join(", "));
+    let src = format!(
+        "p({}) :- {body}. ?- p({}).",
+        args.join(", "),
+        args.join(", ")
+    );
     let out = answers(&src);
     let ans = &out[0][0];
     assert!(ans.contains("A0 >= 1"), "{ans}");
-    assert!(ans.contains("_1 >= A0") || ans.contains("A0 <= _1"), "survivor named: {ans}");
+    assert!(
+        ans.contains("_1 >= A0") || ans.contains("A0 <= _1"),
+        "survivor named: {ans}"
+    );
 }
 
 #[test]
@@ -437,13 +481,15 @@ fn answers_are_deterministic() {
 
 #[test]
 fn interrupt_flag_stops_a_runaway_query() {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     // `p() :- p().` never terminates; the flag stops it between steps.
     let clauses = parse_program("p() :- p(). ?- p().").unwrap();
     let program = Program::compile(&clauses).unwrap();
     let flag = Arc::new(AtomicBool::new(false));
-    let mut sols = program.solve(&program.queries()[0]).with_interrupt(flag.clone());
+    let mut sols = program
+        .solve(&program.queries()[0])
+        .with_interrupt(flag.clone());
     // Set the flag from another thread shortly after starting.
     let setter = {
         let flag = flag.clone();

@@ -19,13 +19,19 @@ pub struct LinExpr {
 
 impl LinExpr {
     pub fn constant(c: Number) -> Self {
-        LinExpr { terms: BTreeMap::new(), constant: c }
+        LinExpr {
+            terms: BTreeMap::new(),
+            constant: c,
+        }
     }
 
     pub fn var(v: SVar) -> Self {
         let mut terms = BTreeMap::new();
         terms.insert(v, Number::one());
-        LinExpr { terms, constant: Number::zero() }
+        LinExpr {
+            terms,
+            constant: Number::zero(),
+        }
     }
 
     pub fn is_constant(&self) -> bool {
@@ -34,7 +40,11 @@ impl LinExpr {
 
     /// The constant value if the expression has no variables.
     pub fn as_constant(&self) -> Option<&Number> {
-        if self.terms.is_empty() { Some(&self.constant) } else { None }
+        if self.terms.is_empty() {
+            Some(&self.constant)
+        } else {
+            None
+        }
     }
 
     /// If the expression is exactly `1·x + 0`, that variable.

@@ -15,7 +15,7 @@ mod repl;
 
 use std::{env, fs, path::Path, process::ExitCode};
 
-use claimr::{parse_program_spanned, Program};
+use claimr::{Program, parse_program_spanned};
 
 const USAGE: &str = "\
 usage: claimr [--parse] [--limit N] <file.claimr>   run a program
@@ -41,7 +41,10 @@ fn parse_args() -> Result<Options, String> {
             "-i" | "--interactive" => interactive = true,
             "--limit" => {
                 let n = args.next().ok_or("--limit needs a number")?;
-                limit = Some(n.parse::<usize>().map_err(|_| format!("bad --limit value {n:?}"))?);
+                limit = Some(
+                    n.parse::<usize>()
+                        .map_err(|_| format!("bad --limit value {n:?}"))?,
+                );
             }
             "-h" | "--help" => return Err(USAGE.to_string()),
             s if s.starts_with('-') => return Err(format!("unknown option {s}\n{USAGE}")),
@@ -58,7 +61,12 @@ fn parse_args() -> Result<Options, String> {
     if parse_only && path.is_none() {
         return Err(format!("--parse needs a file\n{USAGE}"));
     }
-    Ok(Options { parse_only, interactive, limit, path })
+    Ok(Options {
+        parse_only,
+        interactive,
+        limit,
+        path,
+    })
 }
 
 fn main() -> ExitCode {

@@ -477,7 +477,12 @@ impl Store {
     pub fn post_dif(&mut self, a: Addr, b: Addr) -> bool {
         let mark = self.mark();
         let id = self.difs.len();
-        self.difs.push(Dif { a, b, pending: true, reduced: Vec::new() });
+        self.difs.push(Dif {
+            a,
+            b,
+            pending: true,
+            reduced: Vec::new(),
+        });
         if self.check_dif(id) && self.settle() {
             true
         } else {
@@ -585,7 +590,11 @@ impl Store {
                 .collect();
             candidates.sort();
             for (a, sv) in candidates {
-                let val = if exact { self.simplex.is_determined(sv) } else { self.cheap_value(sv) };
+                let val = if exact {
+                    self.simplex.is_determined(sv)
+                } else {
+                    self.cheap_value(sv)
+                };
                 if let Some(c) = val {
                     if !self.simplex.fix(sv, c) {
                         return false;
@@ -613,7 +622,11 @@ impl Store {
                     continue;
                 }
                 let d = self.numdifs[id].d;
-                let val = if exact { self.simplex.is_determined(d) } else { self.cheap_value(d) };
+                let val = if exact {
+                    self.simplex.is_determined(d)
+                } else {
+                    self.cheap_value(d)
+                };
                 if let Some(c) = val {
                     if c.is_zero() {
                         return false;
@@ -630,7 +643,10 @@ impl Store {
                 }
                 let p = self.products[id].clone();
                 let (av, bv) = if exact {
-                    (self.simplex.is_determined(p.a), self.simplex.is_determined(p.b))
+                    (
+                        self.simplex.is_determined(p.a),
+                        self.simplex.is_determined(p.b),
+                    )
                 } else {
                     (self.cheap_value(p.a), self.cheap_value(p.b))
                 };
@@ -891,11 +907,26 @@ impl Store {
         s
     }
 
-    fn delay_product(&mut self, kind: ProductKind, a: SVar, b: SVar, a_addr: Addr, b_addr: Addr) -> Option<Addr> {
+    fn delay_product(
+        &mut self,
+        kind: ProductKind,
+        a: SVar,
+        b: SVar,
+        a_addr: Addr,
+        b_addr: Addr,
+    ) -> Option<Addr> {
         let n_addr = self.new_var();
         let n = self.simplex.new_var();
         self.set_numvar(n_addr, n);
-        self.products.push(Product { n, kind, a, b, a_addr, b_addr, pending: true });
+        self.products.push(Product {
+            n,
+            kind,
+            a,
+            b,
+            a_addr,
+            b_addr,
+            pending: true,
+        });
         // Maybe already linear (a factor determined): settle decides.
         if self.settle() { Some(n_addr) } else { None }
     }
@@ -1023,7 +1054,9 @@ impl Store {
     fn attribute(&mut self, a: Addr) -> Option<SVar> {
         let d = self.deref(a);
         let Some(key) = self.attr_key(d) else {
-            self.error = Some(EvalError::CyclicAttributeTerm { term: self.debug_term(d) });
+            self.error = Some(EvalError::CyclicAttributeTerm {
+                term: self.debug_term(d),
+            });
             return None;
         };
         if let Some(sv) = self.attr_index.get(&key).copied() {
@@ -1041,9 +1074,19 @@ impl Store {
         let id = self.attrs.len();
         let vars: Vec<Addr> = key
             .iter()
-            .filter_map(|k| if let KeyElem::Var(v) = k { Some(*v) } else { None })
+            .filter_map(|k| {
+                if let KeyElem::Var(v) = k {
+                    Some(*v)
+                } else {
+                    None
+                }
+            })
             .collect();
-        self.attrs.push(AttrEntry { term: d, key, svar: sv });
+        self.attrs.push(AttrEntry {
+            term: d,
+            key,
+            svar: sv,
+        });
         for v in vars {
             self.suspend(Waker::Attr(id), v);
         }
@@ -1059,7 +1102,9 @@ impl Store {
         let term = self.attrs[id].term;
         let sv = self.attrs[id].svar;
         let Some(key) = self.attr_key(term) else {
-            self.error = Some(EvalError::CyclicAttributeTerm { term: self.debug_term(term) });
+            self.error = Some(EvalError::CyclicAttributeTerm {
+                term: self.debug_term(term),
+            });
             return false;
         };
         if key == self.attrs[id].key {

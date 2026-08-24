@@ -13,7 +13,8 @@ fn read_example(name: &str) -> String {
 
 #[test]
 fn socrates_example_parses_completely() {
-    let clauses = parse_program(&read_example("socrates.claimr")).expect("socrates.claimr should parse");
+    let clauses =
+        parse_program(&read_example("socrates.claimr")).expect("socrates.claimr should parse");
     assert_eq!(clauses.len(), 7);
     assert!(matches!(clauses[0], Clause::Fact(_)));
     assert!(matches!(clauses[1], Clause::Rule { .. }));
@@ -26,23 +27,41 @@ fn socrates_example_parses_completely() {
 
 #[test]
 fn nested_terms_example_parses_completely() {
-    let clauses = parse_program(&read_example("nested_terms.claimr")).expect("nested_terms.claimr should parse");
+    let clauses = parse_program(&read_example("nested_terms.claimr"))
+        .expect("nested_terms.claimr should parse");
     assert_eq!(clauses.len(), 7);
-    let Clause::Fact(likes) = &clauses[0] else { panic!("first clause is a fact") };
+    let Clause::Fact(likes) = &clauses[0] else {
+        panic!("first clause is a fact")
+    };
     assert!(matches!(likes.args[1], claimr::Expr::Atom(ref a) if a.name == "father"));
 }
 
 #[test]
 fn numbers_example_parses_exactly() {
-    let clauses = parse_program(&read_example("numbers.claimr")).expect("numbers.claimr should parse");
+    let clauses =
+        parse_program(&read_example("numbers.claimr")).expect("numbers.claimr should parse");
     assert_eq!(clauses.len(), 7);
-    let Clause::Fact(apple) = &clauses[0] else { panic!("first clause is a fact") };
-    assert_eq!(apple.args[1], Expr::Number(Number::from_ratio(1, 2).unwrap()));
-    let Clause::Fact(caviar) = &clauses[2] else { panic!("third clause is a fact") };
-    let Expr::Number(n) = &caviar.args[1] else { panic!("price is a number") };
+    let Clause::Fact(apple) = &clauses[0] else {
+        panic!("first clause is a fact")
+    };
+    assert_eq!(
+        apple.args[1],
+        Expr::Number(Number::from_ratio(1, 2).unwrap())
+    );
+    let Clause::Fact(caviar) = &clauses[2] else {
+        panic!("third clause is a fact")
+    };
+    let Expr::Number(n) = &caviar.args[1] else {
+        panic!("price is a number")
+    };
     assert_eq!(n.to_string(), "4938271560493827157/4"); // exact, beyond f64 precision
-    let Clause::ConstraintFact(c) = &clauses[4] else { panic!("fifth clause is a constraint fact") };
-    assert_eq!(c.terms[0].right, Expr::Number(Number::from_ratio(37, 2).unwrap()));
+    let Clause::ConstraintFact(c) = &clauses[4] else {
+        panic!("fifth clause is a constraint fact")
+    };
+    assert_eq!(
+        c.terms[0].right,
+        Expr::Number(Number::from_ratio(37, 2).unwrap())
+    );
 }
 
 #[test]
@@ -66,12 +85,16 @@ fn errors_are_positioned() {
     let cases: &[(&str, usize, usize)] = &[
         ("human(socrates)\nmortal(X) :- human(X).\n", 2, 1), // missing '.' — next token starts line 2
         ("mortal(X) :- human(X.\n", 1, 21),                  // ')' expected, got '.'
-        ("{ age(X) 18 }.\n", 1, 10),                          // relop expected, got number
-        ("?- .\n", 1, 4),                                     // empty query body
-        ("Human(socrates).\n", 1, 1),                         // uppercase-initial atom name
+        ("{ age(X) 18 }.\n", 1, 10),                         // relop expected, got number
+        ("?- .\n", 1, 4),                                    // empty query body
+        ("Human(socrates).\n", 1, 1),                        // uppercase-initial atom name
     ];
     for (src, line, col) in cases {
         let err = parse_program(src).unwrap_err();
-        assert_eq!((err.line, err.column), (Some(*line), Some(*col)), "for {src:?}: {err}");
+        assert_eq!(
+            (err.line, err.column),
+            (Some(*line), Some(*col)),
+            "for {src:?}: {err}"
+        );
     }
 }

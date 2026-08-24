@@ -9,10 +9,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
-use crate::solver::{LinExpr, SVar};
 use crate::Number;
+use crate::solver::{LinExpr, SVar};
 
-use super::project::{project, Projected};
+use super::project::{Projected, project};
 use super::store::{Addr, Cell, PendingDif, Store};
 use super::symbol::Symbols;
 
@@ -118,7 +118,9 @@ impl<'a> Printer<'a> {
             match step {
                 Step::Enter(a) => {
                     let a = self.store.deref(a);
-                    let Cell::Struct(_, args) = self.store.cell(a) else { continue };
+                    let Cell::Struct(_, args) = self.store.cell(a) else {
+                        continue;
+                    };
                     if on_path.contains(&a) {
                         self.cyclic.insert(a);
                         continue;
@@ -162,7 +164,11 @@ impl<'a> Printer<'a> {
                     match self.store.cell(a).clone() {
                         Cell::Var(_) => {
                             // A numeric variable with a determined value prints as the value.
-                            let fixed = self.store.numvar.get(&a).and_then(|sv| self.store.class_value(*sv));
+                            let fixed = self
+                                .store
+                                .numvar
+                                .get(&a)
+                                .and_then(|sv| self.store.class_value(*sv));
                             match fixed {
                                 Some(c) => out.push_str(&c.to_string()),
                                 None => {
@@ -218,7 +224,11 @@ pub(crate) fn render_answer(
     let difs: Vec<PendingDif> = store
         .pending_difs()
         .into_iter()
-        .filter(|(a, b, _)| reachable_vars(store, [*a, *b]).iter().any(|v| reachable.contains(v)))
+        .filter(|(a, b, _)| {
+            reachable_vars(store, [*a, *b])
+                .iter()
+                .any(|v| reachable.contains(v))
+        })
         .collect();
 
     // Pass 1: cycle detection over everything we will print.
@@ -278,7 +288,11 @@ pub(crate) fn render_answer(
             let (v, t) = reduced[0];
             // Two variables: earlier-created first, for stable output.
             let t_is_var = matches!(store.cell(store.deref(t)), Cell::Var(_));
-            let (v, t) = if t_is_var && store.deref(t) < store.deref(v) { (t, v) } else { (v, t) };
+            let (v, t) = if t_is_var && store.deref(t) < store.deref(v) {
+                (t, v)
+            } else {
+                (v, t)
+            };
             (p.render(v), p.render(t))
         } else {
             (p.render(a), p.render(b))
@@ -297,13 +311,21 @@ pub(crate) fn render_answer(
     // simplified (design D7, stage 4).
     let constraints = render_numeric(&mut p, store, &reachable);
 
-    Answer { equations, disequations, constraints }
+    Answer {
+        equations,
+        disequations,
+        constraints,
+    }
 }
 
 /// The public numeric variables (alias-class roots) with their names: numeric
 /// heap variables reachable from the query, and attribute terms created by
 /// the query whose variables are all visible.
-fn public_names(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>) -> BTreeMap<SVar, String> {
+fn public_names(
+    p: &mut Printer<'_>,
+    store: &Store,
+    reachable: &HashSet<Addr>,
+) -> BTreeMap<SVar, String> {
     let mut names: BTreeMap<SVar, String> = BTreeMap::new();
     let mut heap_named: Vec<(SVar, Addr)> = reachable
         .iter()
@@ -319,7 +341,11 @@ fn public_names(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>) -
         .iter()
         .enumerate()
         .filter(|(i, _)| store.attr_visible(*i))
-        .filter(|(_, e)| reachable_vars(store, [e.term]).iter().all(|v| reachable.contains(v)))
+        .filter(|(_, e)| {
+            reachable_vars(store, [e.term])
+                .iter()
+                .all(|v| reachable.contains(v))
+        })
         .map(|(_, e)| (store.root(e.svar), e.term))
         .collect();
     attr_named.sort();
@@ -339,7 +365,12 @@ fn render_numeric(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>)
         return Vec::new();
     }
     let public: BTreeSet<SVar> = names.keys().copied().collect();
-    let Projected { eqs, ineqs, difs, survivors } = project(store, &public);
+    let Projected {
+        eqs,
+        ineqs,
+        difs,
+        survivors,
+    } = project(store, &public);
     // World attribute terms pulled in as survivors print by their term;
     // other survivors get internal names.
     let mut attr_render: BTreeMap<SVar, Addr> = BTreeMap::new();
@@ -360,8 +391,8 @@ fn render_numeric(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>)
         let mut out = String::new();
         let mut first = true;
         // A positive constant leads when the first term is negative: `10 - X`.
-        let lead_const = e.constant.is_positive()
-            && e.terms.iter().next().is_some_and(|(_, a)| a.is_negative());
+        let lead_const =
+            e.constant.is_positive() && e.terms.iter().next().is_some_and(|(_, a)| a.is_negative());
         if lead_const {
             out.push_str(&e.constant.to_string());
             first = false;
@@ -421,7 +452,10 @@ fn render_numeric(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>)
     for (r, name) in &names {
         if attr_render.contains_key(r) {
             if let Some(c) = store.class_value(*r) {
-                if !reachable.iter().any(|v| store.numvar.get(v).map(|sv| store.root(*sv)) == Some(*r)) {
+                if !reachable
+                    .iter()
+                    .any(|v| store.numvar.get(v).map(|sv| store.root(*sv)) == Some(*r))
+                {
                     out.push(format!("{name} = {c}"));
                 }
             }

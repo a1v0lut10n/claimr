@@ -34,7 +34,10 @@ fn golden_answers_match() {
         assert_eq!(actual, expected, "answers differ for {}", program.display());
         checked += 1;
     }
-    assert!(checked >= 4, "expected golden files for the pure examples, found {checked}");
+    assert!(
+        checked >= 4,
+        "expected golden files for the pure examples, found {checked}"
+    );
 }
 
 #[test]
@@ -72,7 +75,10 @@ fn errors_are_reported_and_exit_1() {
     let out = claimr().arg(&file).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("in `?- { Y = X * Z }.`: non-linear constraint"), "{err}");
+    assert!(
+        err.contains("in `?- { Y = X * Z }.`: non-linear constraint"),
+        "{err}"
+    );
     // Usage errors exit 2.
     let out = claimr().output().unwrap();
     assert_eq!(out.status.code(), Some(2));
