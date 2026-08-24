@@ -79,8 +79,9 @@ fn errors_are_reported_and_exit_1() {
         err.contains("in `?- { Y = X * Z }.`: non-linear constraint"),
         "{err}"
     );
-    // Usage errors exit 2.
-    let out = claimr().output().unwrap();
+    // Usage errors exit 2. (No arguments is not one since CLM-0008 —
+    // that starts the REPL; an unknown flag still is.)
+    let out = claimr().arg("--nonsense").output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     std::fs::remove_dir_all(&dir).ok();
 }
