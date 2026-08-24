@@ -17,6 +17,7 @@
 //! ```
 
 pub mod ast;
+pub mod highlight;
 pub mod eval;
 pub mod number;
 mod parser;
