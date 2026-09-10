@@ -48,6 +48,7 @@ cargo clippy --all-targets -- -D warnings
 cargo run -- examples/family.claimr       # run a program: prints each query and its answers
 cargo run -- --parse examples/socrates.claimr   # dump the parsed clauses instead
 cargo run -- --limit 5 file.claimr        # cap answers per query (unlimited by default)
+cargo run -- --json file.claimr           # one JSON document per query (CLM-0010, docs/reference/json-output.md)
 cargo run                                 # the REPL (claimr> prompt); `cargo run -- -i file` runs then continues
 printf '?- p(X).\n;\n' | cargo run -q     # the REPL through a pipe (how tests/repl.rs drives it)
 ```
