@@ -22,15 +22,24 @@ declarative programs.
   floats; `18.5` means exactly 37/2, and `+ - * /` are term constructors
   usable anywhere a term goes (as in Prolog III)
 - **Implication syntax** (`{ … } => head.`) as syntactic sugar
+- **Quoted atoms** (`'situation:frame-in-spec'`) — any content as an atom;
+  identity is content, quoting is spelling, print-back quotes exactly when
+  needed
+- **A REPL** (`claimr`, `claimr -i file`) with Prolog-style answer stepping
+- **Machine-readable output** (`claimr --json`): one JSON document per
+  query, structured diagnostics — a pinned contract for programmatic
+  consumers ([`docs/reference/json-output.md`](docs/reference/json-output.md))
 - **Parser generated with [rustemo](https://crates.io/crates/rustemo)**, an
   LR parser generator for Rust — the grammar file is the single source of
   truth for the syntax, and syntax errors carry line/column positions
+- **Highlight tokens** (`highlight::line_tokens`): error-tolerant, line-based
+  lexing in claimr's own vocabulary, for editors and UIs
 
 Current status: the **parser** (`src/parser/`), the **evaluator**
 (`src/eval/`: SLD resolution over rational trees, `=`/`!=` on terms, answers
-in solved form) and the **linear constraint solver** (`src/solver/`: exact
-rational simplex, attribute terms such as `age(X)`, delayed non-linear
-products) are implemented. Open: richer answer simplification, a REPL,
+in solved form, projected onto the query), the **linear constraint solver**
+(`src/solver/`: exact rational simplex, attribute terms such as `age(X)`,
+delayed non-linear products), and the **REPL** are implemented. Open:
 non-linear and finite-domain constraints.
 
 ## Grammar
@@ -113,6 +122,7 @@ cargo run -- examples/family.claimr
 # Or, after `cargo install --path .`
 claimr path/to/program.claimr
 claimr --limit 5 program.claimr    # cap answers per query (unlimited by default)
+claimr --json program.claimr       # one JSON document per query (docs/reference/json-output.md)
 claimr --parse program.claimr      # dump the parsed clauses instead of running
 claimr                             # the interactive loop
 claimr -i program.claimr           # run the program, then continue interactively
@@ -193,7 +203,8 @@ for query in program.queries() {
 }
 ```
 
-Diagnostics are GCC-style `file:line:column: message` for syntax errors;
+Diagnostics are GCC-style `file:line:column: message` for syntax errors
+(structured JSON objects under `--json`);
 load errors (an unsatisfiable set of constraint facts) and runtime errors
 (a non-linear constraint still undetermined at answer time — Claimr never
 approximates) name the file and the query:
@@ -221,8 +232,10 @@ claimr/
 │   │   └── mod.rs               # includes the generated parser (OUT_DIR)
 │   ├── eval/            # evaluator: store (heap, trail, dif, numeric glue), unify, compile, SLD machine, answers
 │   ├── solver/          # exact linear solver: delta-rationals, linear expressions, simplex
+│   ├── highlight.rs     # error-tolerant line lexer for editors and UIs
+│   ├── json_out.rs      # the --json output writer (pinned contract)
 │   ├── repl.rs          # the interactive loop
-│   └── main.rs          # `claimr` CLI: run a program, --parse, or the REPL
+│   └── main.rs          # `claimr` CLI: run a program, --json, --parse, or the REPL
 ├── examples/            # sample .claimr programs (parsed by the tests; *.answers = golden runs)
 ├── tests/               # integration tests
 └── docs/                # documentation workflow (see docs/README.md)
