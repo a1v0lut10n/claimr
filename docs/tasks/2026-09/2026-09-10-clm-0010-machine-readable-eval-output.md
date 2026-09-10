@@ -1,7 +1,7 @@
 ---
 date: 2026-09-10
 type: task
-status: proposed
+status: done
 affects:
   - docs/reference/grammar.md
 components: [cli]
@@ -50,7 +50,16 @@ wants a structural source.
 
 ## Verification
 
-- [ ] A consumer can dispatch on `outcome` without parsing prose.
-- [ ] aicogito-reason's `read_outcome` can be replaced by serde over
-      this format (tracked aicogito-side).
-- [ ] `cargo test` green; human output byte-identical to today's.
+- [x] A consumer can dispatch on `outcome` without parsing prose —
+      and answers arrive MORE structured than proposed: one
+      `X = t` string per variable in `equations`, with
+      `disequations` and `constraints` as their own lists (the
+      solved form's own split).
+- [ ] aicogito-reason's `read_outcome` replaced over this format
+      (tracked aicogito-side).
+- [x] `cargo test` green; the human format byte-identical (pinned by
+      `tests/json_output.rs`, which would break on any change).
+
+Delivered as `--json` (a flag beside `--parse`/`--limit`, fitting
+the CLI's grain) rather than an `eval` subcommand; diagnostics on
+stderr; exit codes unchanged. Format: `docs/reference/json-output.md`.
