@@ -49,6 +49,40 @@ pub fn line_tokens(line: &str) -> Vec<Token> {
             });
             break;
         }
+        // CLM-0011: quoted atoms — the whole `'…'` token (backslash
+        // escapes the next character), classified like a plain
+        // identifier: Predicate when applied, Ident otherwise. An
+        // unterminated quote runs to end of line as Ident (the parser
+        // will say so properly).
+        if c == b'\'' {
+            let start = i;
+            i += 1;
+            while i < b.len() {
+                if b[i] == b'\\' && i + 1 < b.len() {
+                    i += 2;
+                    continue;
+                }
+                if b[i] == b'\'' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            let mut j = i;
+            while j < b.len() && (b[j] == b' ' || b[j] == b'\t') {
+                j += 1;
+            }
+            let kind = if j < b.len() && b[j] == b'(' {
+                TokenKind::Predicate
+            } else {
+                TokenKind::Ident
+            };
+            out.push(Token {
+                range: start..i,
+                kind,
+            });
+            continue;
+        }
         // Identifiers and variables.
         if c.is_ascii_alphabetic() {
             let start = i;

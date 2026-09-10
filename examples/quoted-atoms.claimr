@@ -1,0 +1,18 @@
+% CLM-0011: quoted atoms — any content can be an atom; identity is
+% content, quoting is spelling (docs/design/2026-09-10-quoted-atoms.md).
+% External identifiers (record ids, URLs, punctuated names) become
+% first-class: here a knowledge tool's situation record.
+
+slot('situation:frame-in-design-specification', expression, supported).
+slot('situation:frame-in-design-specification', sense, assumed).
+wellformed(S) :- slot(S, expression, supported).
+
+% The same atom, spelled two ways.
+label('it\'s a test').
+
+?- wellformed('situation:frame-in-design-specification').
+?- slot(S, R, B).
+?- { X = 'abc', X = abc }.
+?- label('it\'s a test').
+?- { E = '' }.
+?- { X = abc, X = 'abd' }.

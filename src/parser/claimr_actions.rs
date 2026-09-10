@@ -228,3 +228,33 @@ pub fn expr_neg(_ctx: &Ctx, operand: Expr) -> Expr {
 pub fn expr_paren(_ctx: &Ctx, inner: Expr) -> Expr {
     inner
 }
+pub type QuotedIdent = String;
+/// CLM-0011: strip the outer quotes and resolve backslash escapes —
+/// `\'` is a quote, `\\` a backslash, any other `\c` is `c`. The
+/// AST carries CONTENT; identity is content, quoting is spelling
+/// (docs/design/2026-09-10-quoted-atoms.md).
+pub fn quoted_ident(_ctx: &Ctx, token: Token) -> QuotedIdent {
+    let inner = &token.value[1..token.value.len() - 1];
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                if let Some(escaped) = chars.next() {
+                    out.push(escaped);
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+/// A name is its content, however spelled — both alternatives are the
+/// same `String`, so `Atom.name` and `Expr::Ident` are untouched.
+pub type Name = String;
+pub fn name_plain_name(_ctx: &Ctx, ident: Ident) -> Name {
+    ident
+}
+pub fn name_quoted_name(_ctx: &Ctx, quoted: QuotedIdent) -> Name {
+    quoted
+}

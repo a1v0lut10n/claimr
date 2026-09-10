@@ -55,11 +55,15 @@ constraint_term ::= expr relop expr
 relop           ::= "=" | "!=" | "<" | ">" | "<=" | ">="
 
 expr           ::= expr ("+" | "-") expr | expr ("*" | "/") expr | "-" expr
-                 | "(" expr ")" | identifier | number | atom | variable
+                 | "(" expr ")" | name | number | atom | variable
+
+name           ::= identifier | quoted_atom
 ```
 
 Arithmetic operators are term constructors, usable anywhere a term goes
 (Prolog III style); `%` starts a comment that runs to the end of the line.
+Quoted atoms (`'situation:frame-in-spec'`, backslash escapes) admit any
+content as an atom — identity is content, quoting is spelling.
 
 ## Examples
 

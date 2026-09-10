@@ -1,0 +1,13 @@
+?- wellformed('situation:frame-in-design-specification').
+true
+?- slot(S, R, B).
+S = 'situation:frame-in-design-specification', R = expression, B = supported
+S = 'situation:frame-in-design-specification', R = sense, B = assumed
+?- { X = abc, X = abc }.
+X = abc
+?- label('it\'s a test').
+true
+?- { E = '' }.
+E = ''
+?- { X = abc, X = abd }.
+false

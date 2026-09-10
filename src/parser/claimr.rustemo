@@ -71,7 +71,13 @@ RelOp: '='  {Eq}
 // Atoms and terms
 // ---------------------------------------------------------------------------
 
-Atom: name=Ident '(' args=Args? ')';
+// CLM-0011: a name is a plain identifier or a quoted atom — identity
+// is content, quoting is spelling (docs/design/2026-09-10-quoted-atoms.md).
+Name: ident=Ident       {PlainName}
+    | quoted=QuotedIdent {QuotedName}
+    ;
+
+Atom: name=Name '(' args=Args? ')';
 
 Args: exprs=Expr+[Comma];
 
@@ -88,7 +94,7 @@ Expr: left=Expr '+' right=Expr  {Add, left, 1}
     | atom=Atom                 {AtomExpr}
     | var=Var                   {VarExpr}
     | number=Number             {NumberExpr}
-    | name=Ident                {IdentExpr}
+    | name=Name                 {IdentExpr}
     ;
 
 // ---------------------------------------------------------------------------
@@ -107,6 +113,9 @@ terminals
 // identifier ::= letter { letter | digit | "_" }, lowercase-initial;
 // variable   ::= uppercase_letter { letter | digit | "_" }
 Ident: /[a-z][A-Za-z0-9_]*/;
+// CLM-0011: quoted atom — any content, backslash escapes the next
+// character (\' is a quote, \\ a backslash).
+QuotedIdent: /'(?:[^'\\]|\\.)*'/;
 Var: /[A-Z][A-Za-z0-9_]*/;
 // number ::= digit { digit } [ "." digit { digit } ]
 // Decimal literals denote EXACT rationals (18.5 is 37/2); there are no floats.

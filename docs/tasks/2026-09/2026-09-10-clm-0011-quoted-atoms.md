@@ -1,7 +1,7 @@
 ---
 date: 2026-09-10
 type: task
-status: proposed
+status: done
 affects:
   - docs/reference/grammar.md
 components: [parser, grammar, eval]
@@ -50,9 +50,20 @@ form the natural spelling.
 
 ## Verification
 
-- [ ] `?- X = 'situation:frame-in-spec'.` parses and answers
-      `X = 'situation:frame-in-spec'`.
-- [ ] `'abc' = abc` unifies (same atom, one spelling plain).
-- [ ] aicogito-reason's manifest can become a pass-through (tracked
+- [x] `?- { X = 'situation:frame-in-spec' }.` answers
+      `X = 'situation:frame-in-spec'` (equality lives in constraint
+      braces in claimr — the ISO-style bare `=` goal in the first
+      sketch was a Prolog-ism, corrected here).
+- [x] `{ X = 'abc', X = abc }` unifies — one atom, two spellings
+      (asserted structurally too: the parsed clauses are equal).
+- [ ] aicogito-reason's manifest becomes a pass-through (tracked
       aicogito-side).
-- [ ] `cargo test` green, incl. a golden example.
+- [x] `cargo test` green, incl. the golden example
+      `examples/quoted-atoms.{claimr,answers}`.
+
+Escape choice per the design record
+(`docs/design/2026-09-10-quoted-atoms.md`): backslash (`\'`, `\\`),
+not ISO's doubled quote. The empty atom `''` exists and always
+prints quoted. Print-back quotes exactly when the spelling isn't a
+plain identifier; the highlight lexer classifies quoted atoms like
+plain ones (Predicate when applied).
