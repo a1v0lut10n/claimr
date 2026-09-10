@@ -119,7 +119,10 @@ fn main() -> ExitCode {
         Ok(s) => s,
         Err(e) => {
             if opts.json {
-                eprintln!("{}", json_out::error_document(path, None, None, &format!("cannot read: {e}")));
+                eprintln!(
+                    "{}",
+                    json_out::error_document(path, None, None, &format!("cannot read: {e}"))
+                );
             } else {
                 eprintln!("claimr: cannot read {path}: {e}");
             }
@@ -131,7 +134,10 @@ fn main() -> ExitCode {
         Ok(c) => c,
         Err(e) => {
             if opts.json {
-                eprintln!("{}", json_out::error_document(path, e.line, e.column, &e.message));
+                eprintln!(
+                    "{}",
+                    json_out::error_document(path, e.line, e.column, &e.message)
+                );
             } else {
                 eprintln!("{path}:{e}");
             }
@@ -184,7 +190,10 @@ fn main() -> ExitCode {
                 }
             }
             if let Some(e) = solutions.error() {
-                println!("{}", json_out::query_error_document(query.text(), &e.to_string()));
+                println!(
+                    "{}",
+                    json_out::query_error_document(query.text(), &e.to_string())
+                );
                 return ExitCode::FAILURE;
             }
             println!("{}", json_out::query_document(query.text(), &answers));

@@ -49,7 +49,10 @@ fn one_document_per_query_with_the_documented_shapes() {
         r#"{"query":"?- ok(s1).","outcome":"solutions","answers":[{"equations":[],"disequations":[],"constraints":[]}]}"#
     );
     // No solution.
-    assert_eq!(lines[1], r#"{"query":"?- ok(s2).","outcome":"none","answers":[]}"#);
+    assert_eq!(
+        lines[1],
+        r#"{"query":"?- ok(s2).","outcome":"none","answers":[]}"#
+    );
     // Bindings, one equation per variable, one object per answer.
     assert_eq!(
         lines[2],
@@ -72,13 +75,18 @@ fn diagnostics_are_structured_and_exit_codes_hold() {
     assert_eq!(code, Some(1));
     assert!(stdout.is_empty(), "{stdout}");
     assert!(
-        stderr.starts_with(&format!(r#"{{"error":{{"file":"{path_str}","line":2,"column":1,"#)),
+        stderr.starts_with(&format!(
+            r#"{{"error":{{"file":"{path_str}","line":2,"column":1,"#
+        )),
         "{stderr}"
     );
     // Unreadable file: exit 2, no line/column.
     let (_, stderr, code) = run(&["--json", "/no/such/file.claimr"]);
     assert_eq!(code, Some(2));
-    assert!(stderr.contains(r#"{"error":{"file":"/no/such/file.claimr","message":"cannot read"#), "{stderr}");
+    assert!(
+        stderr.contains(r#"{"error":{"file":"/no/such/file.claimr","message":"cannot read"#),
+        "{stderr}"
+    );
     // --json guards: REPL and --parse forms refuse with usage.
     let (_, stderr, code) = run(&["--json"]);
     assert_eq!(code, Some(2));

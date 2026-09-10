@@ -56,7 +56,11 @@ fn answer_object(answer: &Answer) -> String {
 /// The per-query document: `outcome` is `"solutions"` when any answer
 /// exists, `"none"` otherwise.
 pub fn query_document(query_text: &str, answers: &[Answer]) -> String {
-    let outcome = if answers.is_empty() { "none" } else { "solutions" };
+    let outcome = if answers.is_empty() {
+        "none"
+    } else {
+        "solutions"
+    };
     let rendered: Vec<String> = answers.iter().map(answer_object).collect();
     format!(
         "{{\"query\":\"{}\",\"outcome\":\"{outcome}\",\"answers\":[{}]}}",
