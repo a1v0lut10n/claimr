@@ -154,7 +154,7 @@ impl Expr {
             Expr::Atom(a) => write!(f, "{a}")?,
             Expr::Var(v) => f.write_str(v)?,
             Expr::Number(n) => write!(f, "{n}")?,
-            Expr::Ident(i) => f.write_str(i)?,
+            Expr::Ident(i) => f.write_str(&display_name(i))?,
             Expr::Neg(e) => {
                 f.write_str("-")?;
                 e.fmt_prec(f, 3)?;
@@ -179,9 +179,36 @@ impl fmt::Display for Expr {
     }
 }
 
+/// CLM-0011: is this spelling a plain identifier (no quoting needed)?
+pub fn name_is_plain(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// CLM-0011: an atom name as source — bare when the spelling is a
+/// plain identifier, quoted with `'` and `\` escaped otherwise, so
+/// printed answers round-trip as valid programs
+/// (docs/design/2026-09-10-quoted-atoms.md).
+pub fn display_name(name: &str) -> std::borrow::Cow<'_, str> {
+    if name_is_plain(name) {
+        return std::borrow::Cow::Borrowed(name);
+    }
+    let mut out = String::with_capacity(name.len() + 2);
+    out.push('\'');
+    for c in name.chars() {
+        if c == '\'' || c == '\\' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('\'');
+    std::borrow::Cow::Owned(out)
+}
+
 impl fmt::Display for Atom {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}(", self.name)?;
+        write!(f, "{}(", display_name(&self.name))?;
         for (i, arg) in self.args.iter().enumerate() {
             if i > 0 {
                 f.write_str(", ")?;

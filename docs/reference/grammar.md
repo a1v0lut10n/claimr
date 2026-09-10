@@ -72,8 +72,10 @@ relop           ::= "=" | "!=" | "<" | ">" | "<=" | ">="
 ## Atoms and Terms
 
 ```ebnf
-atom           ::= identifier "(" [ args ] ")"
+atom           ::= name "(" [ args ] ")"
 args           ::= expr { "," expr }
+
+name           ::= identifier | quoted_atom     (* CLM-0011: identity is content *)
 
 expr           ::= expr "+" expr          (* left-assoc, lowest *)
                  | expr "-" expr          (* left-assoc, lowest *)
@@ -81,12 +83,14 @@ expr           ::= expr "+" expr          (* left-assoc, lowest *)
                  | expr "/" expr          (* left-assoc *)
                  | "-" expr               (* unary minus, binds tightest *)
                  | "(" expr ")"
-                 | identifier
+                 | name
                  | number
                  | atom
                  | variable
 
 identifier     ::= letter { letter | digit | "_" }
+quoted_atom    ::= "'" { any character except "'" and "\\" | "\\" any character } "'"
+                   (* backslash escapes the next character: \' \\ *)
 variable       ::= uppercase_letter { letter | digit | "_" }
 number         ::= digit { digit } [ "." digit { digit } ]
 comment        ::= "%" { any character except newline }

@@ -177,7 +177,9 @@ impl<'a> Printer<'a> {
                                 }
                             }
                         }
-                        Cell::Const(c) => out.push_str(self.symbols.name(c)),
+                        Cell::Const(c) => {
+                            out.push_str(&crate::ast::display_name(self.symbols.name(c)))
+                        }
                         Cell::Num(n) => out.push_str(&n.to_string()),
                         Cell::Struct(f, args) => {
                             if self.cyclic.contains(&a) && !is_root {
@@ -189,7 +191,7 @@ impl<'a> Printer<'a> {
                                 out.push_str(&self.names[&a]);
                                 continue;
                             }
-                            out.push_str(self.symbols.name(f));
+                            out.push_str(&crate::ast::display_name(self.symbols.name(f)));
                             out.push('(');
                             stack.push(Item::Text(")"));
                             for (i, &arg) in args.iter().enumerate().rev() {
