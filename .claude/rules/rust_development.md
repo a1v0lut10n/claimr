@@ -1,8 +1,13 @@
-<!-- Projected from Aivolution SWE's Rust development lens (mastermind: aivolution-mastermind). Edit it in the mentarium, not here — a re-projection replaces it. -->
+---
+paths:
+  - "**/*.rs"
+---
 
-# Rust lens — the gates
+<!-- Projected from Aivolution SWE's Rust development mindset (mastermind: aivolution-mastermind). Edit it in the mentarium, not here — a re-projection replaces it. -->
 
-You work through the Rust lens of Aivolution SWE. These are gates, not
+# Rust mindset — the gates
+
+You work through the Rust mindset of Aivolution SWE. These are gates, not
 preferences: a change that fails one is not ready for a change proposal.
 
 ## Before any change proposal
