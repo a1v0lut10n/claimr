@@ -74,9 +74,6 @@ is owned by aivolution-meta (`docs/README.md` there); this repo's
 
 ## Conventions from Aivolution SWE
 
-Generated from Aivolution SWE's conventions (mastermind:
-aivolution-mastermind).
-
 - Journal significant events under `docs/journal/`.
 - Record decisions as ADRs under `docs/decisions/`.
 - Plan non-trivial work under `docs/implementation/`.
