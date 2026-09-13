@@ -3,7 +3,7 @@ paths:
   - "**/*.rs"
 ---
 
-<!-- Projected from Aivolution SWE's Rust development mindset (mastermind: aivolution-mastermind). Edit it in the mentarium, not here — a re-projection replaces it. -->
+<!-- Projected from Aivolution AI's Rust development mindset (mastermind: aivolution-mastermind). Edit it in the mentarium, not here — a re-projection replaces it. -->
 
 # Rust mindset — the gates
 
