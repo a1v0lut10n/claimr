@@ -72,7 +72,7 @@ is owned by aivolution-meta (`docs/README.md` there); this repo's
 `docs/README.md` carries repo-specific additions only. Journal entries go in
 `docs/journal/yyyy-mm/`, and are drafted and confirmed before writing.
 
-## Conventions from Aivolution SWE
+## Conventions from Aivolution AI
 
 - Journal significant events under `docs/journal/`.
 - Record decisions as ADRs under `docs/decisions/`.
