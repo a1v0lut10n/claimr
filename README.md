@@ -266,7 +266,7 @@ the next free ticket number.
 
 This project is licensed under the [Apache License 2.0](LICENSE).
 
-Copyright 2026 Aivolution GmbH
+Copyright 2025-2026 Hans Van Wesenbeeck (hvw@aivolution.ch)
 
 ## Contributing
 
