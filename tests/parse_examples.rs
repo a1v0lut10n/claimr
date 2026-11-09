@@ -248,3 +248,61 @@ fn errors_are_positioned() {
         );
     }
 }
+
+#[test]
+fn control_constructs_parse_with_iso_precedence_and_round_trip() {
+    // CLM-0022: `,` binds tightest, then `->`, then `;` (right-associative);
+    // a `;` under `C -> T` is an if-then-else; parentheses group and leave
+    // no trace; `\+` takes one goal. Display re-parenthesises exactly where
+    // the grammar needs it.
+    use claimr::{Clause, Goal, parse_clause};
+    let Clause::Rule { body, .. } = parse_clause("u(X) :- a(X) ; b(X) -> c(X) ; d(X).").unwrap()
+    else {
+        panic!("rule");
+    };
+    // `a ; ((b -> c) ; d)`
+    assert!(matches!(&body[..], [Goal::Or(a, rest)]
+        if matches!(&a[..], [Goal::Atom(_)])
+        && matches!(&rest[..], [Goal::IfThenElse { els: Some(e), .. }]
+            if matches!(&e[..], [Goal::Atom(_)]))));
+    let Clause::Rule { body, .. } = parse_clause("v(X) :- (a(X), b(X)), c(X).").unwrap() else {
+        panic!("rule");
+    };
+    assert_eq!(body.len(), 3, "a grouped conjunction splices");
+    let Clause::Rule { body, .. } = parse_clause("w(X) :- \\+ (a(X), b(X)), \\+ c(X).").unwrap()
+    else {
+        panic!("rule");
+    };
+    assert!(matches!(&body[..], [Goal::Not(g), Goal::Not(h)] if g.len() == 2 && h.len() == 1));
+    assert!(matches!(
+        parse_clause("x(X) :- (a(X) -> b(X)).").unwrap(),
+        Clause::Rule { body, .. } if matches!(&body[..], [Goal::IfThenElse { els: None, .. }])
+    ));
+    // A constraint block anywhere inside makes a ConstraintRule.
+    assert!(matches!(
+        parse_clause("y(X) :- a(X) ; { X > 1 }.").unwrap(),
+        Clause::ConstraintRule { .. }
+    ));
+    for src in [
+        "p(X) :- (q(X) ; r(X)), s(X).",
+        "t(X) :- \\+ (a(X), b(X)), (c(X) -> d(X)).",
+        "u() :- a() ; b() -> c() ; d().",
+        "v() :- (a() ; b()) ; c().",
+        "w() :- \\+ \\+ a(), \\+ { X = 1 }.",
+        "x() :- (a() -> b()) -> c() ; d().",
+        "y() :- a() -> (b() ; c()) ; d().",
+        "?- colour(X), ({ X = red } -> { W = yes } ; { W = no }).",
+        "?- a() ; b().",
+    ] {
+        let clause = parse_clause(src).unwrap();
+        assert_eq!(clause.to_string(), src);
+        assert_eq!(parse_clause(&clause.to_string()).unwrap(), clause);
+    }
+    // Redundant parentheses vanish.
+    assert_eq!(
+        parse_clause("?- (colour(X), size(Y)) ; { X = none }.")
+            .unwrap()
+            .to_string(),
+        "?- colour(X), size(Y) ; { X = none }."
+    );
+}

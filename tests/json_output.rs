@@ -148,3 +148,17 @@ fn the_human_format_is_untouched() {
     assert_eq!(code, Some(0));
     assert_eq!(stdout, "?- ok(a).\ntrue\n?- ok(b).\nfalse\n");
 }
+
+/// CLM-0022: the groundness rule's runtime error is the existing query
+/// error document — no new output shape.
+#[test]
+fn a_non_ground_condition_is_a_query_error_document() {
+    let path = write_temp("control", "p(a).\n?- \\+ p(X), p(X).\n");
+    let (stdout, _, code) = run(&["--json", path.to_str().unwrap()]);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(1));
+    assert!(
+        stdout.starts_with(r#"{"query":"?- \\+ p(X), p(X).","outcome":"error","error":{"message":"condition `\\+ p(X)` reached with `X` unbound"#),
+        "{stdout}"
+    );
+}

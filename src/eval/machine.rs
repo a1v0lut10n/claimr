@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::answer::{Answer, render_answer, render_terms};
 use super::compile::{
-    ANONYMOUS, ArgKey, Builtin, PredKey, Program, Query, TGoal, build_with, lazy_var,
+    ANONYMOUS, ArgKey, Builtin, CondCheck, PredKey, Program, Query, TGoal, build_with,
 };
 use super::error::EvalError;
 use super::store::{Addr, Cell, Mark, Store, TypeKind};
@@ -40,12 +40,35 @@ enum RtGoal {
 /// A clause's variables, allocated once at clause entry.
 type Frame = Rc<[Addr]>;
 
-/// A goal in the list: already instantiated (query goals), or a clause body
-/// goal still to be built from its clause's frame when it is reached.
+/// A goal in the list: a body goal still to be built from its clause's
+/// frame when it is reached (query goals too, since CLM-0022: the query's
+/// variables are its frame), or a commit.
 #[derive(Debug, Clone)]
 enum Goal<'p> {
-    Built(RtGoal),
-    Pending { frame: Frame, goal: &'p TGoal },
+    Pending {
+        frame: Frame,
+        goal: &'p TGoal,
+    },
+    /// CLM-0022: the condition of an if-then-else or a negation has just
+    /// succeeded. Reaching it finalizes the store as for an answer (a
+    /// condition's solution is one the answer stage would accept), drops
+    /// the choice points above `height` — the condition's alternatives and
+    /// the else branch — and continues with `then`.
+    Commit {
+        height: usize,
+        then: Then<'p>,
+    },
+}
+
+/// What follows a committed condition (CLM-0022).
+#[derive(Debug, Clone)]
+enum Then<'p> {
+    Goals {
+        frame: Frame,
+        goals: &'p [TGoal],
+    },
+    /// Negation: the condition succeeded, so `\+` fails.
+    Fail,
 }
 
 /// Persistent goal list: cheap to snapshot into choice points.
@@ -61,16 +84,42 @@ fn cons<'p>(goal: Goal<'p>, next: Goals<'p>) -> Goals<'p> {
     Some(Rc::new(GoalNode { goal, next }))
 }
 
+/// Body goals in front of `rest`, pending on `frame`.
+fn prepend<'p>(goals: &'p [TGoal], frame: &Frame, rest: Goals<'p>) -> Goals<'p> {
+    let mut out = rest;
+    for g in goals.iter().rev() {
+        out = cons(
+            Goal::Pending {
+                frame: frame.clone(),
+                goal: g,
+            },
+            out,
+        );
+    }
+    out
+}
+
 struct ChoicePoint<'p> {
-    /// Goals remaining after the call being retried.
-    rest: Goals<'p>,
-    call: Addr,
-    key: PredKey,
-    /// The clauses that can match the call (CLM-0021), as positions in
-    /// program order, and the next one to try.
-    candidates: &'p [usize],
-    next: usize,
+    retry: Retry<'p>,
     mark: Mark,
+}
+
+/// What a choice point resumes with.
+enum Retry<'p> {
+    /// The next clause of a call.
+    Clauses {
+        /// Goals remaining after the call being retried.
+        rest: Goals<'p>,
+        call: Addr,
+        key: PredKey,
+        /// The clauses that can match the call (CLM-0021), as positions in
+        /// program order, and the next one to try.
+        candidates: &'p [usize],
+        next: usize,
+    },
+    /// CLM-0022: a goal list — the second alternative of a disjunction, the
+    /// else branch of an if-then-else, the continuation of a negation.
+    Goals(Goals<'p>),
 }
 
 /// The solutions of one query, produced lazily; each `next()` resumes the
@@ -93,40 +142,29 @@ pub struct Solutions<'p> {
 }
 
 impl<'p> Solutions<'p> {
-    pub(crate) fn new(program: &'p Program, query: &Query) -> Self {
+    pub(crate) fn new(program: &'p Program, query: &'p Query) -> Self {
         let mut store = Store::with_symbols(program.symbols.clone());
         // Constraint facts first (validated satisfiable at compile time).
         let initial_ok = program.post_initial(&mut store);
         debug_assert!(initial_ok, "initial store validated at compile time");
         store.set_baseline();
-        let mut vars = vec![None; query.var_names.len()];
-        let mut goals: Goals<'p> = None;
-        let mut ok = initial_ok;
-        // Query goals are built eagerly (their variables are the answer's), in
-        // source order so definitions post in order; then link reversed.
-        let mut built = Vec::with_capacity(query.goals.len());
-        for g in &query.goals {
-            match instantiate_goal(&mut store, g, &mut |store, i| lazy_var(store, &mut vars, i)) {
-                Some(rg) => built.push(rg),
-                None => {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-        for rg in built.into_iter().rev() {
-            goals = cons(Goal::Built(rg), goals);
-        }
+        // The query's variables are its frame (allocated in order of first
+        // occurrence, so definitions post in source order); its goals are
+        // pending on it like a clause body's, so the control constructs of
+        // CLM-0022 work the same in a query.
+        let frame: Frame = (0..query.var_names.len())
+            .map(|_| store.new_var())
+            .collect();
+        let goals = prepend(&query.goals, &frame, None);
         // An anonymous variable is not an answer variable (CLM-0020): what it
         // binds is visible only through named variables that reach it.
         let query_vars = query
             .var_names
             .iter()
             .cloned()
-            .zip(vars.iter().map(|v| v.unwrap_or(usize::MAX)))
-            .filter(|(name, a)| *a != usize::MAX && name != ANONYMOUS)
+            .zip(frame.iter().copied())
+            .filter(|(name, _)| name != ANONYMOUS)
             .collect();
-        let error = store.error.take();
         Solutions {
             program,
             store,
@@ -134,8 +172,8 @@ impl<'p> Solutions<'p> {
             choice_points: Vec::new(),
             query_vars,
             started: false,
-            exhausted: !ok,
-            error,
+            exhausted: !initial_ok,
+            error: None,
             interrupt: None,
             interrupted: false,
             steps: 0,
@@ -210,25 +248,17 @@ impl<'p> Solutions<'p> {
             }
             if j + 1 < candidates.len() {
                 self.choice_points.push(ChoicePoint {
-                    rest: rest.clone(),
-                    call,
-                    key,
-                    candidates,
-                    next: j + 1,
+                    retry: Retry::Clauses {
+                        rest: rest.clone(),
+                        call,
+                        key,
+                        candidates,
+                        next: j + 1,
+                    },
                     mark,
                 });
             }
-            let mut goals = rest;
-            for g in clause.body.iter().rev() {
-                goals = cons(
-                    Goal::Pending {
-                        frame: frame.clone(),
-                        goal: g,
-                    },
-                    goals,
-                );
-            }
-            self.goals = goals;
+            self.goals = prepend(&clause.body, &frame, rest);
             return true;
         }
         false
@@ -239,14 +269,107 @@ impl<'p> Solutions<'p> {
     fn backtrack(&mut self) -> bool {
         while let Some(cp) = self.choice_points.pop() {
             self.store.undo_to(&cp.mark);
-            if self.try_clauses(cp.key, cp.candidates, cp.next, cp.call, cp.rest) {
-                return true;
-            }
-            if self.store.error.is_some() {
-                return false;
+            match cp.retry {
+                Retry::Clauses {
+                    rest,
+                    call,
+                    key,
+                    candidates,
+                    next,
+                } => {
+                    if self.try_clauses(key, candidates, next, call, rest) {
+                        return true;
+                    }
+                    if self.store.error.is_some() {
+                        return false;
+                    }
+                }
+                Retry::Goals(goals) => {
+                    self.goals = goals;
+                    return true;
+                }
             }
         }
         false
+    }
+
+    /// CLM-0022: the groundness rule. A condition's external variables must
+    /// be ground when the construct is reached; otherwise the query stops
+    /// with `EvalError::NonGroundCondition` (false, with the store's error
+    /// set).
+    fn check_condition(&mut self, frame: &Frame, check: &CondCheck) -> bool {
+        for (i, name) in &check.external {
+            if !self.store.is_ground(frame[*i as usize]) {
+                self.store.error = Some(EvalError::NonGroundCondition {
+                    construct: check.construct.clone(),
+                    variable: name.clone(),
+                    clause: check.clause.clone(),
+                });
+                return false;
+            }
+        }
+        true
+    }
+
+    /// CLM-0022: open a construct — push its alternative (if any) and run its
+    /// first part, with a commit after a condition.
+    fn open_construct(&mut self, frame: &Frame, goal: &'p TGoal, rest: Goals<'p>) -> bool {
+        match goal {
+            TGoal::Or(a, b) => {
+                let mark = self.store.mark();
+                self.choice_points.push(ChoicePoint {
+                    retry: Retry::Goals(prepend(b, frame, rest.clone())),
+                    mark,
+                });
+                self.goals = prepend(a, frame, rest);
+            }
+            TGoal::IfThenElse {
+                cond,
+                then,
+                els,
+                check,
+            } => {
+                if !self.check_condition(frame, check) {
+                    return false;
+                }
+                let height = self.choice_points.len();
+                if let Some(e) = els {
+                    let mark = self.store.mark();
+                    self.choice_points.push(ChoicePoint {
+                        retry: Retry::Goals(prepend(e, frame, rest.clone())),
+                        mark,
+                    });
+                }
+                let commit = Goal::Commit {
+                    height,
+                    then: Then::Goals {
+                        frame: frame.clone(),
+                        goals: then,
+                    },
+                };
+                self.goals = prepend(cond, frame, cons(commit, rest));
+            }
+            TGoal::Not { cond, check } => {
+                if !self.check_condition(frame, check) {
+                    return false;
+                }
+                let height = self.choice_points.len();
+                let mark = self.store.mark();
+                self.choice_points.push(ChoicePoint {
+                    retry: Retry::Goals(rest.clone()),
+                    mark,
+                });
+                let commit = Goal::Commit {
+                    height,
+                    then: Then::Fail,
+                };
+                self.goals = prepend(cond, frame, cons(commit, rest));
+            }
+            TGoal::Call(_) | TGoal::Eq(..) | TGoal::Dif(..) | TGoal::Rel(..) => {
+                unreachable!("not a control construct")
+            }
+        }
+        true
     }
 
     /// Run until the goal list is empty and the store finalizes (an answer),
@@ -270,7 +393,38 @@ impl<'p> Solutions<'p> {
             let rest = node.next.clone();
             // A pending body goal is built now, from its clause's frame.
             let goal = match &node.goal {
-                Goal::Built(g) => *g,
+                Goal::Commit { height, then } => {
+                    if !self.store.finalize() {
+                        // Not a solution after all: the condition's next
+                        // alternative, if any.
+                        if self.store.error.is_some()
+                            || self.store.nonlinear.is_some()
+                            || !self.backtrack()
+                        {
+                            return false;
+                        }
+                        continue;
+                    }
+                    self.choice_points.truncate(*height);
+                    match then {
+                        Then::Fail => {
+                            if !self.backtrack() {
+                                return false;
+                            }
+                        }
+                        Then::Goals { frame, goals } => self.goals = prepend(goals, frame, rest),
+                    }
+                    continue;
+                }
+                Goal::Pending {
+                    frame,
+                    goal: goal @ (TGoal::Or(..) | TGoal::IfThenElse { .. } | TGoal::Not { .. }),
+                } => {
+                    if !self.open_construct(frame, goal, rest) {
+                        return false;
+                    }
+                    continue;
+                }
                 Goal::Pending { frame, goal } => {
                     let frame = frame.clone();
                     let built =
@@ -397,6 +551,9 @@ fn instantiate_goal(
             let a = build_with(store, a, var)?;
             let b = build_with(store, b, var)?;
             RtGoal::Rel(*op, a, b)
+        }
+        TGoal::Or(..) | TGoal::IfThenElse { .. } | TGoal::Not { .. } => {
+            unreachable!("control constructs are opened by the machine, not instantiated")
         }
     })
 }

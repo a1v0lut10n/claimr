@@ -30,6 +30,19 @@ pub enum EvalError {
         arity: usize,
         span: Option<Span>,
     },
+    /// A condition — of an if-then-else or a negation (CLM-0022) — was
+    /// reached while one of its external variables (shared with the clause
+    /// outside the construct) was not ground. Deciding it would depend on
+    /// goal order, so the query stops instead
+    /// (docs/design/2026-11-09-negation-disjunction-and-if-then-else.md).
+    NonGroundCondition {
+        /// The construct as written.
+        construct: String,
+        /// The variable by its source name.
+        variable: String,
+        /// The clause (or query) as written.
+        clause: String,
+    },
     /// An internal invariant of the evaluator failed; reported rather than
     /// panicked so the CLI and REPL stay up. Never expected.
     InternalInvariant { what: String },
@@ -61,6 +74,14 @@ impl fmt::Display for EvalError {
                 "`{}/{arity}` is a built-in predicate and cannot be defined",
                 crate::ast::display_name(name)
             ),
+            EvalError::NonGroundCondition {
+                construct,
+                variable,
+                clause,
+            } => write!(
+                f,
+                "condition `{construct}` reached with `{variable}` unbound, in `{clause}`; a variable shared with the clause outside the construct must be bound before it (bind it earlier, or keep it local to the construct)"
+            ),
             EvalError::InternalInvariant { what } => {
                 write!(f, "internal error: {what} (please report)")
             }
@@ -78,6 +99,7 @@ impl EvalError {
             EvalError::InitialStoreUnsatisfiable
             | EvalError::NonLinear { .. }
             | EvalError::CyclicAttributeTerm { .. }
+            | EvalError::NonGroundCondition { .. }
             | EvalError::InternalInvariant { .. } => None,
         }
     }

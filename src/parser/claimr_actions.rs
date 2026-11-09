@@ -77,7 +77,7 @@ pub type Rule = ast::Clause;
 /// A rule whose body contains at least one constraint goal is a
 /// `ConstraintRule` (the EBNF's `constraint_rule`); otherwise a plain `Rule`.
 pub fn rule_c1(_ctx: &Ctx, head: Atom, body: Body) -> Rule {
-    if body.iter().any(|goal| matches!(goal, ast::Goal::Constraint(_))) {
+    if ast::body_has_constraint(&body) {
         ast::Clause::ConstraintRule {
             head,
             body,
@@ -106,23 +106,66 @@ pub fn query_c1(_ctx: &Ctx, body: Body) -> Query {
     ast::Clause::Query(body)
 }
 pub type Body = Vec<ast::Goal>;
-pub fn body_c1(_ctx: &Ctx, goals: Goal1) -> Body {
+/// CLM-0022: `Alt ';' Body` — an if-then-else when the alternative is
+/// `C -> T`, a disjunction otherwise.
+pub fn body_or(_ctx: &Ctx, alt: Alt, rest: Body) -> Body {
+    match alt {
+        Alt::IfThen(cond, then) => {
+            vec![ast::Goal::IfThenElse { cond, then, els : Some(rest) }]
+        }
+        Alt::Plain(conj) => vec![ast::Goal::Or(conj, rest)],
+    }
+}
+/// CLM-0022: a body of one alternative — a conjunction, or an if-then whose
+/// else fails.
+pub fn body_one(_ctx: &Ctx, alt: Alt) -> Body {
+    match alt {
+        Alt::IfThen(cond, then) => vec![ast::Goal::IfThenElse { cond, then, els : None }],
+        Alt::Plain(conj) => conj,
+    }
+}
+/// CLM-0022: an alternative of a body: a conjunction, or `C -> T`.
+#[derive(Debug)]
+pub enum Alt {
+    Plain(Vec<ast::Goal>),
+    IfThen(Vec<ast::Goal>, Vec<ast::Goal>),
+}
+pub fn alt_if_then(_ctx: &Ctx, cond: Conj, then: Conj) -> Alt {
+    Alt::IfThen(cond, then)
+}
+pub fn alt_plain(_ctx: &Ctx, conj: Conj) -> Alt {
+    Alt::Plain(conj)
+}
+pub type Conj = Vec<ast::Goal>;
+pub fn conj_c1(_ctx: &Ctx, goals: Goal1) -> Conj {
     goals
 }
-pub type Goal1 = Vec<Goal>;
+/// The goals of a conjunction. A `Goal` production yields a list — one goal,
+/// or the goals of a parenthesised conjunction — which is spliced here, so
+/// parentheses leave no trace (CLM-0022).
+pub type Goal1 = Vec<ast::Goal>;
 pub fn goal1_c1(_ctx: &Ctx, mut goal1: Goal1, goal: Goal) -> Goal1 {
-    goal1.push(goal);
+    goal1.extend(goal);
     goal1
 }
 pub fn goal1_goal(_ctx: &Ctx, goal: Goal) -> Goal1 {
-    vec![goal]
+    goal
 }
-pub type Goal = ast::Goal;
+pub type Goal = Vec<ast::Goal>;
 pub fn goal_atom_goal(_ctx: &Ctx, atom: Atom) -> Goal {
-    ast::Goal::Atom(atom)
+    vec![ast::Goal::Atom(atom)]
 }
 pub fn goal_constraint_goal(_ctx: &Ctx, constraints: ConstraintExpr) -> Goal {
-    ast::Goal::Constraint(constraints)
+    vec![ast::Goal::Constraint(constraints)]
+}
+/// CLM-0022: `\+ G`; the goal may be a parenthesised body.
+pub fn goal_not_goal(_ctx: &Ctx, _not_op: NotOp, goal: Goal) -> Goal {
+    vec![ast::Goal::Not(goal)]
+}
+/// CLM-0022: `( Body )` — a disjunction or if-then-else stays one goal; a
+/// grouped conjunction is its goals, spliced into the enclosing one.
+pub fn goal_group_goal(_ctx: &Ctx, body: Body) -> Goal {
+    body
 }
 pub type ConstraintExpr = ast::ConstraintExpr;
 pub fn constraint_expr_c1(_ctx: &Ctx, terms: Constraint1) -> ConstraintExpr {
@@ -319,4 +362,9 @@ pub fn name_plain_name(_ctx: &Ctx, ident: Ident) -> Name {
 }
 pub fn name_quoted_name(_ctx: &Ctx, quoted: QuotedIdent) -> Name {
     quoted
+}
+/// CLM-0022: the `\+` token (a regex terminal, so it carries its text).
+pub type NotOp = String;
+pub fn not_op(_ctx: &Ctx, token: Token) -> NotOp {
+    token.value.into()
 }

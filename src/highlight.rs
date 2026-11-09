@@ -22,11 +22,11 @@ pub enum TokenKind {
     Ident,
     /// Exact-rational literal (`42`, `18.5`).
     Number,
-    /// `:-  ?-  =>  !=  <=  >=  =  <  >  +  -  *  /  |`.
+    /// `:-  ?-  =>  ->  \+  !=  <=  >=  =  <  >  +  -  *  /  |`.
     Operator,
     /// `"…"` (CLM-0017): a string literal, the list of its characters.
     String,
-    /// `. , ( ) { }`.
+    /// `. , ; ( ) { }`.
     Punctuation,
 }
 
@@ -161,8 +161,9 @@ pub fn line_tokens(line: &str) -> Vec<Token> {
             continue;
         }
         // Operators, longest first (the grammar's exact set).
-        const OPS: [&str; 14] = [
-            ":-", "?-", "=>", "!=", "<=", ">=", "=", "<", ">", "+", "-", "*", "/", "|",
+        // CLM-0022 adds `->` and `\+`.
+        const OPS: [&str; 16] = [
+            ":-", "?-", "=>", "->", "\\+", "!=", "<=", ">=", "=", "<", ">", "+", "-", "*", "/", "|",
         ];
         if let Some(op) = OPS.iter().find(|op| line[i..].starts_with(**op)) {
             out.push(Token {
@@ -172,7 +173,7 @@ pub fn line_tokens(line: &str) -> Vec<Token> {
             i += op.len();
             continue;
         }
-        if matches!(c, b'.' | b',' | b'(' | b')' | b'{' | b'}') {
+        if matches!(c, b'.' | b',' | b';' | b'(' | b')' | b'{' | b'}') {
             out.push(Token {
                 range: i..i + 1,
                 kind: TokenKind::Punctuation,
@@ -286,6 +287,8 @@ mod tests {
         assert_eq!(line_tokens("12.5")[0].kind, TokenKind::Number);
         assert_eq!(line_tokens("\"a\\\"b\"")[0].kind, TokenKind::String);
         assert_eq!(line_tokens("\"a\\\"b\"")[0].range, 0..6);
+        assert_eq!(line_tokens("\\+ p(X)")[0].kind, TokenKind::Operator);
+        assert_eq!(line_tokens("\\+ p(X)")[0].range, 0..2);
         assert_eq!(line_tokens("% x")[0].kind, TokenKind::Comment);
     }
 }

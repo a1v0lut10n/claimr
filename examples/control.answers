@@ -1,0 +1,37 @@
+?- missing_residual_error(F).
+F = m2
+?- unclosed(C).
+C = c2
+?- value(k1, V).
+V = cv1
+?- value(k2, V).
+V = hv2
+?- value(k3, V).
+false
+?- sign(-3, S).
+S = negative
+?- sign(0, S).
+S = zero
+?- sign(7 / 2, S).
+S = positive
+?- feature(X).
+X = red
+X = blue
+X = big
+X = small
+?- colour(X), ({ X = red } -> { Warm = yes } ; { Warm = no }).
+X = red, Warm = yes
+X = blue, Warm = no
+?- colour(X) -> { Y = X }.
+X = red, Y = red
+?- \+ colour(green).
+true
+?- \+ colour(red).
+false
+?- member(X, <1, 2, 3>), \+ { X = 2 }.
+X = 1
+X = 3
+?- \+ (colour(X), size(X)).
+true
+?- { X + Y = 2, X - Y = 0 }, ({ X != 1 } -> { Z = yes } ; { Z = no }).
+X = 1, Y = 1, Z = no

@@ -224,3 +224,23 @@ fn eof_and_help_exit_cleanly() {
     assert_eq!(code, 2);
     assert!(err.contains("usage: claimr"));
 }
+
+#[test]
+fn control_constructs_list_as_written_and_step() {
+    // CLM-0022: the clause printer round-trips `;`, `->` and `\+`; a
+    // disjunction's alternatives step with `;`; a runtime error from the
+    // groundness rule is reported and the session continues.
+    let (out, err, code) = run(
+        &[],
+        "q(1). q(2).\nv(V) :- (q(X) -> { V = X } ; { V = none }).\nm(F) :- \\+ q(F).\n:list\n?- q(X) ; { X = 3 }.\n;\n;\n?- v(V).\n?- m(F).\n?- m(3).\n",
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        "q(1).\nq(2).\nv(V) :- q(X) -> { V = X } ; { V = none }.\nm(F) :- \\+ q(F).\n?- q(X) ; { X = 3 }.\nX = 1 ;\nX = 2 ;\nX = 3.\n?- v(V).\nV = 1.\n?- m(F).\n?- m(3).\ntrue.\n"
+    );
+    assert!(
+        err.contains("condition `\\+ q(F)` reached with `F` unbound, in `m(F) :- \\+ q(F).`"),
+        "{err}"
+    );
+}

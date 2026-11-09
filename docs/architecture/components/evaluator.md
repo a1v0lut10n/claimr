@@ -7,6 +7,7 @@ decisions:
   - docs/design/2026-11-09-fold-ground-arithmetic-before-the-solver.md
   - docs/design/2026-11-09-lists-as-a-constraint-domain.md
   - docs/design/2026-11-09-strings-as-character-lists-and-type-relations.md
+  - docs/design/2026-11-09-negation-disjunction-and-if-then-else.md
 aspects: [answer-soundness, exact-arithmetic]
 ---
 
@@ -83,7 +84,14 @@ answers in solved form. Public surface (re-exported from `claimr`):
   term, or a long list, which lowers to a chain as deep as it is long —
   costs no Rust stack: a 100 000-deep term and a 200 000-element list run
   on a 1 MiB thread. The one remaining recursion on the AST side is the
-  derived `Debug` that `--parse` prints.
+  derived `Debug` that `--parse` prints. The control constructs of
+  CLM-0022 are templates too (`TGoal::Or`, `TGoal::IfThenElse`,
+  `TGoal::Not`, with nested goal lists; recursion follows the source
+  nesting only); after a body is lowered, `resolve_conditions` computes
+  each condition's **external variables** — those also occurring in the
+  clause outside the whole construct — and stores them with the construct's
+  and the clause's text in a `CondCheck`, for the machine's groundness rule
+  and its diagnostic. Only bodies with a construct pay for the clause text.
 - **`machine.rs`** — the SLD machine: goals left to right, clauses in program
   order, chronological backtracking through choice points and the trail. A
   call whose first argument is bound visits only the clauses the index
@@ -99,10 +107,28 @@ answers in solved form. Public surface (re-exported from `claimr`):
   built from it for unification; each body goal's terms are built from the
   frame when the goal reaches the front of the list, so arithmetic over
   values bound by earlier goals folds instead of defining solver rows.
-  Query goals are built eagerly (their variables are the answer's, except
-  `_`, which is not an answer variable and prints nothing of its own);
-  **iterative** (explicit goal list and choice-point stack — resolution depth
-  never uses the Rust stack). An undefined predicate has no clauses and fails.
+  A query's variables are its frame, allocated at the start, and its goals
+  are pending on it like a clause body's (since CLM-0022; the answer's
+  variables are the named ones, `_` is not an answer variable and prints
+  nothing of its own); **iterative** (explicit goal list and choice-point
+  stack — resolution depth never uses the Rust stack). An undefined
+  predicate has no clauses and fails.
+  **Control constructs** (CLM-0022, design record
+  `2026-11-09-negation-disjunction-and-if-then-else.md`): a choice point
+  either retries clauses or resumes with a goal list (`Retry::Goals`: the
+  second alternative of `A ; B`, the else branch of `C -> T ; E`, the
+  continuation of `\+ G`). Opening a condition first applies the
+  **groundness rule** — every external variable's term, dereferenced, holds
+  no unbound variable and every numeric variable in it is determined by the
+  solver (`Store::is_ground`, exact) — and otherwise stops the query with
+  `EvalError::NonGroundCondition`; it then records the choice-point height,
+  pushes the else branch (if any) as a goal-list choice point, and runs the
+  condition's goals followed by a `Commit` goal. Reaching the commit
+  finalizes the store as for an answer (a non-solution backtracks into the
+  condition's alternatives; a non-linear residue stops the query as it would
+  at an answer), truncates the choice-point stack to the recorded height,
+  and continues with the then branch — or, for a negation, fails. The
+  store, the solver and the answer printer are untouched by the constructs.
   `Solutions::with_interrupt(Arc<AtomicBool>)` installs a flag polled every
   256 steps (the REPL's Ctrl-C); `Solutions::interrupted()` reports a stop
   through it; `Solutions::may_continue()` tells a caller whether asking for
@@ -155,8 +181,10 @@ small; an incremental compile is a later optimisation).
 
 ## Not yet (later stages)
 
-Non-linear constraints beyond delayed products; integer/finite-domain constraints; a
-REPL; cut, negation, disjunction, further built-ins, indexing on other
-arguments, heap
-and tableau garbage collection beyond trail-driven undo, tail-call
-optimisation.
+Non-linear constraints beyond delayed products; integer/finite-domain
+constraints; further built-ins; a delayed (`freeze`-style) goal, which would
+let a negation wait for its external variables; indexing on other arguments;
+heap and tableau garbage collection beyond trail-driven undo; tail-call
+optimisation. The cut is deliberately absent: if-then-else and negation
+cover its uses without its non-local effect (the design record of
+CLM-0022).

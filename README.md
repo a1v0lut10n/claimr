@@ -59,6 +59,11 @@ constraint_rule ::= atom ":-" body_with_constraints "."
 query          ::= "?-" (body_with_constraints | "{" constraint_expr "}") "."
 implication    ::= "{" constraint_expr "}" "=>" atom "."
 
+body           ::= alt [ ";" body ]              (* `;` right-assoc, `->` then `,` tighter *)
+alt            ::= conj [ "->" conj ]
+conj           ::= goal { "," goal }
+goal           ::= atom | "{" constraint_expr "}" | "\+" goal | "(" body ")"
+
 constraint_expr ::= constraint_term { "," constraint_term }
 constraint_term ::= expr relop expr
 relop           ::= "=" | "!=" | "<" | ">" | "<=" | ">="

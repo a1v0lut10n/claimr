@@ -311,6 +311,31 @@ impl Store {
         matches!(self.heap[a], Cell::Var(t) if t == a)
     }
 
+    /// CLM-0022: is the term at `a` ground — no unbound variable anywhere in
+    /// it, and every numeric variable in it determined by the solver
+    /// (exactly, two-sided probes)? A cyclic term terminates through the
+    /// visited set. The groundness rule of
+    /// docs/design/2026-11-09-negation-disjunction-and-if-then-else.md.
+    pub(crate) fn is_ground(&mut self, a: Addr) -> bool {
+        let mut seen: HashSet<Addr> = HashSet::new();
+        let mut work = vec![a];
+        while let Some(x) = work.pop() {
+            let d = self.deref(x);
+            if !seen.insert(d) {
+                continue;
+            }
+            match self.heap[d].clone() {
+                Cell::Var(_) => match self.numvar.get(&d).copied() {
+                    Some(sv) if self.simplex.is_determined(sv).is_some() => {}
+                    _ => return false,
+                },
+                Cell::Const(_) | Cell::Num(_) => {}
+                Cell::Struct(_, args) => work.extend(args),
+            }
+        }
+        true
+    }
+
     // --- marks and undo ----------------------------------------------------
 
     pub fn mark(&self) -> Mark {

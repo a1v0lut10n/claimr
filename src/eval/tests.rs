@@ -1001,3 +1001,228 @@ fn interrupt_flag_stops_a_runaway_query() {
     assert_eq!(sols.next().unwrap().to_string(), "X = b");
     assert!(!sols.may_continue());
 }
+
+/// Run a program whose single query is expected to stop with a runtime
+/// error; returns the error.
+fn query_error(src: &str) -> EvalError {
+    let clauses = parse_program(src).expect("parses");
+    let program = Program::compile(&clauses).expect("compiles");
+    let q = &program.queries()[0];
+    let mut sols = program.solve(q);
+    let answers: Vec<String> = sols.by_ref().map(|a| a.to_string()).collect();
+    sols.error()
+        .cloned()
+        .unwrap_or_else(|| panic!("expected an error, got answers {answers:?}"))
+}
+
+#[test]
+fn disjunction_tries_both_alternatives_in_order() {
+    // CLM-0022: `;` is a choice point; a conjunction on either side; nested
+    // and query-level forms; a parenthesised conjunction splices.
+    let out = answers(
+        "colour(red). colour(blue). size(big). size(small).
+         feature(X) :- colour(X) ; size(X).
+         pair(X, Y) :- (colour(X), size(Y)) ; { X = none, Y = none }.
+         ?- feature(X).
+         ?- pair(X, Y).
+         ?- colour(X) ; size(X) ; { X = other }.
+         ?- (colour(X) ; size(X)), { X != blue }.",
+    );
+    assert_eq!(out[0], vec!["X = red", "X = blue", "X = big", "X = small"]);
+    assert_eq!(
+        out[1],
+        vec![
+            "X = red, Y = big",
+            "X = red, Y = small",
+            "X = blue, Y = big",
+            "X = blue, Y = small",
+            "X = none, Y = none",
+        ]
+    );
+    assert_eq!(
+        out[2],
+        vec!["X = red", "X = blue", "X = big", "X = small", "X = other"]
+    );
+    assert_eq!(out[3], vec!["X = red", "X = big", "X = small"]);
+}
+
+#[test]
+fn if_then_else_commits_to_the_first_solution() {
+    // CLM-0022: the condition's other solutions and the else branch are
+    // discarded on commit; the else branch runs on the restored store; an
+    // if-then without else fails when the condition does.
+    let out = answers(
+        "curated(k1, cv1). curated(k1, cv2). harvested(k1, hv1). harvested(k2, hv2).
+         value(K, V) :- (curated(K, X) -> { V = X } ; harvested(K, V)).
+         sign(X, S) :- { X < 0 } -> { S = neg } ; { X = 0 } -> { S = zero } ; { S = pos }.
+         ?- value(k1, V).
+         ?- value(k2, V).
+         ?- value(k3, V).
+         ?- sign(-1, S).
+         ?- sign(0, S).
+         ?- sign(2, S).
+         ?- curated(k1, X) -> { Y = X }.
+         ?- harvested(k9, X) -> { Y = X }.
+         ?- curated(k1, X), ({ X = cv1 } -> { N = 1 } ; { N = 2 }).",
+    );
+    assert_eq!(out[0], vec!["V = cv1"]);
+    assert_eq!(out[1], vec!["V = hv2"]);
+    assert!(out[2].is_empty());
+    assert_eq!(out[3], vec!["S = neg"]);
+    assert_eq!(out[4], vec!["S = zero"]);
+    assert_eq!(out[5], vec!["S = pos"]);
+    assert_eq!(out[6], vec!["X = cv1, Y = cv1"]);
+    assert!(out[7].is_empty());
+    assert_eq!(out[8], vec!["X = cv1, N = 1", "X = cv2, N = 2"]);
+}
+
+#[test]
+fn negation_succeeds_exactly_when_the_goal_has_no_solution() {
+    // CLM-0022: `\+ G` binds nothing; its own variables are local; it
+    // nests; it applies to constraint blocks and parenthesised bodies.
+    let out = answers(
+        "model_file(m1). model_file(m2). model_file(m3).
+         claim(m1, residual_error, low). claim(m3, residual_error, high).
+         missing(F) :- model_file(F), \\+ claim(F, residual_error, _).
+         colour(red). colour(blue). size(big).
+         member(X, <X> . _).
+         member(X, <_> . T) :- member(X, T).
+         ?- missing(F).
+         ?- \\+ colour(green).
+         ?- \\+ colour(red).
+         ?- \\+ \\+ colour(red).
+         ?- member(X, <1, 2, 3>), \\+ { X = 2 }.
+         ?- \\+ (colour(X), size(X)).
+         ?- \\+ colour(X).
+         ?- colour(X), \\+ { X = red }.",
+    );
+    assert_eq!(out[0], vec!["F = m2"]);
+    assert_eq!(out[1], vec!["true"]);
+    assert!(out[2].is_empty());
+    assert_eq!(out[3], vec!["true"]);
+    assert_eq!(out[4], vec!["X = 1", "X = 3"]);
+    assert_eq!(out[5], vec!["true"]);
+    // `X` occurs only inside the construct: it is local, and the negation
+    // asks whether no colour exists.
+    assert!(out[6].is_empty());
+    assert_eq!(out[7], vec!["X = blue"]);
+}
+
+#[test]
+fn a_condition_is_finalized_before_the_commit() {
+    // CLM-0022: a solution of the condition is one the answer stage would
+    // accept. `X` is determined through the tableau, not by its bounds, so
+    // only the exact (finalize) check sees `X != 1` violated; the else
+    // branch is taken, and the negation holds.
+    let out = answers(
+        "?- ({ X + Y = 2, X - Y = 0, X != 1 } -> { Z = yes } ; { Z = no }).
+         ?- { X + Y = 2, X - Y = 0 }, ({ X != 1 } -> { Z = yes } ; { Z = no }).
+         ?- \\+ { X + Y = 2, X - Y = 0, X != 1 }.",
+    );
+    assert_eq!(out[0], vec!["Z = no"]);
+    assert_eq!(out[1], vec!["X = 1, Y = 1, Z = no"]);
+    assert_eq!(out[2], vec!["true"]);
+    // A non-linear residue at the commit stops the query, as at an answer.
+    let err = query_error("?- ({ X * Y = 2 } -> { Z = yes } ; { Z = no }).");
+    assert!(matches!(err, EvalError::NonLinear { .. }), "{err}");
+}
+
+#[test]
+fn a_non_ground_external_variable_is_an_error_not_a_decision() {
+    // CLM-0022, the groundness rule: a variable the condition shares with
+    // the clause outside the construct must be ground when the construct is
+    // reached. The error names the construct, the variable and the clause.
+    let err = query_error(
+        "p(a). p(b).
+         r(X) :- \\+ { X = a }.
+         s() :- \\+ r(X).
+         ?- s().",
+    );
+    assert_eq!(
+        err,
+        EvalError::NonGroundCondition {
+            construct: "\\+ { X = a }".into(),
+            variable: "X".into(),
+            clause: "r(X) :- \\+ { X = a }.".into(),
+        }
+    );
+    // The Prolog idiom with the result in the condition: `X` is in the head.
+    let err = query_error(
+        "curated(k, v). true().
+         value(K, X) :- (curated(K, X) -> true() ; harvested(K, X)).
+         ?- value(k, X).",
+    );
+    assert!(
+        matches!(&err, EvalError::NonGroundCondition { variable, .. } if variable == "X"),
+        "{err}"
+    );
+    // In a query the surroundings are the other goals.
+    let err = query_error("p(a).\n?- \\+ p(X), p(X).");
+    assert!(
+        matches!(&err, EvalError::NonGroundCondition { construct, clause, .. }
+            if construct == "\\+ p(X)" && clause == "?- \\+ p(X), p(X)."),
+        "{err}"
+    );
+    // A numeric variable is ground only when the solver determines it.
+    let err = query_error("?- { X > 1 }, ({ X > 5 } -> { Z = yes } ; { Z = no }).");
+    assert!(
+        matches!(&err, EvalError::NonGroundCondition { variable, .. } if variable == "X"),
+        "{err}"
+    );
+    let out = answers(
+        "?- { X + Y = 2, X - Y = 0 }, ({ X > 5 } -> { Z = yes } ; { Z = no }).
+         ?- { X = f(Y), Y = 3 }, (\\+ { X = f(3) } -> { Z = yes } ; { Z = no }).",
+    );
+    assert_eq!(out[0], vec!["X = 1, Y = 1, Z = no"]);
+    assert_eq!(out[1], vec!["X = f(3), Y = 3, Z = no"]);
+    // A variable bound to a term with an unbound variable is not ground.
+    let err = query_error("?- { X = f(Y) }, (\\+ { X = f(3) } -> { Z = yes } ; { Z = no }).");
+    assert!(
+        matches!(&err, EvalError::NonGroundCondition { variable, .. } if variable == "X"),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_groundness_rule_exempts_the_constructs_own_variables() {
+    // CLM-0022: variables shared only with the then or else branch, or with
+    // the other alternative of a disjunction, are the construct's own.
+    let out = answers(
+        "q(1). q(2). r(a).
+         then_shared(V) :- (q(X) -> { V = X } ; { V = none }).
+         else_shared(V) :- (r(X) -> { V = X } ; q(X), { V = X }).
+         else_only(V) :- (r(z) -> { V = found } ; q(X), { V = X }).
+         not_local() :- \\+ (q(X), { X > 5 }).
+         ?- then_shared(V).
+         ?- else_shared(V).
+         ?- else_only(V).
+         ?- not_local().
+         ?- q(X) ; r(X).",
+    );
+    assert_eq!(out[0], vec!["V = 1"]);
+    assert_eq!(out[1], vec!["V = a"]);
+    assert_eq!(out[2], vec!["V = 1", "V = 2"]);
+    assert_eq!(out[3], vec!["true"]);
+    assert_eq!(out[4], vec!["X = 1", "X = 2", "X = a"]);
+}
+
+#[test]
+fn control_constructs_and_may_continue() {
+    // CLM-0022: an untried else branch or alternative is an alternative the
+    // REPL may step to; a commit leaves none behind.
+    let src = "q(1). q(2).
+         ?- q(X) ; { X = 3 }.
+         ?- q(X) -> { Y = X } ; { Y = 0 }.";
+    let clauses = parse_program(src).expect("parses");
+    let program = Program::compile(&clauses).expect("compiles");
+    let mut sols = program.solve(&program.queries()[0]);
+    assert_eq!(sols.next().unwrap().to_string(), "X = 1");
+    assert!(sols.may_continue());
+    assert_eq!(sols.next().unwrap().to_string(), "X = 2");
+    assert!(sols.may_continue());
+    assert_eq!(sols.next().unwrap().to_string(), "X = 3");
+    assert!(!sols.may_continue());
+    let mut sols = program.solve(&program.queries()[1]);
+    assert_eq!(sols.next().unwrap().to_string(), "X = 1, Y = 1");
+    assert!(!sols.may_continue());
+}
