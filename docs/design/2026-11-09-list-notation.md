@@ -43,17 +43,31 @@ binary cons functor and an empty-list constant. Length and concatenation
 are predicates (`length/2`, `append/3`), not constraints.
 
 What claimr has: rational-tree unification over compound terms, a linear
-store over exact rationals, and no list term kind. Two facts decide the
-spelling question on their own:
+store over exact rationals, and no list term kind.
 
-- `<` and `>` are claimr's relational operators. Inside `{ … }`,
-  `{ X < 1, 2 > Y }` and a two-element tuple would be genuinely ambiguous
-  to the LR parser, and `grammar-authority` requires zero conflicts.
-- Prolog III's notation without its length and concatenation constraints
-  would be fidelity in spelling only. The constraints are what the design
-  is for, and they are a component of the order of the linear store:
-  lengths as solver variables bound to list variables, a delayed
-  concatenation with its own waking rules, and improper lists.
+The spelling is not forced by the parser. `<` and `>` are claimr's
+relational operators, but a relational operator occurs only in
+`Constraint`, never inside `Expr`, so a `<` after a complete term can only
+be an operator and a tuple can only start where a term starts. Verified
+2026-11-09 with the project's generator (rustemo 0.9.1, `rcomp`, default
+LALR-Pager tables) on the current grammar: adding `'<' items=Args? '>'`
+to `Expr` compiles with no conflicts (56 productions, 86 states); adding
+Prolog III's length bars `'|' Expr '|'` on top still has none (57
+productions, 89 states); the Edinburgh variant with `[`, `]` and `|`
+likewise (57 productions, 90 states). rustemo's GLR mode would be
+available for a genuine ambiguity in any case
+(`2026-08-17-rustemo-parser-generator-over-nom.md`), but none arises.
+
+What does decide the question is the semantics. Prolog III's notation
+without its length and concatenation constraints would be fidelity in
+spelling only: the constraints are what the design is for, and they are a
+component of the order of the linear store (lengths as solver variables
+bound to list variables, a delayed concatenation with its own waking
+rules, improper lists). Without them a cons pattern is still needed in
+rule heads, and Prolog III's own cons pattern, `<a> • u`, *is* a
+concatenation. Edinburgh's `[H | T]` is the standard cons pattern that
+needs no constraint, and it is what the wider Prolog ecosystem, and the
+editors around claimr, already read.
 
 ## Decision
 
@@ -64,7 +78,12 @@ spelling question on their own:
    named `cons` or `nil` keep their ordinary meaning and nothing a program
    writes by hand is silently reinterpreted as a list. `'[]'` and `'[|]'`
    are spellable as quoted atoms, and `'[|]'(a, '[]')` is the same term as
-   `[a]`; the brackets are the canonical spelling.
+   `[a]`; the brackets are the canonical spelling. Brackets rather than
+   Prolog III's angle brackets because `[H | T]` is a cons pattern that
+   exists without a concatenation constraint, because every Prolog reader
+   knows it, and because `<` and `>` then keep a single meaning in source.
+   Angle brackets parse without conflict (Context) and stay available to
+   the deferred tuple domain should it want a spelling of its own.
 2. **`[a | b]` is a term** (`'[|]'(a, b)`), not an error. The grammar
    admits any term after `|`; the printer prints it back as `[a | b]`.
    This is the Edinburgh improper list; Prolog III's improper lists
