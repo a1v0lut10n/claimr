@@ -8,7 +8,7 @@
 //! each becomes a fresh numeric variable plus a linear constraint posted to
 //! the store (design record `2026-08-17-arithmetic-in-terms.md`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::Span;
 use crate::ast::{self, ArithOp, Clause, Expr, Goal, RelOp};
@@ -83,6 +83,188 @@ pub(crate) enum TGoal {
     Dif(TTerm, TTerm),
     /// `< > <= >=`: always numeric.
     Rel(RelOp, TTerm, TTerm),
+    /// `A ; B` (CLM-0022): both alternatives, in order.
+    Or(Vec<TGoal>, Vec<TGoal>),
+    /// `C -> T ; E` or `C -> T` (CLM-0022): commit to the condition's first
+    /// solution, else the else branch (or failure).
+    IfThenElse {
+        cond: Vec<TGoal>,
+        then: Vec<TGoal>,
+        els: Option<Vec<TGoal>>,
+        check: CondCheck,
+    },
+    /// `\+ G` (CLM-0022): `(G -> fail ; true)`.
+    Not {
+        cond: Vec<TGoal>,
+        check: CondCheck,
+    },
+}
+
+/// What the machine checks when it reaches a condition (CLM-0022,
+/// docs/design/2026-11-09-negation-disjunction-and-if-then-else.md): the
+/// condition's *external* variables — those also occurring in the clause
+/// outside the whole construct — must be ground, or the query stops. Kept
+/// with the construct's and the clause's source text for the diagnostic.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CondCheck {
+    /// Clause-variable index and source name, in index order.
+    pub external: Vec<(u32, String)>,
+    pub construct: String,
+    pub clause: String,
+}
+
+/// Does a body contain a control construct (CLM-0022)?
+fn has_control(goals: &[TGoal]) -> bool {
+    goals.iter().any(|g| {
+        matches!(
+            g,
+            TGoal::Or(..) | TGoal::IfThenElse { .. } | TGoal::Not { .. }
+        )
+    })
+}
+
+/// The clause variables a term mentions. Iterative: a literal may be deep
+/// (CLM-0019).
+fn term_vars(root: &TTerm, out: &mut BTreeSet<u32>) {
+    let mut work = vec![root];
+    while let Some(t) = work.pop() {
+        match t {
+            TTerm::Var(i) => {
+                out.insert(*i);
+            }
+            TTerm::Number(_) | TTerm::Const(_) => {}
+            TTerm::Compound(_, args) => work.extend(args.iter()),
+            TTerm::Neg(x) | TTerm::Len(x) => work.push(x),
+            TTerm::Arith(_, l, r) | TTerm::Concat(l, r) => {
+                work.push(l);
+                work.push(r);
+            }
+        }
+    }
+}
+
+/// The clause variables a body mentions, constructs included. Recursion
+/// follows the source nesting of constructs only.
+fn goals_vars(goals: &[TGoal], out: &mut BTreeSet<u32>) {
+    for g in goals {
+        match g {
+            TGoal::Call(t) => term_vars(t, out),
+            TGoal::Eq(a, b) | TGoal::Dif(a, b) | TGoal::Rel(_, a, b) => {
+                term_vars(a, out);
+                term_vars(b, out);
+            }
+            TGoal::Or(a, b) => {
+                goals_vars(a, out);
+                goals_vars(b, out);
+            }
+            TGoal::IfThenElse {
+                cond, then, els, ..
+            } => {
+                goals_vars(cond, out);
+                goals_vars(then, out);
+                if let Some(e) = els {
+                    goals_vars(e, out);
+                }
+            }
+            TGoal::Not { cond, .. } => goals_vars(cond, out),
+        }
+    }
+}
+
+/// Resolve every condition's external variables in `goals` (CLM-0022):
+/// `outside` holds the variables occurring in the clause outside this goal
+/// sequence (the head, enclosing constructs' other parts); a construct's
+/// surroundings are those plus its siblings in the sequence.
+fn resolve_conditions(
+    goals: &mut [TGoal],
+    outside: &BTreeSet<u32>,
+    names: &[String],
+    clause: &str,
+) {
+    // Variables of each goal, so that sibling sets are cheap to form.
+    let per_goal: Vec<BTreeSet<u32>> = goals
+        .iter()
+        .map(|g| {
+            let mut s = BTreeSet::new();
+            goals_vars(std::slice::from_ref(g), &mut s);
+            s
+        })
+        .collect();
+    for (i, g) in goals.iter_mut().enumerate() {
+        if matches!(
+            g,
+            TGoal::Call(_) | TGoal::Eq(..) | TGoal::Dif(..) | TGoal::Rel(..)
+        ) {
+            continue;
+        }
+        let mut around: BTreeSet<u32> = outside.clone();
+        for (j, s) in per_goal.iter().enumerate() {
+            if j != i {
+                around.extend(s.iter().copied());
+            }
+        }
+        match g {
+            TGoal::Or(a, b) => {
+                let mut va = BTreeSet::new();
+                goals_vars(a, &mut va);
+                let mut vb = BTreeSet::new();
+                goals_vars(b, &mut vb);
+                let mut oa = around.clone();
+                oa.extend(vb.iter().copied());
+                resolve_conditions(a, &oa, names, clause);
+                let mut ob = around;
+                ob.extend(va.iter().copied());
+                resolve_conditions(b, &ob, names, clause);
+            }
+            TGoal::IfThenElse {
+                cond,
+                then,
+                els,
+                check,
+            } => {
+                let mut vc = BTreeSet::new();
+                goals_vars(cond, &mut vc);
+                let mut vt = BTreeSet::new();
+                goals_vars(then, &mut vt);
+                let mut ve = BTreeSet::new();
+                if let Some(e) = els {
+                    goals_vars(e, &mut ve);
+                }
+                check.external = vc
+                    .iter()
+                    .filter(|v| around.contains(v))
+                    .map(|v| (*v, names[*v as usize].clone()))
+                    .collect();
+                check.clause = clause.to_string();
+                let mut oc = around.clone();
+                oc.extend(vt.iter().copied());
+                oc.extend(ve.iter().copied());
+                resolve_conditions(cond, &oc, names, clause);
+                let mut ot = around.clone();
+                ot.extend(vc.iter().copied());
+                ot.extend(ve.iter().copied());
+                resolve_conditions(then, &ot, names, clause);
+                if let Some(e) = els {
+                    let mut oe = around;
+                    oe.extend(vc.iter().copied());
+                    oe.extend(vt.iter().copied());
+                    resolve_conditions(e, &oe, names, clause);
+                }
+            }
+            TGoal::Not { cond, check } => {
+                let mut vc = BTreeSet::new();
+                goals_vars(cond, &mut vc);
+                check.external = vc
+                    .iter()
+                    .filter(|v| around.contains(v))
+                    .map(|v| (*v, names[*v as usize].clone()))
+                    .collect();
+                check.clause = clause.to_string();
+                resolve_conditions(cond, &around, names, clause);
+            }
+            TGoal::Call(_) | TGoal::Eq(..) | TGoal::Dif(..) | TGoal::Rel(..) => {}
+        }
+    }
 }
 
 /// A compiled clause: head, body, and the number of distinct variables.
@@ -369,6 +551,9 @@ impl Lowerer<'_> {
         })
     }
 
+    /// Lower a body. Recursion follows the source nesting of the control
+    /// constructs (CLM-0022); a construct's external variables are resolved
+    /// afterwards by `resolve_conditions`, once the whole clause is known.
     fn body(&mut self, goals: &[Goal]) -> Result<Vec<TGoal>, EvalError> {
         let mut out = Vec::new();
         for g in goals {
@@ -379,9 +564,44 @@ impl Lowerer<'_> {
                         out.push(self.constraint(c)?);
                     }
                 }
+                Goal::Or(a, b) => out.push(TGoal::Or(self.body(a)?, self.body(b)?)),
+                Goal::IfThenElse { cond, then, els } => out.push(TGoal::IfThenElse {
+                    cond: self.body(cond)?,
+                    then: self.body(then)?,
+                    els: match els {
+                        Some(e) => Some(self.body(e)?),
+                        None => None,
+                    },
+                    check: CondCheck {
+                        construct: g.to_string(),
+                        ..CondCheck::default()
+                    },
+                }),
+                Goal::Not(inner) => out.push(TGoal::Not {
+                    cond: self.body(inner)?,
+                    check: CondCheck {
+                        construct: g.to_string(),
+                        ..CondCheck::default()
+                    },
+                }),
             }
         }
         Ok(out)
+    }
+
+    /// Finish a lowered body (CLM-0022): resolve the conditions' external
+    /// variables against the clause's head variables. Only bodies with a
+    /// construct pay for the clause text.
+    fn finish_body(&self, body: &mut [TGoal], head: Option<&TTerm>, clause: &Clause) {
+        if !has_control(body) {
+            return;
+        }
+        let mut outside = BTreeSet::new();
+        if let Some(h) = head {
+            term_vars(h, &mut outside);
+        }
+        let text = clause.to_string();
+        resolve_conditions(body, &outside, &self.vars.names, &text);
     }
 }
 
@@ -454,7 +674,8 @@ impl Program {
                 }
                 Clause::Rule { head, body } | Clause::ConstraintRule { head, body } => {
                     let head = lw.atom(head)?;
-                    let body = lw.body(body)?;
+                    let mut body = lw.body(body)?;
+                    lw.finish_body(&mut body, Some(&head), clause);
                     let nvars = lw.vars.names.len() as u32;
                     push_clause(&mut preds, TClause { head, body, nvars });
                 }
@@ -479,7 +700,8 @@ impl Program {
                     initial.push((goals, lw.vars.names.len() as u32));
                 }
                 Clause::Query(body) => {
-                    let goals = lw.body(body)?;
+                    let mut goals = lw.body(body)?;
+                    lw.finish_body(&mut goals, None, clause);
                     queries.push(Query {
                         goals,
                         var_names: lw.vars.names.clone(),
@@ -513,7 +735,7 @@ impl Program {
     }
 
     /// Answer a query: an iterator over its solutions, computed lazily.
-    pub fn solve<'p>(&'p self, query: &Query) -> Solutions<'p> {
+    pub fn solve<'p>(&'p self, query: &'p Query) -> Solutions<'p> {
         Solutions::new(self, query)
     }
 
@@ -559,7 +781,12 @@ impl Program {
                             _ => false,
                         }
                     }
-                    TGoal::Call(_) => unreachable!("constraint facts have no calls"),
+                    TGoal::Call(_)
+                    | TGoal::Or(..)
+                    | TGoal::IfThenElse { .. }
+                    | TGoal::Not { .. } => {
+                        unreachable!("constraint facts hold constraints only")
+                    }
                 };
                 if !ok {
                     return false;

@@ -1,0 +1,53 @@
+% Control in bodies (CLM-0022,
+% docs/design/2026-11-09-negation-disjunction-and-if-then-else.md): `A ; B`
+% tries both alternatives, `C -> T ; E` commits to the first solution of C
+% (else E; `C -> T` alone fails when C does), and `\+ G` succeeds when G has
+% no solution. A condition's variables that are shared with the clause
+% outside the construct must be bound when it is reached — the lint rules
+% below put their generator first — or the query stops with an error.
+
+% Absence rules over a small knowledge base: the negated goal's own
+% variables (`_`) are local; `F` and `C` are bound by the preceding goal.
+model_file(m1). model_file(m2). model_file(m3).
+claim(m1, residual_error, low). claim(m3, residual_error, high).
+claim(m2, accuracy, high).
+missing_residual_error(F) :- model_file(F), \+ claim(F, residual_error, _).
+
+open_claim(c1). open_claim(c2).
+closes(k1, c1).
+unclosed(C) :- open_claim(C), \+ closes(_, C).
+
+% Committed choice: the curator's value if there is one, else the harvested
+% one. The result is set in the branch, so `X` is local to the construct;
+% `K` is external and must be bound at the call.
+curated(k1, cv1). curated(k1, cv2).
+harvested(k1, hv1). harvested(k2, hv2).
+value(K, V) :- (curated(K, X) -> { V = X } ; harvested(K, V)).
+
+% The first matching rule decides: a chain of if-then-else.
+sign(X, S) :- { X < 0 } -> { S = negative } ; { X = 0 } -> { S = zero } ; { S = positive }.
+
+% Disjunction: both alternatives, in order.
+colour(red). colour(blue).
+size(big). size(small).
+feature(X) :- colour(X) ; size(X).
+
+member(X, <X> . _).
+member(X, <_> . T) :- member(X, T).
+
+?- missing_residual_error(F).
+?- unclosed(C).
+?- value(k1, V).
+?- value(k2, V).
+?- value(k3, V).
+?- sign(-3, S).
+?- sign(0, S).
+?- sign(7/2, S).
+?- feature(X).
+?- colour(X), ({ X = red } -> { Warm = yes } ; { Warm = no }).
+?- colour(X) -> { Y = X }.
+?- \+ colour(green).
+?- \+ colour(red).
+?- member(X, <1, 2, 3>), \+ { X = 2 }.
+?- \+ (colour(X), size(X)).
+?- { X + Y = 2, X - Y = 0 }, ({ X != 1 } -> { Z = yes } ; { Z = no }).

@@ -26,11 +26,44 @@ pub enum Clause {
     Query(Vec<Goal>),
 }
 
-/// A goal in a rule or query body: an atom to prove, or a constraint block.
+/// A goal in a rule or query body: an atom to prove, a constraint block, or
+/// one of the control constructs of CLM-0022
+/// (docs/design/2026-11-09-negation-disjunction-and-if-then-else.md).
+/// Parentheses leave no trace: a grouped conjunction is spliced into the
+/// conjunction that contains it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Goal {
     Atom(Atom),
     Constraint(ConstraintExpr),
+    /// `A ; B`: both alternatives, in order. The right operand is a body
+    /// (`;` is right-associative), the left a conjunction.
+    Or(Vec<Goal>, Vec<Goal>),
+    /// `C -> T ; E`, or `C -> T` when `els` is `None` (the else fails):
+    /// commits to the condition's first solution.
+    IfThenElse {
+        cond: Vec<Goal>,
+        then: Vec<Goal>,
+        els: Option<Vec<Goal>>,
+    },
+    /// `\+ G`: succeeds when `G` has no solution, binds nothing. The goal
+    /// is a body (`\+ (a, b)`), usually of one goal.
+    Not(Vec<Goal>),
+}
+
+/// Does a body contain a constraint block, at any nesting (the parser
+/// classifies a rule with one as a `ConstraintRule`)?
+pub fn body_has_constraint(body: &[Goal]) -> bool {
+    body.iter().any(|g| match g {
+        Goal::Atom(_) => false,
+        Goal::Constraint(_) => true,
+        Goal::Or(a, b) => body_has_constraint(a) || body_has_constraint(b),
+        Goal::IfThenElse { cond, then, els } => {
+            body_has_constraint(cond)
+                || body_has_constraint(then)
+                || els.as_deref().is_some_and(body_has_constraint)
+        }
+        Goal::Not(g) => body_has_constraint(g),
+    })
 }
 
 /// A compound term: `name(arg, ...)`.
@@ -341,21 +374,69 @@ impl fmt::Display for ConstraintExpr {
     }
 }
 
+/// A goal on its own: a construct prints without the parentheses a
+/// surrounding conjunction would need (`fmt_conj` adds those).
 impl fmt::Display for Goal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Goal::Atom(a) => write!(f, "{a}"),
             Goal::Constraint(c) => write!(f, "{c}"),
+            Goal::Or(..) | Goal::IfThenElse { .. } => fmt_body(f, std::slice::from_ref(self)),
+            Goal::Not(body) => {
+                f.write_str("\\+ ")?;
+                match body.as_slice() {
+                    [g @ (Goal::Atom(_) | Goal::Constraint(_) | Goal::Not(_))] => write!(f, "{g}"),
+                    _ => {
+                        f.write_str("(")?;
+                        fmt_body(f, body)?;
+                        f.write_str(")")
+                    }
+                }
+            }
         }
     }
 }
 
+/// A body (CLM-0022): `alt [ ";" body ]`, where the alternative is a
+/// conjunction or `conj -> conj`. A lone disjunction or if-then-else is
+/// the body itself and needs no parentheses; `;` is right-associative, so
+/// neither does the right operand.
 fn fmt_body(f: &mut fmt::Formatter<'_>, body: &[Goal]) -> fmt::Result {
-    for (i, g) in body.iter().enumerate() {
+    match body {
+        [Goal::Or(a, b)] => {
+            fmt_conj(f, a)?;
+            f.write_str(" ; ")?;
+            fmt_body(f, b)
+        }
+        [Goal::IfThenElse { cond, then, els }] => {
+            fmt_conj(f, cond)?;
+            f.write_str(" -> ")?;
+            fmt_conj(f, then)?;
+            if let Some(e) = els {
+                f.write_str(" ; ")?;
+                fmt_body(f, e)?;
+            }
+            Ok(())
+        }
+        _ => fmt_conj(f, body),
+    }
+}
+
+/// A conjunction: goals joined by `, `; a disjunction or if-then-else
+/// inside one is parenthesised, as the grammar requires.
+fn fmt_conj(f: &mut fmt::Formatter<'_>, goals: &[Goal]) -> fmt::Result {
+    for (i, g) in goals.iter().enumerate() {
         if i > 0 {
             f.write_str(", ")?;
         }
-        write!(f, "{g}")?;
+        match g {
+            Goal::Or(..) | Goal::IfThenElse { .. } => {
+                f.write_str("(")?;
+                write!(f, "{g}")?;
+                f.write_str(")")?;
+            }
+            g => write!(f, "{g}")?,
+        }
     }
     Ok(())
 }

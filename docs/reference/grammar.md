@@ -14,9 +14,9 @@ end of the line, anywhere whitespace may appear.
 
 Two notational differences between this EBNF and the rustemo grammar, neither
 changing the language: `rule` and `constraint_rule` share one syntactic shape
-there (the clause is classified by whether its body contains a `{ … }` goal),
-and a query's bare `{ constraint_expr }` form is a body with a single
-constraint goal.
+there (the clause is classified by whether its body contains a `{ … }` goal,
+at any nesting), and a query's bare `{ constraint_expr }` form is a body with
+a single constraint goal.
 
 ## Top-Level Structure
 
@@ -54,11 +54,16 @@ implication    ::= "{" constraint_expr "}" "=>" atom "."
 ## Bodies
 
 ```ebnf
-body                 ::= goal { "," goal }
-body_with_constraints ::= extended_goal { "," extended_goal }
+body                 ::= alt [ ";" body ]                 (* CLM-0022: ";" is right-associative *)
+alt                  ::= conj [ "->" conj ]               (* an if-then(-else) when followed by ";" *)
+conj                 ::= extended_goal { "," extended_goal }
+body_with_constraints ::= body                             (* a body with at least one constraint goal *)
 
 goal                 ::= atom
-extended_goal        ::= goal | "{" constraint_expr "}"
+extended_goal        ::= goal
+                       | "{" constraint_expr "}"
+                       | "\+" extended_goal              (* CLM-0022: negation *)
+                       | "(" body ")"                     (* grouping; leaves no trace *)
 ```
 
 ## Constraints
@@ -170,6 +175,41 @@ through the named variables that reach it (`?- { X = f(_) }.` answers
 The clause printer prints `_` where it was written. `_`-prefixed names such
 as `_Tail` are not names: `_foo` lexes as `_` followed by an identifier the
 grammar does not expect, and is reported as such.
+
+**Control in bodies** (CLM-0022,
+[`../design/2026-11-09-negation-disjunction-and-if-then-else.md`](../design/2026-11-09-negation-disjunction-and-if-then-else.md))
+has ISO Prolog's spellings and precedence: `,` binds tightest, then `->`,
+then `;`, which is right-associative, so `a ; b -> c ; d` is
+`a ; ((b -> c) ; d)`. **Disjunction** `A ; B` tries both alternatives in
+order. **If-then-else** `C -> T ; E` runs `C` to its first solution and
+commits to it (the condition's other solutions and the else branch are
+discarded), then runs `T`; if `C` has no solution the store is restored and
+`E` runs. `C -> T` alone fails when `C` does. **Negation** `\+ G` succeeds
+when `G` has no solution and binds nothing; it is `(G -> fail ; true)`. `\+`
+applies to one goal: an atom, a constraint block, another `\+`, or a
+parenthesised body (`\+ (a(X), b(X))`). Parentheses group a body as a goal
+and leave no trace; `:list` prints them exactly where the grammar needs
+them. There is no cut. A condition's solution is checked exactly, as an
+answer would be, before the commit.
+
+The rule that keeps these sound over the constraint store: a condition's
+*external* variables, those also occurring in the clause outside the whole
+construct (in the head, or in goals before or after it; for a query, in its
+other goals), must be **ground** when the construct is reached — no unbound
+variable anywhere in their terms, numeric variables determined by the
+solver. Variables local to the construct, including ones shared only with
+the `then` or `else` branch, may be anything. A construct reached otherwise
+stops the query with a runtime error naming the construct, the variable and
+the clause (``condition `\+ claim(F, residual_error, _)` reached with `F`
+unbound``): bind the variable earlier, or keep it local. The absence rules
+of a lint therefore put their generator first,
+`missing(F) :- model_file(F), \+ claim(F, residual_error, _).`, and the
+committed-choice idiom puts its result in the branch,
+`value(K, V) :- (curated(K, X) -> { V = X } ; harvested(K, V)).` — the Prolog
+spelling `value(K, X) :- (curated(K, X) -> true() ; harvested(K, X)).` has
+`X` external and errors when called with `X` unbound, as it must, since it
+would answer `value(k, v2)` yet give only the first curated value for
+`value(k, X)`.
 
 **Strings** (CLM-0017,
 [`../design/2026-11-09-strings-as-character-lists-and-type-relations.md`](../design/2026-11-09-strings-as-character-lists-and-type-relations.md))

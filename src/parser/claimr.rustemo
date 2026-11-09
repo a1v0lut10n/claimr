@@ -45,10 +45,27 @@ Query: '?-' body=Body '.';
 // Bodies and goals
 // ---------------------------------------------------------------------------
 
-Body: goals=Goal+[Comma];
+// CLM-0022 (docs/design/2026-11-09-negation-disjunction-and-if-then-else.md):
+// ISO control in bodies. `,` binds tightest, then `->`, then `;`, which is
+// right-associative; a `;` whose left operand is `C -> T` is an
+// if-then-else, any other `;` a disjunction; `C -> T` alone is an if-then
+// whose else fails. `\+` applies to one goal; parentheses group a body as a
+// goal and leave no trace. Semantics in the record: a condition's external
+// variables must be ground when the construct is reached.
+Body: alt=Alt ';' rest=Body            {Or}
+    | alt=Alt                          {One}
+    ;
+
+Alt: cond=Conj '->' then=Conj          {IfThen}
+   | conj=Conj                         {Plain}
+   ;
+
+Conj: goals=Goal+[Comma];
 
 Goal: atom=Atom                        {AtomGoal}
     | '{' constraints=ConstraintExpr '}' {ConstraintGoal}
+    | NotOp goal=Goal                  {NotGoal}
+    | '(' body=Body ')'                {GroupGoal}
     ;
 
 // ---------------------------------------------------------------------------
@@ -169,6 +186,10 @@ Minus: '-';
 Star: '*';
 Slash: '/';
 Bar: '|';
+// CLM-0022: control in bodies.
+Semi: ';';
+Arrow: '->';
+NotOp: /\\\+/;
 
 // Layout terminals
 WS: /\s+/;
