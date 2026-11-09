@@ -96,6 +96,94 @@ pub(crate) struct TClause {
 /// Predicate key: functor and arity.
 pub(crate) type PredKey = (Symbol, usize);
 
+/// The principal functor of a first argument (CLM-0021): what a call's
+/// first argument must have for a clause to be able to match. Two terms
+/// with different keys never unify.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum ArgKey {
+    Const(Symbol),
+    Num(Number),
+    Struct(Symbol, usize),
+}
+
+/// A predicate's clauses with their first-argument index (CLM-0021). Every
+/// list holds clause positions in program order, so clause order — the
+/// language's semantics — is untouched by the index.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Pred {
+    pub clauses: Vec<TClause>,
+    /// Every clause: for a call whose first argument is unbound, or a
+    /// nullary predicate.
+    all: Vec<usize>,
+    /// Per key: the clauses with that key merged with the variable-first
+    /// clauses.
+    by_key: HashMap<ArgKey, Vec<usize>>,
+    /// The clauses whose first argument is a variable (or an arithmetic
+    /// term, whose value is not known statically): the candidates for a key
+    /// no clause has.
+    var_only: Vec<usize>,
+}
+
+impl Pred {
+    fn push(&mut self, clause: TClause) {
+        let pos = self.clauses.len();
+        let key = match &clause.head {
+            TTerm::Compound(_, args) => args.first().and_then(arg_key),
+            _ => None,
+        };
+        self.all.push(pos);
+        match key {
+            Some(k) => self.by_key.entry(k).or_default().push(pos),
+            None => {
+                // A variable-first clause is a candidate for every key.
+                self.var_only.push(pos);
+                for list in self.by_key.values_mut() {
+                    list.push(pos);
+                }
+            }
+        }
+        self.clauses.push(clause);
+    }
+
+    /// Finish the index: a key list must also hold the variable-first
+    /// clauses that came *before* the key's first clause (they were not in
+    /// the map yet when pushed).
+    fn finish(&mut self) {
+        for list in self.by_key.values_mut() {
+            list.extend(self.var_only.iter().copied());
+            list.sort_unstable();
+            list.dedup();
+        }
+    }
+
+    /// The clauses that can match a call whose first argument has `key`
+    /// (`None`: unbound), as positions in program order.
+    fn candidates(&self, key: Option<&ArgKey>) -> &[usize] {
+        match key {
+            None => &self.all,
+            Some(k) => self
+                .by_key
+                .get(k)
+                .map(Vec::as_slice)
+                .unwrap_or(&self.var_only),
+        }
+    }
+}
+
+/// The index key of a head's first argument; `None` when it can match
+/// anything (a variable) or its value is unknown at compile time (an
+/// arithmetic term).
+fn arg_key(t: &TTerm) -> Option<ArgKey> {
+    match t {
+        TTerm::Const(c) => Some(ArgKey::Const(*c)),
+        TTerm::Number(n) => Some(ArgKey::Num(n.clone())),
+        TTerm::Compound(f, args) => Some(ArgKey::Struct(*f, args.len())),
+        TTerm::Var(_) | TTerm::Neg(_) | TTerm::Arith(..) | TTerm::Len(_) | TTerm::Concat(..) => {
+            None
+        }
+    }
+}
+
 /// The built-in predicates (CLM-0017): the only reserved names besides
 /// `'<>'`. Each posts a constraint; none creates a choice point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,7 +225,7 @@ impl Query {
 #[derive(Debug, Clone)]
 pub struct Program {
     pub(crate) symbols: Symbols,
-    preds: HashMap<PredKey, Vec<TClause>>,
+    preds: HashMap<PredKey, Pred>,
     /// The built-in predicates by key (CLM-0017).
     pub(crate) builtins: HashMap<PredKey, Builtin>,
     /// Constraint facts, each with its variable count: the initial store.
@@ -318,7 +406,7 @@ impl Program {
             .iter()
             .map(|(name, arity, b)| ((symbols.intern(name), *arity), *b))
             .collect();
-        let mut preds: HashMap<PredKey, Vec<TClause>> = HashMap::new();
+        let mut preds: HashMap<PredKey, Pred> = HashMap::new();
         let mut initial = Vec::new();
         let mut queries = Vec::new();
 
@@ -401,6 +489,9 @@ impl Program {
             }
         }
 
+        for pred in preds.values_mut() {
+            pred.finish();
+        }
         let program = Program {
             symbols,
             preds,
@@ -428,7 +519,20 @@ impl Program {
 
     /// Clauses defining `key`, in program order (empty if undefined).
     pub(crate) fn clauses(&self, key: &PredKey) -> &[TClause] {
-        self.preds.get(key).map(Vec::as_slice).unwrap_or(&[])
+        self.preds
+            .get(key)
+            .map(|p| p.clauses.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// The positions of the clauses of `key` that can match a call whose
+    /// first argument has `first` (`None`: unbound), in program order
+    /// (CLM-0021).
+    pub(crate) fn candidates(&self, key: &PredKey, first: Option<&ArgKey>) -> &[usize] {
+        self.preds
+            .get(key)
+            .map(|p| p.candidates(first))
+            .unwrap_or(&[])
     }
 
     /// Post the constraint facts into a fresh store. False if unsatisfiable.
@@ -466,7 +570,7 @@ impl Program {
     }
 }
 
-fn push_clause(preds: &mut HashMap<PredKey, Vec<TClause>>, clause: TClause) {
+fn push_clause(preds: &mut HashMap<PredKey, Pred>, clause: TClause) {
     let key = match &clause.head {
         TTerm::Compound(f, args) => (*f, args.len()),
         TTerm::Const(c) => (*c, 0),

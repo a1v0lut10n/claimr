@@ -52,7 +52,11 @@ answers in solved form. Public surface (re-exported from `claimr`):
 - **`compile.rs`** — `ast::Clause` → clause templates with pre-numbered
   variables (structure copying at instantiation; every occurrence of the
   anonymous variable `_` gets its own number, CLM-0020) indexed by predicate
-  (functor, arity); `{c} => head.` desugars to `head :- {c}.`; constraint
+  (functor, arity), each predicate carrying a **first-argument index**
+  (CLM-0021): the principal functor of a clause's first argument — a
+  constant, a number, a functor with its arity — maps to the positions of
+  the clauses with that key merged with the variable-first clauses, in
+  program order; `{c} => head.` desugars to `head :- {c}.`; constraint
   facts form the **initial store**, validated satisfiable at compile time;
   `?-` clauses become `Query`s in source order. Arithmetic stays in the
   templates (`TTerm::Neg` / `TTerm::Arith`) and is lowered at instantiation
@@ -81,7 +85,12 @@ answers in solved form. Public surface (re-exported from `claimr`):
   on a 1 MiB thread. The one remaining recursion on the AST side is the
   derived `Debug` that `--parse` prints.
 - **`machine.rs`** — the SLD machine: goals left to right, clauses in program
-  order, chronological backtracking through choice points and the trail.
+  order, chronological backtracking through choice points and the trail. A
+  call whose first argument is bound visits only the clauses the index
+  admits (CLM-0021; an unbound first argument, numeric or not, means all
+  clauses), and a choice point holds that candidate list and the next
+  position — none is pushed when one candidate remains. A join over fact
+  tables keyed by an id is therefore linear in the facts.
   A call whose key is a **built-in** (`Program.builtins`: `atom_chars/2`,
   `number/1`, `atom/1`, `list/1`, CLM-0017) posts its constraint through
   the store and takes no choice point; every other call looks up clauses.
@@ -147,6 +156,7 @@ small; an incremental compile is a later optimisation).
 ## Not yet (later stages)
 
 Non-linear constraints beyond delayed products; integer/finite-domain constraints; a
-REPL; cut, negation, disjunction, built-ins, first-argument indexing, heap
+REPL; cut, negation, disjunction, further built-ins, indexing on other
+arguments, heap
 and tableau garbage collection beyond trail-driven undo, tail-call
 optimisation.

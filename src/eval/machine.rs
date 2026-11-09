@@ -21,7 +21,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::answer::{Answer, render_answer, render_terms};
-use super::compile::{ANONYMOUS, Builtin, PredKey, Program, Query, TGoal, build_with, lazy_var};
+use super::compile::{
+    ANONYMOUS, ArgKey, Builtin, PredKey, Program, Query, TGoal, build_with, lazy_var,
+};
 use super::error::EvalError;
 use super::store::{Addr, Cell, Mark, Store, TypeKind};
 use crate::ast::RelOp;
@@ -64,7 +66,10 @@ struct ChoicePoint<'p> {
     rest: Goals<'p>,
     call: Addr,
     key: PredKey,
-    next_clause: usize,
+    /// The clauses that can match the call (CLM-0021), as positions in
+    /// program order, and the next one to try.
+    candidates: &'p [usize],
+    next: usize,
     mark: Mark,
 }
 
@@ -177,12 +182,19 @@ impl<'p> Solutions<'p> {
     /// Try clauses `from..` of `key` against `call`; on success install the
     /// clause body, pending on the clause's frame, in front of `rest` (and a
     /// choice point if clauses remain).
-    fn try_clauses(&mut self, key: PredKey, from: usize, call: Addr, rest: Goals<'p>) -> bool {
+    fn try_clauses(
+        &mut self,
+        key: PredKey,
+        candidates: &'p [usize],
+        from: usize,
+        call: Addr,
+        rest: Goals<'p>,
+    ) -> bool {
         let program: &'p Program = self.program;
         let clauses = program.clauses(&key);
-        for j in from..clauses.len() {
+        for j in from..candidates.len() {
             let mark = self.store.mark();
-            let clause = &clauses[j];
+            let clause = &clauses[candidates[j]];
             let frame: Frame = (0..clause.nvars).map(|_| self.store.new_var()).collect();
             let head = build_with(&mut self.store, &clause.head, &mut |_, i| frame[i as usize]);
             let Some(head) = head else {
@@ -196,12 +208,13 @@ impl<'p> Solutions<'p> {
                 self.store.undo_to(&mark);
                 continue;
             }
-            if j + 1 < clauses.len() {
+            if j + 1 < candidates.len() {
                 self.choice_points.push(ChoicePoint {
                     rest: rest.clone(),
                     call,
                     key,
-                    next_clause: j + 1,
+                    candidates,
+                    next: j + 1,
                     mark,
                 });
             }
@@ -226,7 +239,7 @@ impl<'p> Solutions<'p> {
     fn backtrack(&mut self) -> bool {
         while let Some(cp) = self.choice_points.pop() {
             self.store.undo_to(&cp.mark);
-            if self.try_clauses(cp.key, cp.next_clause, cp.call, cp.rest) {
+            if self.try_clauses(cp.key, cp.candidates, cp.next, cp.call, cp.rest) {
                 return true;
             }
             if self.store.error.is_some() {
@@ -281,7 +294,11 @@ impl<'p> Solutions<'p> {
                             self.goals = rest;
                             self.run_builtin(b, call)
                         }
-                        None => self.try_clauses(key, 0, call, rest),
+                        None => {
+                            let first = first_arg_key(&self.store, call);
+                            let candidates = self.program.candidates(&key, first.as_ref());
+                            self.try_clauses(key, candidates, 0, call, rest)
+                        }
                     }
                 }
                 RtGoal::Eq(a, b) => {
@@ -382,6 +399,23 @@ fn instantiate_goal(
             RtGoal::Rel(*op, a, b)
         }
     })
+}
+
+/// The index key of a call's first argument (CLM-0021): `None` when the
+/// call is nullary or the argument is an unbound variable — numeric or not,
+/// since a determined numeric variable is still a `Var` cell and may unify
+/// with a number.
+fn first_arg_key(store: &Store, call: Addr) -> Option<ArgKey> {
+    let Cell::Struct(_, args) = store.cell(store.deref(call)) else {
+        return None;
+    };
+    let a = store.deref(*args.first()?);
+    match store.cell(a) {
+        Cell::Const(c) => Some(ArgKey::Const(*c)),
+        Cell::Num(n) => Some(ArgKey::Num(n.clone())),
+        Cell::Struct(f, xs) => Some(ArgKey::Struct(*f, xs.len())),
+        Cell::Var(_) => None,
+    }
 }
 
 fn pred_key(store: &Store, call: Addr) -> PredKey {
