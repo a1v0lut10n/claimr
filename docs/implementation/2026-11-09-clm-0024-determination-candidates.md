@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: task
-status: in-progress
+status: done
 affects:
   - docs/architecture/components/solver.md
 components: [solver]
@@ -45,44 +45,71 @@ later post: O(n) per post, O(n²) per run. The same holds for the loops over
 numeric disequations and delayed products, which walk every registered
 entry and skip the settled ones.
 
-## Decision (no design record: an implementation choice with no semantic effect)
+## Decision (no design record: implementation choices with no semantic effect)
 
-The store keeps the **candidates** of the determination pass as sets
-maintained incrementally, in the same trail discipline as everything else:
+Two changes, both keeping every decision the store takes:
 
-- `undetermined: BTreeSet<Addr>` — numeric heap variables that are unbound
-  and not yet fired. Inserted when a variable becomes numeric
-  (`set_numvar`), removed when it fires or is bound (trailed, restored on
-  undo), removed when its `numvar` entry is undone. The pass iterates this
-  set (already sorted) instead of `numvar`.
-- `pending_numdifs: BTreeSet<usize>` and `pending_products: BTreeSet<usize>`
-  — the ids still pending. Inserted on creation, removed when settled
-  (trailed with the existing `NumDifPending` / `ProductPending` records),
-  truncated on undo with the entry vectors.
+1. **Determination candidates kept incrementally.** The store keeps the
+   candidates of the pass as sets maintained in the trail discipline:
+   `undetermined: BTreeSet<Addr>` (numeric heap variables unbound and not
+   yet fired; inserted when a variable becomes numeric, removed when it
+   fires or is bound — the latter trailed as `Undo::Undetermined` and
+   restored on undo — and when its `numvar` entry is undone),
+   `pending_numdifs` and `pending_products: BTreeSet<usize>` (inserted on
+   creation, removed when settled with the existing trail records,
+   truncated with the entry vectors on undo). The pass visits exactly the
+   entries it visited before, in the same order. `class_value` looks at a
+   class's root and its aliases instead of every solver variable, since
+   `unknown_of` now asks on every post.
+2. **Determined values substituted in `unknown_of`.** The solver's view of a
+   term in numeric position returns a determined variable's (or attribute
+   term's) value instead of the variable. In every solution of the store
+   the variable has that value, so the constraint built from the value is
+   the same constraint; the trail undoes it together with the
+   determination it relied on. The effect: `N - 1` over a determined `N`
+   folds (CLM-0013's rule now applies), `M = <value>` is a bound, and
+   `M != -1` is decided at once — no row, no slack, no probe per step.
 
-The pass visits exactly the entries it visited before, in the same
-(sorted) order, so every decision it takes is unchanged; only the skipped
-entries are no longer walked. `answer-soundness` and `exact-arithmetic`
-are untouched.
+Measurement showed the first change alone did not move the countdown
+(4.74 s at 2 000 steps): the dominant cost was the rows, two per step,
+each scanned by the simplex's `check` and `update` on every assertion. The
+second change removes the rows for this shape of program. Rows that are
+genuinely open still cost per row per assertion inside the simplex; a
+column index there is noted in `solver.md` as the next step if it shows up.
 
 ## Action items
 
-1. **Store** (`src/eval/store.rs`): the three sets, their maintenance at
-   every creation, settle, bind and undo site, and the pass over them.
-2. **Tests**: the existing suite (every golden file byte-identical), plus
-   a store test that the sets agree with a recomputation from `numvar`,
-   `numdifs` and `products` after a sequence of posts and undos; a machine
-   test that a 2 000-step countdown with a disequation per step runs under
-   a time budget in the test profile.
-3. **Measurement** (release build): the countdown at 2 000 / 4 000 / 8 000 /
-   16 000 steps, with and without a `{ M != -1 }` per step, before and
-   after.
-4. **Docs**: `solver.md` (the determination pass), the incubation note
-   (the finding), this plan.
+1. **Store** (`src/eval/store.rs`): the three sets and their maintenance at
+   every creation, settle, bind and undo site; the pass over them;
+   `unknown_of` substituting determined values; `class_value` over the
+   aliases. **Done.**
+2. **Tests**: the existing suite (every golden file byte-identical, 160
+   tests); `determination_candidates_agree_with_a_recomputation` (store
+   unit test: the sets equal a recomputation from `numvar`, `numdifs` and
+   `products` through posts, determinations, binds and undos);
+   `a_long_numeric_derivation_is_linear` (2 000 steps with a disequation per
+   step under a 20 s budget in the test profile; 73 s before). **Done.**
+3. **Measurement** (release build; `down(N) :- { N > 0, M = N - 1 }, down(M).`
+   and the same with `M != -1` per step; answers byte-identical to `main`,
+   as are all examples):
+
+   | Steps  | `main`  | `main`, with `!=` | new    | new, with `!=` |
+   |--------|---------|-------------------|--------|----------------|
+   | 2 000  | 4.60 s  | 6.05 s            | 0.01 s | 0.01 s         |
+   | 4 000  | 19.47 s | 27.63 s           | 0.01 s | 0.01 s         |
+   | 8 000  | —       | —                 | 0.02 s | 0.03 s         |
+   | 16 000 | —       | —                 | 0.05 s | 0.06 s         |
+
+   (`main` at 8 000 and 16 000 not run: the quadratic extrapolates to
+   minutes.) **Done.**
+4. **Docs**: `solver.md` (the glue's `unknown_of`, the determination pass's
+   candidates, the remaining per-row cost), the incubation note (an
+   addendum with the probe and the semantic question that remains), this
+   plan. **Done.**
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
       `cargo test` clean; every golden file byte-identical.
-- [ ] The countdown scales linearly.
-- [ ] `aivolution lint .` clean; `solver.md` current.
+- [x] The countdown scales linearly.
+- [x] `aivolution lint .` clean; `solver.md` current.
