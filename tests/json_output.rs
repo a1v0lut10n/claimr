@@ -93,6 +93,19 @@ fn pending_concatenations_are_constraint_strings() {
 }
 
 #[test]
+fn goal_form_residuals_are_constraint_strings() {
+    // CLM-0017: pending type relations and atom_chars print in goal form.
+    let path = write_temp("goals", "?- atom(X), atom_chars(A, <a> . T).\n");
+    let (stdout, stderr, code) = run(&["--json", path.to_str().unwrap()]);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(
+        stdout.trim_end(),
+        r#"{"query":"?- atom(X), atom_chars(A, <a> . T).","outcome":"solutions","answers":[{"equations":[],"disequations":[],"constraints":["atom(X)","atom_chars(A, <a> . T)"]}]}"#
+    );
+}
+
+#[test]
 fn diagnostics_are_structured_and_exit_codes_hold() {
     // Parse error: structured on stderr, exit 1, stdout silent.
     let path = write_temp("broken", "broken(\n");

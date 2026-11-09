@@ -61,6 +61,27 @@ pub(crate) struct TClause {
 /// Predicate key: functor and arity.
 pub(crate) type PredKey = (Symbol, usize);
 
+/// The built-in predicates (CLM-0017): the only reserved names besides
+/// `'<>'`. Each posts a constraint; none creates a choice point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Builtin {
+    /// `atom_chars(A, L)`: `L` is the list of `A`'s characters, delayed.
+    AtomChars,
+    /// `number(X)`.
+    Number,
+    /// `atom(X)`, delayed.
+    Atom,
+    /// `list(X)`, delayed.
+    List,
+}
+
+const BUILTINS: [(&str, usize, Builtin); 4] = [
+    ("atom_chars", 2, Builtin::AtomChars),
+    ("number", 1, Builtin::Number),
+    ("atom", 1, Builtin::Atom),
+    ("list", 1, Builtin::List),
+];
+
 /// A compiled query: its goals, its variable names in order of first
 /// occurrence, and its source rendering.
 #[derive(Debug, Clone)]
@@ -82,6 +103,8 @@ impl Query {
 pub struct Program {
     pub(crate) symbols: Symbols,
     preds: HashMap<PredKey, Vec<TClause>>,
+    /// The built-in predicates by key (CLM-0017).
+    pub(crate) builtins: HashMap<PredKey, Builtin>,
     /// Constraint facts, each with its variable count: the initial store.
     pub(crate) initial: Vec<(Vec<TGoal>, u32)>,
     queries: Vec<Query>,
@@ -196,6 +219,10 @@ impl Program {
         clauses: impl Iterator<Item = (&'a Clause, Option<Span>)>,
     ) -> Result<Program, EvalError> {
         let mut symbols = Symbols::default();
+        let builtins: HashMap<PredKey, Builtin> = BUILTINS
+            .iter()
+            .map(|(name, arity, b)| ((symbols.intern(name), *arity), *b))
+            .collect();
         let mut preds: HashMap<PredKey, Vec<TClause>> = HashMap::new();
         let mut initial = Vec::new();
         let mut queries = Vec::new();
@@ -211,6 +238,16 @@ impl Program {
                 if head.name == LIST_LABEL {
                     return Err(EvalError::ReservedName {
                         name: head.name.clone(),
+                        span,
+                    });
+                }
+                if BUILTINS
+                    .iter()
+                    .any(|(n, a, _)| *n == head.name && *a == head.args.len())
+                {
+                    return Err(EvalError::ReservedBuiltin {
+                        name: head.name.clone(),
+                        arity: head.args.len(),
                         span,
                     });
                 }
@@ -272,11 +309,12 @@ impl Program {
         let program = Program {
             symbols,
             preds,
+            builtins,
             initial,
             queries,
         };
         // The initial store must be satisfiable, or the program has no models.
-        let mut store = Store::new();
+        let mut store = Store::with_symbols(program.symbols.clone());
         if !program.post_initial(&mut store) {
             return Err(EvalError::InitialStoreUnsatisfiable);
         }

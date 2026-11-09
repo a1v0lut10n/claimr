@@ -21,9 +21,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::answer::{Answer, render_answer, render_terms};
-use super::compile::{PredKey, Program, Query, TGoal, build_with, lazy_var};
+use super::compile::{Builtin, PredKey, Program, Query, TGoal, build_with, lazy_var};
 use super::error::EvalError;
-use super::store::{Addr, Cell, Mark, Store};
+use super::store::{Addr, Cell, Mark, Store, TypeKind};
 use crate::ast::RelOp;
 
 /// An instantiated runtime goal.
@@ -89,7 +89,7 @@ pub struct Solutions<'p> {
 
 impl<'p> Solutions<'p> {
     pub(crate) fn new(program: &'p Program, query: &Query) -> Self {
-        let mut store = Store::new();
+        let mut store = Store::with_symbols(program.symbols.clone());
         // Constraint facts first (validated satisfiable at compile time).
         let initial_ok = program.post_initial(&mut store);
         debug_assert!(initial_ok, "initial store validated at compile time");
@@ -274,7 +274,13 @@ impl<'p> Solutions<'p> {
             let ok = match goal {
                 RtGoal::Call(call) => {
                     let key = pred_key(&self.store, call);
-                    self.try_clauses(key, 0, call, rest)
+                    match self.program.builtins.get(&key).copied() {
+                        Some(b) => {
+                            self.goals = rest;
+                            self.run_builtin(b, call)
+                        }
+                        None => self.try_clauses(key, 0, call, rest),
+                    }
                 }
                 RtGoal::Eq(a, b) => {
                     self.goals = rest;
@@ -295,8 +301,22 @@ impl<'p> Solutions<'p> {
         }
     }
 
+    /// A built-in predicate (CLM-0017): posts its constraint, deterministic.
+    fn run_builtin(&mut self, b: Builtin, call: Addr) -> bool {
+        let d = self.store.deref(call);
+        let Cell::Struct(_, args) = self.store.cell(d).clone() else {
+            return false;
+        };
+        match b {
+            Builtin::AtomChars => self.store.post_atom_chars(args[0], args[1]),
+            Builtin::Number => self.store.post_number(args[0]),
+            Builtin::Atom => self.store.post_type(args[0], TypeKind::Atom),
+            Builtin::List => self.store.post_type(args[0], TypeKind::List),
+        }
+    }
+
     fn answer(&self) -> Answer {
-        render_answer(&self.program.symbols, &self.store, &self.query_vars)
+        render_answer(&self.store.symbols, &self.store, &self.query_vars)
     }
 
     /// Take the store's runtime error, rendering a non-linear residue with
@@ -306,12 +326,7 @@ impl<'p> Solutions<'p> {
             return Some(e);
         }
         let (a, b, op) = self.store.nonlinear.take()?;
-        let rendered = render_terms(
-            &self.program.symbols,
-            &self.store,
-            &self.query_vars,
-            &[a, b],
-        );
+        let rendered = render_terms(&self.store.symbols, &self.store, &self.query_vars, &[a, b]);
         Some(EvalError::NonLinear {
             constraint: format!("{} {op} {}", rendered[0], rendered[1]),
         })

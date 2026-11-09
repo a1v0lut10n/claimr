@@ -18,7 +18,7 @@ use crate::number::Number;
 use crate::solver::{self, LinExpr, SVar, Simplex};
 
 use super::error::EvalError;
-use super::symbol::{LIST, Symbol};
+use super::symbol::{LIST, Symbol, Symbols};
 
 /// Address of a cell in the heap.
 pub type Addr = usize;
@@ -115,6 +115,32 @@ pub(crate) struct Concat {
     pub pending: bool,
 }
 
+/// The kind a type relation asserts (CLM-0017): Prolog III's `id` and
+/// `list`, under Prolog-family names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeKind {
+    Atom,
+    List,
+}
+
+/// A pending type relation `atom(var)` / `list(var)` (CLM-0017): decided
+/// when the variable is bound.
+#[derive(Debug, Clone)]
+pub(crate) struct TypeCon {
+    pub var: Addr,
+    pub kind: TypeKind,
+    pub pending: bool,
+}
+
+/// A pending `atom_chars(a, l)` (CLM-0017): decided when `a` is a constant
+/// or `l` a complete list of one-character constants.
+#[derive(Debug, Clone)]
+pub(crate) struct Chars {
+    pub a: Addr,
+    pub l: Addr,
+    pub pending: bool,
+}
+
 /// Where a `'<>'` spine ends.
 enum Spine {
     /// A proper list of this many cells.
@@ -133,6 +159,8 @@ enum Waker {
     Attr(usize),
     Len(usize),
     Concat(usize),
+    Type(usize),
+    Chars(usize),
 }
 
 #[derive(Debug)]
@@ -151,6 +179,8 @@ enum Undo {
     LengthPending(usize),
     LenIndex(Addr),
     ConcatPending(usize),
+    TypePending(usize),
+    CharsPending(usize),
 }
 
 /// A point in the store's history to return to.
@@ -164,12 +194,17 @@ pub struct Mark {
     products: usize,
     lengths: usize,
     concats: usize,
+    types: usize,
+    chars: usize,
     simplex: solver::Mark,
 }
 
 /// The store.
 #[derive(Debug, Default)]
 pub struct Store {
+    /// The program's symbol table, carried by the store since CLM-0017 so
+    /// that `atom_chars` can intern the atom it spells at wake time.
+    pub(crate) symbols: Symbols,
     heap: Vec<Cell>,
     trail: Vec<Undo>,
     difs: Vec<Dif>,
@@ -194,6 +229,10 @@ pub struct Store {
     len_index: HashMap<Addr, usize>,
     /// Concatenations registered so far (CLM-0016).
     pub(crate) concats: Vec<Concat>,
+    /// Type relations registered so far (CLM-0017).
+    pub(crate) types: Vec<TypeCon>,
+    /// `atom_chars` constraints registered so far (CLM-0017).
+    pub(crate) chars: Vec<Chars>,
     /// Original definition of each slack/defined solver variable, for printing.
     pub(crate) defs: BTreeMap<SVar, LinExpr>,
     /// Solver variables equated by `equate`: child → parent (union-find, no
@@ -219,8 +258,13 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn new() -> Self {
-        Self::default()
+    /// A store over the given symbol table (a clone of the program's, so
+    /// that symbol indices agree).
+    pub fn with_symbols(symbols: Symbols) -> Self {
+        Store {
+            symbols,
+            ..Self::default()
+        }
     }
 
     // --- construction ------------------------------------------------------
@@ -279,6 +323,8 @@ impl Store {
             products: self.products.len(),
             lengths: self.lengths.len(),
             concats: self.concats.len(),
+            types: self.types.len(),
+            chars: self.chars.len(),
             simplex: self.simplex.mark(),
         }
     }
@@ -340,6 +386,16 @@ impl Store {
                         self.concats[id].pending = true;
                     }
                 }
+                Undo::TypePending(id) => {
+                    if id < self.types.len() {
+                        self.types[id].pending = true;
+                    }
+                }
+                Undo::CharsPending(id) => {
+                    if id < self.chars.len() {
+                        self.chars[id].pending = true;
+                    }
+                }
             }
         }
         self.heap.truncate(mark.heap);
@@ -349,6 +405,8 @@ impl Store {
         self.products.truncate(mark.products);
         self.lengths.truncate(mark.lengths);
         self.concats.truncate(mark.concats);
+        self.types.truncate(mark.types);
+        self.chars.truncate(mark.chars);
         self.simplex.undo_to(mark.simplex);
         self.woken.clear();
         self.touched.clear();
@@ -436,6 +494,8 @@ impl Store {
             (Waker::Attr(a), Waker::Attr(b)) => a == b,
             (Waker::Len(a), Waker::Len(b)) => a == b,
             (Waker::Concat(a), Waker::Concat(b)) => a == b,
+            (Waker::Type(a), Waker::Type(b)) => a == b,
+            (Waker::Chars(a), Waker::Chars(b)) => a == b,
             _ => false,
         });
         if dup {
@@ -629,6 +689,8 @@ impl Store {
                     Waker::Attr(id) => self.recanonicalize(id),
                     Waker::Len(id) => self.recheck_len(id),
                     Waker::Concat(id) => self.recheck_concat(id),
+                    Waker::Type(id) => self.recheck_type(id),
+                    Waker::Chars(id) => self.recheck_chars(id),
                 };
                 if !ok {
                     return false;
@@ -765,6 +827,8 @@ impl Store {
                     Waker::Attr(id) => self.recanonicalize(id),
                     Waker::Len(id) => self.recheck_len(id),
                     Waker::Concat(id) => self.recheck_concat(id),
+                    Waker::Type(id) => self.recheck_type(id),
+                    Waker::Chars(id) => self.recheck_chars(id),
                 };
                 if !ok {
                     return false;
@@ -836,6 +900,12 @@ impl Store {
                 let sv = match self.numvar.get(&d) {
                     Some(sv) => *sv,
                     None => {
+                        // A variable under a pending `atom`/`list` relation
+                        // or the atom side of `atom_chars` is not a number
+                        // (CLM-0017).
+                        if self.has_pending_type(d) {
+                            return None;
+                        }
                         let sv = self.simplex.new_var();
                         self.set_numvar(d, sv);
                         sv
@@ -1321,6 +1391,208 @@ impl Store {
             .collect()
     }
 
+    // --- type relations and atom_chars (CLM-0017) ------------------------------
+
+    /// Is `d` held to be an atom or a list by a pending relation — a type
+    /// relation, or the atom side of an `atom_chars`?
+    fn has_pending_type(&self, d: Addr) -> bool {
+        self.types
+            .iter()
+            .any(|t| t.pending && self.deref(t.var) == d)
+            || self.chars.iter().any(|c| c.pending && self.deref(c.a) == d)
+    }
+
+    /// `number(a)`: a number or a numeric variable; an unbound plain
+    /// variable becomes numeric (unless a type relation holds it); any
+    /// tree fails.
+    pub fn post_number(&mut self, a: Addr) -> bool {
+        let d = self.deref(a);
+        match self.heap[d].clone() {
+            Cell::Num(_) => true,
+            Cell::Var(_) => {
+                if self.numvar.contains_key(&d) {
+                    return true;
+                }
+                let mark = self.mark();
+                if self.unknown_of(d).is_some() && self.settle() {
+                    true
+                } else {
+                    self.undo_to(&mark);
+                    false
+                }
+            }
+            Cell::Const(_) | Cell::Struct(..) => false,
+        }
+    }
+
+    /// `atom(a)` / `list(a)`: decided now when `a` is bound, else pending
+    /// on the variable. A numeric variable is not an atom nor a list.
+    pub fn post_type(&mut self, a: Addr, kind: TypeKind) -> bool {
+        let mark = self.mark();
+        let id = self.types.len();
+        self.types.push(TypeCon {
+            var: a,
+            kind,
+            pending: true,
+        });
+        if self.recheck_type(id) && self.settle() {
+            true
+        } else {
+            self.undo_to(&mark);
+            false
+        }
+    }
+
+    fn recheck_type(&mut self, id: usize) -> bool {
+        if id >= self.types.len() || !self.types[id].pending {
+            return true;
+        }
+        let TypeCon { var, kind, .. } = self.types[id].clone();
+        let d = self.deref(var);
+        let decided = match self.heap[d].clone() {
+            Cell::Var(_) => {
+                // A numeric variable is neither; two relations of different
+                // kinds on one variable cannot both hold.
+                if self.numvar.contains_key(&d)
+                    || self.types.iter().enumerate().any(|(i, t)| {
+                        i != id && t.pending && t.kind != kind && self.deref(t.var) == d
+                    })
+                {
+                    return false;
+                }
+                self.suspend(Waker::Type(id), d);
+                return true;
+            }
+            Cell::Const(c) => match kind {
+                TypeKind::Atom => c != LIST,
+                TypeKind::List => c == LIST,
+            },
+            Cell::Struct(f, args) => match kind {
+                TypeKind::Atom => false,
+                TypeKind::List => f == LIST && args.len() == 2,
+            },
+            Cell::Num(_) => false,
+        };
+        self.types[id].pending = false;
+        self.trail.push(Undo::TypePending(id));
+        decided
+    }
+
+    /// `atom_chars(a, l)`: decided when `a` is a constant (other than `'<>'`)
+    /// or `l` a complete list of one-character constants; fails on any
+    /// other bound shape; otherwise pending on the variables involved.
+    pub fn post_atom_chars(&mut self, a: Addr, l: Addr) -> bool {
+        let mark = self.mark();
+        let id = self.chars.len();
+        self.chars.push(Chars {
+            a,
+            l,
+            pending: true,
+        });
+        if self.recheck_chars(id) && self.settle() {
+            true
+        } else {
+            self.undo_to(&mark);
+            false
+        }
+    }
+
+    fn close_chars(&mut self, id: usize) {
+        self.chars[id].pending = false;
+        self.trail.push(Undo::CharsPending(id));
+    }
+
+    fn recheck_chars(&mut self, id: usize) -> bool {
+        if id >= self.chars.len() || !self.chars[id].pending {
+            return true;
+        }
+        let Chars { a, l, .. } = self.chars[id].clone();
+        let da = self.deref(a);
+        match self.heap[da].clone() {
+            Cell::Const(c) if c != LIST => {
+                // The atom is known: `l` is the list of its characters.
+                self.close_chars(id);
+                let name = self.symbols.name(c).to_string();
+                let mut t = self.new_const(LIST);
+                for ch in name.chars().rev() {
+                    let s = self.symbols.intern(&ch.to_string());
+                    let h = self.new_const(s);
+                    t = self.new_struct(LIST, vec![h, t]);
+                }
+                return self.unify(l, t);
+            }
+            Cell::Const(_) | Cell::Num(_) | Cell::Struct(..) => {
+                self.close_chars(id);
+                return false;
+            }
+            Cell::Var(_) => {
+                if self.numvar.contains_key(&da) {
+                    self.close_chars(id);
+                    return false;
+                }
+            }
+        }
+        // `a` is an unbound plain variable: spell it from `l` if possible.
+        let open_tail = match self.walk_spine(l) {
+            Spine::Bad => {
+                self.close_chars(id);
+                return false;
+            }
+            Spine::Nil(_) => None,
+            Spine::Open(_, t) => Some(t),
+        };
+        let mut name = String::new();
+        let mut waits = Vec::new();
+        for h in self.spine_heads(l) {
+            let dh = self.deref(h);
+            match self.heap[dh].clone() {
+                Cell::Const(c) if c != LIST => {
+                    let n = self.symbols.name(c);
+                    if n.chars().count() != 1 {
+                        self.close_chars(id);
+                        return false;
+                    }
+                    name.push_str(n);
+                }
+                Cell::Var(_) if !self.numvar.contains_key(&dh) => waits.push(dh),
+                _ => {
+                    self.close_chars(id);
+                    return false;
+                }
+            }
+        }
+        waits.extend(open_tail);
+        if waits.is_empty() {
+            self.close_chars(id);
+            let s = self.symbols.intern(&name);
+            let c = self.new_const(s);
+            return self.unify(a, c);
+        }
+        self.suspend(Waker::Chars(id), da);
+        for v in waits {
+            self.suspend(Waker::Chars(id), v);
+        }
+        true
+    }
+
+    /// Pending type relations, for printing: `(variable, kind)`.
+    pub fn pending_types(&self) -> Vec<(Addr, TypeKind)> {
+        self.types
+            .iter()
+            .filter(|t| t.pending)
+            .map(|t| (t.var, t.kind))
+            .collect()
+    }
+
+    /// Pending `atom_chars` constraints, for printing: `(a, l)`.
+    pub fn pending_chars(&self) -> Vec<(Addr, Addr)> {
+        self.chars
+            .iter()
+            .filter(|c| c.pending)
+            .map(|c| (c.a, c.l))
+            .collect()
+    }
+
     // --- attribute terms ---------------------------------------------------
 
     /// Structural key of the term at `a` modulo bindings; `None` if cyclic.
@@ -1486,7 +1758,7 @@ mod tests {
     #[test]
     fn unify_constants_and_numbers() {
         let mut syms = Symbols::default();
-        let mut st = Store::new();
+        let mut st = Store::default();
         let a1 = st.new_const(sym(&mut syms, "a"));
         let a2 = st.new_const(sym(&mut syms, "a"));
         let b = st.new_const(sym(&mut syms, "b"));
@@ -1503,7 +1775,7 @@ mod tests {
     #[test]
     fn unify_binds_variables_and_aliases() {
         let mut syms = Symbols::default();
-        let mut st = Store::new();
+        let mut st = Store::default();
         let x = st.new_var();
         let y = st.new_var();
         let a = st.new_const(sym(&mut syms, "a"));
@@ -1517,7 +1789,7 @@ mod tests {
     #[test]
     fn unify_structures_and_fail_on_mismatch() {
         let mut syms = Symbols::default();
-        let mut st = Store::new();
+        let mut st = Store::default();
         let f = sym(&mut syms, "f");
         let g = sym(&mut syms, "g");
         let a = st.new_const(sym(&mut syms, "a"));
@@ -1539,7 +1811,7 @@ mod tests {
     #[test]
     fn undo_restores_exactly() {
         let mut syms = Symbols::default();
-        let mut st = Store::new();
+        let mut st = Store::default();
         let f = sym(&mut syms, "f");
         let x = st.new_var();
         let a = st.new_const(sym(&mut syms, "a"));
@@ -1557,7 +1829,7 @@ mod tests {
     #[test]
     fn cyclic_terms_unify_and_terminate() {
         let mut syms = Symbols::default();
-        let mut st = Store::new();
+        let mut st = Store::default();
         let f = sym(&mut syms, "f");
         // X = f(X)
         let x = st.new_var();
@@ -1575,7 +1847,7 @@ mod tests {
         assert!(st.post_eq(y, fy));
         assert!(st.post_eq(x, y));
         // X = f(X, a) then X = f(X, b) fails
-        let mut st2 = Store::new();
+        let mut st2 = Store::default();
         let a = st2.new_const(sym(&mut syms, "a"));
         let b = st2.new_const(sym(&mut syms, "b"));
         let z = st2.new_var();
@@ -1588,7 +1860,7 @@ mod tests {
     #[test]
     fn dif_immediate_cases() {
         let mut syms = Symbols::default();
-        let mut st = Store::new();
+        let mut st = Store::default();
         let a = st.new_const(sym(&mut syms, "a"));
         let a2 = st.new_const(sym(&mut syms, "a"));
         let b = st.new_const(sym(&mut syms, "b"));
@@ -1600,7 +1872,7 @@ mod tests {
     #[test]
     fn dif_suspends_then_wakes() {
         let mut syms = Symbols::default();
-        let mut st = Store::new();
+        let mut st = Store::default();
         let a = st.new_const(sym(&mut syms, "a"));
         let b = st.new_const(sym(&mut syms, "b"));
         let x = st.new_var();
@@ -1612,7 +1884,7 @@ mod tests {
         assert!(st.post_eq(x, b)); // satisfies and drops
         assert!(st.pending_difs().is_empty());
         // Order-independent: bind first, then dif.
-        let mut st2 = Store::new();
+        let mut st2 = Store::default();
         let y = st2.new_var();
         let a3 = st2.new_const(sym(&mut syms, "a"));
         assert!(st2.post_eq(y, a3));
@@ -1622,7 +1894,7 @@ mod tests {
     #[test]
     fn dif_over_structures_suspends_on_deep_variables() {
         let mut syms = Symbols::default();
-        let mut st = Store::new();
+        let mut st = Store::default();
         let f = sym(&mut syms, "f");
         let x = st.new_var();
         let y = st.new_var();
@@ -1646,7 +1918,7 @@ mod tests {
 
     #[test]
     fn ground_arithmetic_folds_without_solver_variables() {
-        let mut st = Store::new();
+        let mut st = Store::default();
         let n = |k: i64| Number::from_ratio(k, 1).unwrap();
         let before = st.simplex.num_vars();
         let ten = st.new_num(n(10));

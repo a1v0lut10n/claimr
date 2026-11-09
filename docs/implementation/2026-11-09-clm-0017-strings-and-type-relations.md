@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: task
-status: in-progress
+status: done
 affects:
   - docs/reference/grammar.md
   - docs/reference/json-output.md
@@ -42,60 +42,72 @@ case-insensitive comparison; a character type.
 
 ## Action items
 
-1. **Grammar**: terminal `String: /"(?:[^"\\]|\\.)*"/;` and
-   `| string=String {StringExpr}` in `Expr`. A string is a single token,
-   so the automaton gains only shifts; checked in the `--dot` output.
-2. **Action**: unescape as quoted atoms do (`\"`, `\\`, any other `\c`
-   is `c`) and build `Expr::List` of one-character `Expr::Ident`s;
-   `""` is `<>`. No AST change: `"ab"` and `<a, b>` are one term and
-   print as the list (query echoes included).
-3. **Symbols in the store**: `Store::with_symbols(Symbols)`; the machine
-   and the compile-time validation give the store a clone of the
-   program's table, the printer reads `store.symbols`. `atom_chars` can
-   then intern the atom it spells when it wakes inside `settle`.
-4. **Built-ins**: `Program.builtins: HashMap<PredKey, Builtin>` interned
-   at compile; the machine's `RtGoal::Call` consults it before the clause
-   lookup and runs the built-in deterministically (no choice point). A
-   clause head with a reserved name and arity is `EvalError::
-   ReservedBuiltin { name, arity, span }` at compile time; `'<>'` keeps
-   `ReservedName`.
-5. **Type relations in the store**: `TypeCon { var, kind: Atom | List,
-   pending }` entries with `Waker::Type`. `post_type(a, kind)`: a bound
-   term is decided at once (`atom`: a constant other than `'<>'`; `list`:
-   `'<>'` or a `'<>'/2` cell); a numeric variable fails (it denotes a
-   number); an unbound plain variable gets a pending entry suspended on
-   it, re-checked on binding, re-suspended if bound to another variable.
-   `post_number(a)`: a number or a numeric variable succeeds; a constant,
-   compound or list fails; an unbound plain variable with a pending type
-   constraint fails, otherwise it becomes numeric through `unknown_of`.
-6. **`atom_chars` in the store**: `Chars { a, l, pending }` entries with
-   `Waker::Chars`. Decided when `a` is a constant other than `'<>'` (its
-   characters as a list of interned one-character atoms, unified with
-   `l`) or when `l` is a complete list of one-character constants (the
-   spelled atom, interned, unified with `a`). Fails when `a` is a number,
-   a compound, `'<>'` or a numeric variable, when `l` is not a list, or
-   when any known element of `l` is not a one-character atom. Otherwise
-   suspended on `a`, on `l`'s open tail and on its unbound elements.
-7. **Answers**: pending type constraints and `atom_chars` whose terms
-   mention a reachable variable print in goal form after the numeric
-   constraints: `atom(X)`, `list(X)`, `atom_chars(A, L)`.
-8. **Highlight**: `TokenKind::String` for `"…"` with the quoted-atom
-   escape rule; the coverage test's regex-terminal examples gain one.
-   This is an additive change to the token API aicogito consumes.
-9. **Example and tests**: `examples/strings.claimr` with golden answers
-   (the record's `has_prefix`, `id_length`, `scheme`; `atom_chars` both
-   ways, delayed and failing; each type relation on each kind of term,
-   delayed, and in conflict with `number`); machine tests for the same
-   and for undo; parse test for the literal and its escapes; a JSON test
-   for a residual in goal form; a compile test for the reserved heads.
-10. **Docs**: `docs/reference/builtins.md` (the four predicates, exactly),
-    indexed from `docs/reference/README.md`; `grammar.md` and the README
-    grammar section (string literal); `evaluator.md` (built-ins, type and
-    `atom_chars` entries, symbols in the store); `json-output.md`
-    (residuals in goal form); plan to what was built.
+1. **Grammar**: terminal `StringLit: /"(?:[^"\\]|\\.)*"/;` and
+   `| string=StringLit {StringExpr}`. Named `StringLit`, not `String`:
+   rustemo generates a type alias per terminal, and one called `String`
+   shadows the standard type in the actions module. The automaton gains
+   only shifts (60 productions, 93 states). **Done.**
+2. **Action**: `string_lit` unescapes with the quoted atoms' rule (now a
+   shared `unescape`) and `expr_string_expr` builds `Expr::List` of
+   one-character `Expr::Ident`s; `""` is `<>`. No AST change; `"ab"` and
+   `<a, b>` are one term and print as the list, query echoes included.
+   **Done.**
+3. **Symbols in the store**: `Store::with_symbols(Symbols)`; `Store::new`
+   is gone (tests use `Store::default`). The machine and the compile-time
+   validation give the store a clone of the program's table; the printer
+   reads `store.symbols`. **Done.**
+4. **Built-ins**: `compile::Builtin`, `BUILTINS` (name, arity, kind),
+   `Program.builtins` interned at compile; `Solutions::run_builtin` runs
+   one deterministically before clause lookup. `EvalError::ReservedBuiltin
+   { name, arity, span }` for a user head with a built-in name and arity;
+   another arity is an ordinary predicate (`list/2`). The CLI now prints
+   `file:line:col:` for a positioned `EvalError` (it printed `file:` and
+   the message before — a CLM-0014 slip, corrected here). **Done.**
+5. **Type relations**: `TypeKind`, `TypeCon`, `Waker::Type`,
+   `Undo::TypePending`; `post_type` / `recheck_type` as planned, plus:
+   two relations of different kinds on one variable fail at once, and
+   `unknown_of` refuses to make a variable numeric while a type relation
+   (or the atom side of an `atom_chars`) holds it, so `atom(X), { X > 3 }`
+   fails as `{ X > 3 }, atom(X)` does. `post_number` as planned. **Done.**
+6. **`atom_chars`**: `Chars`, `Waker::Chars`, `Undo::CharsPending`;
+   `post_atom_chars` / `recheck_chars` as planned, spelling through the
+   store's symbol table. **Done.**
+7. **Answers**: pass 8 of `render_answer` prints pending type relations
+   and `atom_chars` in goal form after the numeric constraints and the
+   concatenations. **Done.**
+8. **Highlight**: `TokenKind::String` for `"…"`, the coverage test's
+   regex-terminal examples gain one. Additive change to the token API
+   aicogito consumes. **Done.**
+9. **Example and tests**: `examples/strings.claimr` with golden answers;
+   machine tests `strings_are_character_lists`,
+   `atom_chars_is_a_delayed_constraint` (20 queries),
+   `type_relations_are_constraints` (25 queries),
+   `built_in_names_cannot_be_defined`; parse test
+   `string_literals_are_character_lists`; JSON test
+   `goal_form_residuals_are_constraint_strings`. 132 tests in all.
+   **Done.**
+10. **Docs**: `docs/reference/builtins.md` (new, indexed from
+    `docs/reference/README.md`), `grammar.md`, README grammar section,
+    `evaluator.md`, `json-output.md`; this plan. **Done.**
+
+## Notes against the design record
+
+- `number(X)` on an unbound variable makes it numeric, as the record says;
+  the known consequence of D4 then applies: `number(X), { X = a }` does
+  not fail but makes `a` an attribute term and answers `a = X`. Prolog III
+  would fail. The record accepts the typing as it stands; tightening it is
+  a question for the numeric store, not for this task.
+- The record lists `atom_chars` failing on "a non-atom element, an atom
+  longer than one character"; the implementation also fails on a numeric
+  variable as `A` and refuses to make `A` numeric afterwards, which the
+  record implies (an atom is not a number) without stating.
+- The record calls the printing of residuals "goal form"; the JSON
+  `constraints` list carries them as strings, shape unchanged, as it does
+  for lengths and concatenations.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test` clean; all previous golden files byte-identical.
-- [ ] `aivolution lint .` clean; the five `affects` docs current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` clean (132 tests); every previous golden file
+      byte-identical.
+- [x] `aivolution lint .` clean; the five `affects` docs current.

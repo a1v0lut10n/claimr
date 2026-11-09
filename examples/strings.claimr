@@ -1,0 +1,35 @@
+% Strings and type relations (CLM-0017, docs/design/2026-11-09-strings-as-
+% character-lists-and-type-relations.md). A string literal is the list of
+% its characters as one-character atoms: "abc" is <a, b, c>, and prints so.
+% atom_chars(A, L) is the one bridge between an atom and its characters, a
+% delayed constraint. number/1, atom/1 and list/1 are constraints with
+% Prolog III's semantics; there is no var/1.
+append(<>, L, L).
+append(<H> . T, L, <H> . R) :- append(T, L, R).
+
+has_prefix(Id, Prefix) :- atom_chars(Id, Cs), { Cs = Prefix . S }.
+id_length(Id, N) :- atom_chars(Id, Cs), { N = |Cs| }.
+scheme(Id, Scheme) :- atom_chars(Id, Cs), append(Scheme, <':'> . R, Cs).
+
+?- { X = "abc" }.
+?- { X = "" }.
+?- { "ab" . "cd" = <a, b, c, d> }.
+?- has_prefix('doc:h3fa21c9d', "doc:").
+?- has_prefix('doc:h3fa21c9d', "cl-").
+?- id_length('doc:h3fa21c9d', N).
+?- scheme('doc:h3fa21c9d', S).
+?- atom_chars(hello, L).
+?- atom_chars(A, "abc").
+?- atom_chars(A, <a, X>), { X = b }.
+?- atom_chars(A, <a> . T).
+?- atom_chars(A, <a, 1>).
+?- number(3).
+?- number(X), { X = 3 }.
+?- atom('doc:x').
+?- atom(<>).
+?- atom(X).
+?- atom(X), { X = <a> }.
+?- list(<>).
+?- list(X), { X = <a> . T }.
+?- list(a).
+?- atom(X), number(X).

@@ -23,6 +23,13 @@ pub enum EvalError {
     /// list constructor (CLM-0014). `span` is the clause's position when the
     /// program was parsed with positions.
     ReservedName { name: String, span: Option<Span> },
+    /// A clause defines a predicate that is a built-in (CLM-0017):
+    /// `atom_chars/2`, `number/1`, `atom/1`, `list/1`.
+    ReservedBuiltin {
+        name: String,
+        arity: usize,
+        span: Option<Span>,
+    },
 }
 
 impl fmt::Display for EvalError {
@@ -46,6 +53,11 @@ impl fmt::Display for EvalError {
                 "`{}` is reserved (the list constructor) and cannot be defined as a predicate",
                 crate::ast::display_name(name)
             ),
+            EvalError::ReservedBuiltin { name, arity, .. } => write!(
+                f,
+                "`{}/{arity}` is a built-in predicate and cannot be defined",
+                crate::ast::display_name(name)
+            ),
         }
     }
 }
@@ -56,7 +68,7 @@ impl EvalError {
     /// there is one.
     pub fn span(&self) -> Option<Span> {
         match self {
-            EvalError::ReservedName { span, .. } => *span,
+            EvalError::ReservedName { span, .. } | EvalError::ReservedBuiltin { span, .. } => *span,
             EvalError::InitialStoreUnsatisfiable
             | EvalError::NonLinear { .. }
             | EvalError::CyclicAttributeTerm { .. } => None,

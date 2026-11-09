@@ -1,0 +1,44 @@
+?- { X = <a, b, c> }.
+X = <a, b, c>
+?- { X = <> }.
+X = <>
+?- { <a, b, c, d> = <a, b, c, d> }.
+true
+?- has_prefix('doc:h3fa21c9d', <d, o, c, ':'>).
+true
+?- has_prefix('doc:h3fa21c9d', <c, l, '-'>).
+false
+?- id_length('doc:h3fa21c9d', N).
+N = 13
+?- scheme('doc:h3fa21c9d', S).
+S = <d, o, c>
+?- atom_chars(hello, L).
+L = <h, e, l, l, o>
+?- atom_chars(A, <a, b, c>).
+A = abc
+?- atom_chars(A, <a, X>), { X = b }.
+A = ab, X = b
+?- atom_chars(A, <a> . T).
+atom_chars(A, <a> . T)
+?- atom_chars(A, <a, 1>).
+false
+?- number(3).
+true
+?- number(X), { X = 3 }.
+X = 3
+?- atom('doc:x').
+true
+?- atom(<>).
+false
+?- atom(X).
+atom(X)
+?- atom(X), { X = <a> }.
+false
+?- list(<>).
+true
+?- list(X), { X = <a> . T }.
+X = <a> . T
+?- list(a).
+false
+?- atom(X), number(X).
+false

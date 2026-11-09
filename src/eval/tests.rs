@@ -227,6 +227,145 @@ fn a_list_variable_aliased_to_another_shares_its_length() {
 }
 
 #[test]
+fn strings_are_character_lists() {
+    // CLM-0017: "abc" is <a, b, c>; escapes as in quoted atoms; prints as
+    // the list.
+    let out = answers(
+        r#"?- { X = "abc" }.
+           ?- { X = "" }.
+           ?- { X = "a\"b\\c" }.
+           ?- { "ab" = <a, b> }.
+           ?- { X = "ab" . "cd" }.
+           ?- { N = |"abc"| }."#,
+    );
+    assert_eq!(out[0], vec!["X = <a, b, c>"]);
+    assert_eq!(out[1], vec!["X = <>"]);
+    assert_eq!(out[2], vec!["X = <a, '\"', b, '\\\\', c>"]);
+    assert_eq!(out[3], vec!["true"]);
+    assert_eq!(out[4], vec!["X = <a, b, c, d>"]);
+    assert_eq!(out[5], vec!["N = 3"]);
+}
+
+#[test]
+fn atom_chars_is_a_delayed_constraint() {
+    let out = answers(
+        r#"append(<>, L, L).
+           append(<H> . T, L, <H> . R) :- append(T, L, R).
+           has_prefix(Id, Prefix) :- atom_chars(Id, Cs), { Cs = Prefix . S }.
+           id_length(Id, N) :- atom_chars(Id, Cs), { N = |Cs| }.
+           scheme(Id, Scheme) :- atom_chars(Id, Cs), append(Scheme, <':'> . R, Cs).
+           ?- atom_chars(hello, L).
+           ?- atom_chars(A, "abc").
+           ?- atom_chars(A, <>).
+           ?- atom_chars('', L).
+           ?- atom_chars(A, L).
+           ?- atom_chars(A, <a> . T).
+           ?- atom_chars(A, <a, X>), { X = b }.
+           ?- atom_chars(A, L), { A = ab }.
+           ?- atom_chars(A, L), { L = <x, y> }.
+           ?- has_prefix('doc:h3fa21c9d', "doc:").
+           ?- has_prefix('doc:h3fa21c9d', "cl-").
+           ?- id_length('doc:h3fa21c9d', N).
+           ?- scheme('doc:h3fa21c9d', S).
+           ?- atom_chars(A, <a, 1>).
+           ?- atom_chars(A, <ab>).
+           ?- atom_chars(3, L).
+           ?- atom_chars(f(a), L).
+           ?- atom_chars(<>, L).
+           ?- atom_chars(A, foo).
+           ?- atom_chars(A, L), { A > 1 }."#,
+    );
+    assert_eq!(out[0], vec!["L = <h, e, l, l, o>"]);
+    assert_eq!(out[1], vec!["A = abc"]);
+    assert_eq!(out[2], vec!["A = ''"]);
+    assert_eq!(out[3], vec!["L = <>"]);
+    assert_eq!(out[4], vec!["atom_chars(A, L)"]);
+    assert_eq!(out[5], vec!["atom_chars(A, <a> . T)"]);
+    assert_eq!(out[6], vec!["A = ab, X = b"]);
+    assert_eq!(out[7], vec!["A = ab, L = <a, b>"]);
+    assert_eq!(out[8], vec!["A = xy, L = <x, y>"]);
+    assert_eq!(out[9], vec!["true"]);
+    assert!(out[10].is_empty());
+    assert_eq!(out[11], vec!["N = 13"]);
+    assert_eq!(out[12], vec!["S = <d, o, c>"]);
+    for (i, failing) in out.iter().enumerate().skip(13) {
+        assert!(failing.is_empty(), "query {i} should fail: {failing:?}");
+    }
+}
+
+#[test]
+fn type_relations_are_constraints() {
+    let out = answers(
+        "?- number(3).
+         ?- number(a).
+         ?- number(<a>).
+         ?- number(X), { X = 3 }.
+         ?- number(X).
+         ?- atom(a).
+         ?- atom('doc:x').
+         ?- atom(3).
+         ?- atom(<>).
+         ?- atom(<a>).
+         ?- atom(X).
+         ?- atom(X), { X = a }.
+         ?- atom(X), { X = Y }, { Y = b }.
+         ?- list(<>).
+         ?- list(<a>).
+         ?- list(a).
+         ?- list(X), { X = <a> . T }.
+         ?- atom(X), { X = <a> }.
+         ?- atom(X), { X > 3 }.
+         ?- { X > 3 }, atom(X).
+         ?- list(X), { X = a }.
+         ?- number(X), atom(X).
+         ?- atom(X), number(X).
+         ?- atom(X), list(X).
+         ?- atom(X), { X = Y }, { Y = <> }.",
+    );
+    assert_eq!(out[0], vec!["true"]);
+    assert!(out[1].is_empty());
+    assert!(out[2].is_empty());
+    assert_eq!(out[3], vec!["X = 3"]);
+    assert_eq!(out[4], vec!["true"]);
+    assert_eq!(out[5], vec!["true"]);
+    assert_eq!(out[6], vec!["true"]);
+    assert!(out[7].is_empty());
+    assert!(out[8].is_empty());
+    assert!(out[9].is_empty());
+    assert_eq!(out[10], vec!["atom(X)"]);
+    assert_eq!(out[11], vec!["X = a"]);
+    assert_eq!(out[12], vec!["X = b, Y = b"]);
+    assert_eq!(out[13], vec!["true"]);
+    assert_eq!(out[14], vec!["true"]);
+    assert!(out[15].is_empty());
+    assert_eq!(out[16], vec!["X = <a> . T"]);
+    for (i, failing) in out.iter().enumerate().skip(17) {
+        assert!(failing.is_empty(), "query {i} should fail: {failing:?}");
+    }
+}
+
+#[test]
+fn built_in_names_cannot_be_defined() {
+    let clauses = parse_program_spanned("ok(a).\natom(X) :- ok(X).\n").expect("parses");
+    let err = Program::compile_spanned(&clauses).expect_err("reserved");
+    assert!(matches!(
+        err,
+        EvalError::ReservedBuiltin { ref name, arity: 1, .. } if name == "atom"
+    ));
+    let span = err.span().expect("positioned");
+    assert_eq!((span.line, span.column), (2, 1));
+    assert_eq!(
+        err.to_string(),
+        "`atom/1` is a built-in predicate and cannot be defined"
+    );
+    // Another arity is an ordinary predicate.
+    assert_eq!(
+        answers("list(X, Y) :- ok(X). ok(a). ?- list(a, b).")[0],
+        vec!["true"]
+    );
+}
+
+#[test]
 fn the_list_constructor_cannot_be_defined_as_a_predicate() {
     let clauses = parse_program_spanned("ok(a).\n'<>'(a, b).\n").expect("parses");
     let err = Program::compile_spanned(&clauses).expect_err("reserved");

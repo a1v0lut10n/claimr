@@ -92,7 +92,10 @@ Args: exprs=Expr+[Comma];
 // length of the list L, a numeric term; the bar opens and closes, and nests
 // (`||L||` is legal). CLM-0016 (stage 3): `X . Y` is the concatenation of
 // two lists, right-associative and looser than arithmetic; with a literal
-// tuple on the left it is the chain of stage 1. `<` `>` keep their relational meaning in Constraint and
+// tuple on the left it is the chain of stage 1. CLM-0017 (docs/design/
+// 2026-11-09-strings-as-character-lists-and-type-relations.md): a string
+// literal "abc" denotes the list of one-character atoms <a, b, c>; it is not
+// a term kind of its own. `<` `>` keep their relational meaning in Constraint and
 // `.` its terminator meaning after a clause: an Expr never meets either in
 // the same LR state (zero conflicts, checked with rcomp).
 Expr: left=Expr '+' right=Expr  {Add, left, 1}
@@ -108,6 +111,7 @@ Expr: left=Expr '+' right=Expr  {Add, left, 1}
     | tuple=Tuple                       {ListExpr}
     | left=Expr '.' right=Expr          {ConcatExpr, right, 0}
     | '|' inner=Expr '|'                {LenExpr}
+    | string=StringLit                  {StringExpr}
     ;
 
 // A literal tuple (its own rule since CLM-0014; kept so the actions see the
@@ -134,6 +138,9 @@ Ident: /[a-z][A-Za-z0-9_]*/;
 // character (\' is a quote, \\ a backslash).
 QuotedIdent: /'(?:[^'\\]|\\.)*'/;
 Var: /[A-Z][A-Za-z0-9_]*/;
+// CLM-0017: string literal — same escapes as a quoted atom (\" is a quote,
+// \\ a backslash); denotes the list of its characters as atoms.
+StringLit: /"(?:[^"\\]|\\.)*"/;
 // number ::= digit { digit } [ "." digit { digit } ]
 // Decimal literals denote EXACT rationals (18.5 is 37/2); there are no floats.
 Number: /[0-9]+(\.[0-9]+)?/;
