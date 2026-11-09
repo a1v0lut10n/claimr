@@ -89,6 +89,7 @@ expr           ::= expr "+" expr          (* left-assoc *)
                  | variable
                  | tuple                  (* CLM-0014: a list *)
                  | tuple "." expr         (* right-assoc, lowest: the chain then expr *)
+                 | "|" expr "|"           (* CLM-0015: the length of a list *)
 
 tuple          ::= "<" [ args ] ">"
 
@@ -126,6 +127,21 @@ that name. `<` and `>` keep their relational meaning in constraints and `.`
 its terminator meaning after a clause; a term is never followed by either, so
 the two roles never meet. A number literal needs digits on both sides of its
 point, so `<1> . 2` is a concatenation and `1.5` a number.
+
+**Length** (CLM-0015, stage 2 of the same record): `|L|` is a numeric term,
+admissible wherever a term is, denoting the length of the list `L`. Its
+value lives in the constraint store like any number, so `{ |L| >= 2 }`,
+`{ |Z| = |X| + |Y| }` and `{ |L| = N / 2 }` are ordinary linear constraints
+and residual constraints on lengths print as such (`|T| >= 1`). The length
+of a complete list folds to the number (`|<a, b>|` is `2`); the length of a
+partial list `<a> . T` is `1 + |T|`; two occurrences of `|T|` are one
+unknown. A length is implicitly non-negative, and one that becomes
+determined must be an integer, or the branch fails; the list of a
+determined length becomes a tuple of fresh variables (`{ |L| = 3 }` answers
+`L = <_1, _2, _3>`), Prolog III's solved form. `|L|` fails on a cyclic chain
+and on anything that is not a list (a number, an atom, another compound),
+so `||L||` fails. The bars nest in the grammar; a bar opens a term and the
+next unmatched bar closes it.
 
 Semantics of `number`: a literal denotes an **exact rational** — `18.5` is
 37/2, `0.10` is 1/10 — and integers are the denominator-1 case. There is no

@@ -12,9 +12,9 @@ use std::fmt;
 use crate::Number;
 use crate::solver::{LinExpr, SVar};
 
-use super::compile::LIST_LABEL;
 use super::project::{Projected, project};
 use super::store::{Addr, Cell, PendingDif, Store};
+use super::symbol::LIST_LABEL;
 use super::symbol::Symbols;
 
 /// One answer to a query.
@@ -411,6 +411,22 @@ fn public_names(
             slot.insert(rendered);
         }
     }
+    // CLM-0015: the length of a reachable unbound list variable is public,
+    // named `|L|` after the variable.
+    let mut len_named: Vec<(SVar, Addr)> = store
+        .lengths
+        .iter()
+        .filter(|e| e.pending && reachable.contains(&store.deref(e.list)))
+        .map(|e| (store.root(e.svar), e.list))
+        .collect();
+    len_named.sort();
+    len_named.dedup_by_key(|(r, _)| *r);
+    for (r, list) in len_named {
+        if let std::collections::btree_map::Entry::Vacant(slot) = names.entry(r) {
+            let rendered = format!("|{}|", p.render(list));
+            slot.insert(rendered);
+        }
+    }
     names
 }
 
@@ -432,15 +448,31 @@ fn render_numeric(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>)
     for e in &store.attrs {
         attr_render.entry(store.root(e.svar)).or_insert(e.term);
     }
+    // Lengths of list variables (CLM-0015): rendered `|L|`; their implicit
+    // lower bound `|L| >= 0` is part of the notation and is not printed.
+    let mut len_render: BTreeMap<SVar, Addr> = BTreeMap::new();
+    for e in store.lengths.iter().filter(|e| e.pending) {
+        len_render.entry(store.root(e.svar)).or_insert(e.list);
+    }
     for v in &survivors {
         if !names.contains_key(v) {
-            let n = match attr_render.get(v) {
-                Some(term) => p.render(*term),
-                None => p.fresh_name(),
+            let n = match (attr_render.get(v), len_render.get(v)) {
+                (Some(term), _) => p.render(*term),
+                (None, Some(list)) => format!("|{}|", p.render(*list)),
+                (None, None) => p.fresh_name(),
             };
             names.insert(*v, n);
         }
     }
+    let implicit_length_bound = |e: &LinExpr, strict: bool| -> bool {
+        !strict
+            && e.constant.is_zero()
+            && e.terms.len() == 1
+            && e.terms
+                .iter()
+                .next()
+                .is_some_and(|(v, a)| *a == Number::one() && len_render.contains_key(v))
+    };
 
     let render_expr = |e: &LinExpr| -> Option<String> {
         let mut out = String::new();
@@ -525,6 +557,7 @@ fn render_numeric(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>)
     // Inequalities, deterministic order.
     let mut lines: Vec<(SVar, bool, String)> = ineqs
         .iter()
+        .filter(|(e, strict)| !implicit_length_bound(e, *strict))
         .filter_map(|(e, strict)| {
             // e >= 0 (or > 0): orient by the leading coefficient's sign so a
             // single variable reads `X >= c` / `X <= c`; lower bounds first.

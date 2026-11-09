@@ -65,7 +65,7 @@ relop           ::= "=" | "!=" | "<" | ">" | "<=" | ">="
 
 expr           ::= expr ("+" | "-") expr | expr ("*" | "/") expr | "-" expr
                  | "(" expr ")" | name | number | atom | variable
-                 | tuple | tuple "." expr
+                 | tuple | tuple "." expr | "|" expr "|"
 tuple          ::= "<" [ args ] ">"
 
 name           ::= identifier | quoted_atom
@@ -77,7 +77,10 @@ Quoted atoms (`'situation:frame-in-spec'`, backslash escapes) admit any
 content as an atom — identity is content, quoting is spelling. Lists are
 Prolog III tuples: `<>` is the empty list, `<a, b, c>` a list, and
 `<a, b> . T` the chain `a`, `b` then `T` (the cons pattern in a head:
-`member(X, <X> . T).`); answers print lists the same way.
+`member(X, <X> . T).`); answers print lists the same way. `|L|` is the
+length of `L`, a number in the constraint store: `{ |L| >= 2 }` is an
+ordinary linear constraint, and a length that becomes determined makes its
+list a tuple of fresh variables (`{ |L| = 3 }` answers `L = <_1, _2, _3>`).
 
 ## Examples
 

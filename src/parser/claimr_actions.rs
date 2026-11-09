@@ -258,6 +258,10 @@ pub fn expr_list_tail_expr(_ctx: &Ctx, mut tuple: Tuple, tail: Expr) -> Expr {
         }
     }
 }
+/// CLM-0015: `|L|` — the length of the list `L`, a numeric term.
+pub fn expr_len_expr(_ctx: &Ctx, inner: Expr) -> Expr {
+    ast::Expr::Len(Box::new(inner))
+}
 /// The items of a literal tuple `<a, b, c>` (`<>` has none).
 pub type Tuple = Vec<ast::Expr>;
 pub fn tuple_c1(_ctx: &Ctx, items: ArgsOpt) -> Tuple {

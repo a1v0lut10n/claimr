@@ -68,6 +68,9 @@ pub enum Expr {
         items: Vec<Expr>,
         tail: Option<Box<Expr>>,
     },
+    /// The length of a list (CLM-0015): `|L|`, a numeric term whose value
+    /// lives in the constraint store.
+    Len(Box<Expr>),
 }
 
 /// Binary arithmetic operators.
@@ -175,6 +178,7 @@ impl Expr {
                 write!(f, " {op} ")?;
                 right.fmt_prec(f, prec + 1)?;
             }
+            Expr::Len(e) => write!(f, "|{e}|")?,
             Expr::List { items, tail } => {
                 f.write_str("<")?;
                 for (i, item) in items.iter().enumerate() {

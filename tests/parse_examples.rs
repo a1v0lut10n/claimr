@@ -114,6 +114,23 @@ fn list_notation_parses_to_list_terms() {
 }
 
 #[test]
+fn length_bars_parse_as_a_numeric_term() {
+    // CLM-0015: `|L|` is an atomic term; the bars nest.
+    let clauses =
+        parse_program("p(|L|, |<a> . T| + 1, ||L||) :- { |L| >= 2 * |T| }.\n").expect("parses");
+    let Clause::ConstraintRule { head, .. } = &clauses[0] else {
+        panic!("a constraint rule")
+    };
+    assert_eq!(head.args[0], Expr::Len(Box::new(Expr::Var("L".into()))));
+    assert!(matches!(&head.args[1], Expr::Binary { left, .. } if matches!(**left, Expr::Len(_))));
+    assert!(matches!(&head.args[2], Expr::Len(inner) if matches!(**inner, Expr::Len(_))));
+    assert_eq!(
+        clauses[0].to_string(),
+        "p(|L|, |<a> . T| + 1, ||L||) :- { |L| >= 2 * |T| }."
+    );
+}
+
+#[test]
 fn every_example_file_parses() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
     let mut seen = 0;

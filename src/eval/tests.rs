@@ -76,6 +76,66 @@ fn lists_print_in_their_notation() {
 }
 
 #[test]
+fn list_lengths_are_numeric_terms() {
+    // CLM-0015: |L| lives in the store; ground lengths fold; a determined
+    // length makes the list a tuple of fresh variables; non-integers,
+    // negatives, cycles and non-lists fail.
+    let out = answers(
+        "?- { N = |<a, b, c>| }.
+         ?- { N = |<>| }.
+         ?- { |L| > 2 }.
+         ?- { N = |L| }.
+         ?- { L = <1> . T, |L| = N }.
+         ?- { |L| = 3 }.
+         ?- { |L| = N / 2, N = 6 }.
+         ?- { |L| = 1 / 2 }.
+         ?- { |L| = -1 }.
+         ?- { X = <1> . X, N = |X| }.
+         ?- { N = |foo| }.
+         ?- { N = |f(a)| }.
+         ?- { N = |5| }.
+         ?- { N = ||L|| }.
+         ?- { |Z| = |X| + |Y|, Z = <a, b, c>, X = <a> }.
+         ?- { |L| + |M| = 3, |L| = |M| }.
+         ?- { L = <a> . T, |T| = 2 }.
+         ?- { |L| >= 2, L = <a> }.
+         ?- { |L| = |L| + 0, N = |L|, N > 1 }.",
+    );
+    assert_eq!(out[0], vec!["N = 3"]);
+    assert_eq!(out[1], vec!["N = 0"]);
+    assert_eq!(out[2], vec!["|L| > 2"]);
+    assert_eq!(out[3], vec!["N = |L|"]);
+    assert_eq!(out[4], vec!["L = <1> . T, N = |T| + 1"]);
+    assert_eq!(out[5], vec!["L = <_1, _2, _3>"]);
+    assert_eq!(out[6], vec!["L = <_1, _2, _3>, N = 6"]);
+    for (i, failing) in out.iter().enumerate().take(14).skip(7) {
+        assert!(failing.is_empty(), "query {i} should fail: {failing:?}");
+    }
+    assert_eq!(out[14], vec!["Z = <a, b, c>, X = <a>, Y = <_1, _2>"]);
+    // 3/2 is exact-determined only at answer time, and is not an integer.
+    assert!(out[15].is_empty());
+    assert_eq!(out[16], vec!["L = <a, _1, _2>, T = <_1, _2>"]);
+    assert!(out[17].is_empty());
+    assert_eq!(out[18], vec!["N = |L|, N > 1"]);
+}
+
+#[test]
+fn list_lengths_follow_backtracking() {
+    let out = answers(
+        "p(<a>). p(<b, c>). p(X).
+         at_least(L, K) :- { |L| >= K }.
+         ?- p(L), { |L| = 2 }.
+         ?- p(L), { |L| = N }, { N > 1 }.
+         ?- at_least(L, 2), { L = <a> . T }.
+         ?- at_least(<a>, 2).",
+    );
+    assert_eq!(out[0], vec!["L = <b, c>", "L = <_1, _2>"]);
+    assert_eq!(out[1], vec!["L = <b, c>, N = 2", "N = |L|, N > 1"]);
+    assert_eq!(out[2], vec!["L = <a> . T, |T| >= 1"]);
+    assert!(out[3].is_empty());
+}
+
+#[test]
 fn the_list_constructor_cannot_be_defined_as_a_predicate() {
     let clauses = parse_program_spanned("ok(a).\n'<>'(a, b).\n").expect("parses");
     let err = Program::compile_spanned(&clauses).expect_err("reserved");

@@ -1,0 +1,25 @@
+% List length (CLM-0015, docs/design/2026-11-09-lists-as-a-constraint-domain.md,
+% stage 2): |L| is a numeric term — the length of L lives in the constraint
+% store, so lengths take part in linear constraints like any number. A length
+% that becomes determined makes its list a tuple of fresh variables; a
+% length must be a non-negative integer; |L| fails on a cyclic chain or a
+% non-list.
+at_least(L, K) :- { |L| >= K }.
+same_length(X, Y) :- { |X| = |Y| }.
+
+?- { N = |<a, b, c>| }.
+?- { |L| = 3 }.
+?- { L = <1> . T, |L| = N }.
+?- { |L| > 2 }.
+?- at_least(<a, b, c>, 2).
+?- at_least(<a>, 2).
+?- at_least(L, 2), { L = <a> . T }.
+?- same_length(<a, b>, Y).
+?- same_length(X, Y), { X = <1> . X1, Y = <2, 3> }.
+?- { |Z| = |X| + |Y|, X = <a>, Y = <b, c> }.
+?- { |Z| = |X| + |Y|, Z = <a, b, c>, X = <a> }.
+?- { |L| = N / 2, N = 6 }.
+?- { |L| = 1 / 2 }.
+?- { |L| + |M| = 3, |L| = |M| }.
+?- { X = <1> . X, N = |X| }.
+?- { N = |foo| }.

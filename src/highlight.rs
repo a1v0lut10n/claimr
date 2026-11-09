@@ -128,8 +128,8 @@ pub fn line_tokens(line: &str) -> Vec<Token> {
             continue;
         }
         // Operators, longest first (the grammar's exact set).
-        const OPS: [&str; 13] = [
-            ":-", "?-", "=>", "!=", "<=", ">=", "=", "<", ">", "+", "-", "*", "/",
+        const OPS: [&str; 14] = [
+            ":-", "?-", "=>", "!=", "<=", ">=", "=", "<", ">", "+", "-", "*", "/", "|",
         ];
         if let Some(op) = OPS.iter().find(|op| line[i..].starts_with(**op)) {
             out.push(Token {

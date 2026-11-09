@@ -18,7 +18,7 @@ use crate::number::Number;
 use crate::solver::{self, LinExpr, SVar, Simplex};
 
 use super::error::EvalError;
-use super::symbol::Symbol;
+use super::symbol::{LIST, Symbol};
 
 /// Address of a cell in the heap.
 pub type Addr = usize;
@@ -92,12 +92,35 @@ pub(crate) struct Product {
     pub pending: bool,
 }
 
+/// The length of a list variable (CLM-0015): `|list|` is the numeric heap
+/// variable `n` (solver variable `svar`, bounded below by 0). The entry is
+/// pending until the spine of `list` is known to end in `'<>'` or in another
+/// list variable, whose entry then carries the unknown on.
+#[derive(Debug, Clone)]
+pub(crate) struct Length {
+    pub list: Addr,
+    pub n: Addr,
+    pub svar: SVar,
+    pub pending: bool,
+}
+
+/// Where a `'<>'` spine ends.
+enum Spine {
+    /// A proper list of this many cells.
+    Nil(usize),
+    /// This many cells, then an unbound (non-numeric) variable.
+    Open(usize, Addr),
+    /// A cycle, or something that is not a list.
+    Bad,
+}
+
 /// Something suspended on a variable, to be re-examined when it is bound (or,
 /// for numeric variables, determined).
 #[derive(Debug, Clone, Copy)]
 enum Waker {
     Dif(DifId),
     Attr(usize),
+    Len(usize),
 }
 
 #[derive(Debug)]
@@ -113,6 +136,8 @@ enum Undo {
     Fired(Addr),
     Alias(SVar),
     AttrTouched(usize),
+    LengthPending(usize),
+    LenIndex(Addr),
 }
 
 /// A point in the store's history to return to.
@@ -124,6 +149,7 @@ pub struct Mark {
     attrs: usize,
     numdifs: usize,
     products: usize,
+    lengths: usize,
     simplex: solver::Mark,
 }
 
@@ -147,6 +173,11 @@ pub struct Store {
     attr_index: HashMap<AttrKey, SVar>,
     pub(crate) numdifs: Vec<NumDif>,
     pub(crate) products: Vec<Product>,
+    /// List lengths registered so far (CLM-0015).
+    pub(crate) lengths: Vec<Length>,
+    /// Unbound list variable → its length entry, so every `|T|` of one
+    /// variable is one unknown.
+    len_index: HashMap<Addr, usize>,
     /// Original definition of each slack/defined solver variable, for printing.
     pub(crate) defs: BTreeMap<SVar, LinExpr>,
     /// Solver variables equated by `equate`: child → parent (union-find, no
@@ -230,6 +261,7 @@ impl Store {
             attrs: self.attrs.len(),
             numdifs: self.numdifs.len(),
             products: self.products.len(),
+            lengths: self.lengths.len(),
             simplex: self.simplex.mark(),
         }
     }
@@ -278,6 +310,14 @@ impl Store {
                 Undo::AttrTouched(id) => {
                     self.attr_touched.remove(&id);
                 }
+                Undo::LengthPending(id) => {
+                    if id < self.lengths.len() {
+                        self.lengths[id].pending = true;
+                    }
+                }
+                Undo::LenIndex(v) => {
+                    self.len_index.remove(&v);
+                }
             }
         }
         self.heap.truncate(mark.heap);
@@ -285,6 +325,7 @@ impl Store {
         self.attrs.truncate(mark.attrs);
         self.numdifs.truncate(mark.numdifs);
         self.products.truncate(mark.products);
+        self.lengths.truncate(mark.lengths);
         self.simplex.undo_to(mark.simplex);
         self.woken.clear();
         self.touched.clear();
@@ -370,6 +411,7 @@ impl Store {
         let dup = list.iter().any(|x| match (x, &w) {
             (Waker::Dif(a), Waker::Dif(b)) => a == b,
             (Waker::Attr(a), Waker::Attr(b)) => a == b,
+            (Waker::Len(a), Waker::Len(b)) => a == b,
             _ => false,
         });
         if dup {
@@ -561,6 +603,7 @@ impl Store {
                 let ok = match w {
                     Waker::Dif(id) => !self.difs[id].pending || self.check_dif(id),
                     Waker::Attr(id) => self.recanonicalize(id),
+                    Waker::Len(id) => self.recheck_len(id),
                 };
                 if !ok {
                     return false;
@@ -695,6 +738,7 @@ impl Store {
                 let ok = match w {
                     Waker::Dif(id) => !self.difs[id].pending || self.check_dif(id),
                     Waker::Attr(id) => self.recanonicalize(id),
+                    Waker::Len(id) => self.recheck_len(id),
                 };
                 if !ok {
                     return false;
@@ -1020,6 +1064,127 @@ impl Store {
             .find_map(|v| self.cheap_value(v))
     }
 
+    // --- list lengths (CLM-0015) -------------------------------------------
+
+    /// Follow the `'<>'` spine from `a`.
+    fn walk_spine(&self, a: Addr) -> Spine {
+        let mut seen: HashSet<Addr> = HashSet::new();
+        let mut k = 0;
+        let mut cur = a;
+        loop {
+            let d = self.deref(cur);
+            match &self.heap[d] {
+                Cell::Struct(f, args) if *f == LIST && args.len() == 2 => {
+                    if !seen.insert(d) {
+                        return Spine::Bad;
+                    }
+                    k += 1;
+                    cur = args[1];
+                }
+                Cell::Const(c) if *c == LIST => return Spine::Nil(k),
+                Cell::Var(_) if !self.numvar.contains_key(&d) => return Spine::Open(k, d),
+                _ => return Spine::Bad,
+            }
+        }
+    }
+
+    /// The length entry of the unbound list variable `v`, created if new:
+    /// a numeric heap variable bounded below by 0, suspended on `v` (its
+    /// spine) and on itself (its determination).
+    fn length_entry(&mut self, v: Addr) -> usize {
+        if let Some(id) = self.len_index.get(&v) {
+            return *id;
+        }
+        let n = self.new_var();
+        let svar = self.simplex.new_var();
+        self.set_numvar(n, svar);
+        // A fresh variable's first bound cannot fail.
+        self.simplex
+            .assert_constraint(&LinExpr::var(svar), solver::RelOp::Ge);
+        let id = self.lengths.len();
+        self.lengths.push(Length {
+            list: v,
+            n,
+            svar,
+            pending: true,
+        });
+        self.len_index.insert(v, id);
+        self.trail.push(Undo::LenIndex(v));
+        self.suspend(Waker::Len(id), v);
+        self.suspend(Waker::Len(id), n);
+        id
+    }
+
+    /// `|a|` as a heap address: a number when the spine is complete (the
+    /// ground length folds, like ground arithmetic), else a numeric variable
+    /// equal to the cells counted plus the length of the open tail. `None`
+    /// when `a` is cyclic or not a list.
+    pub fn post_len(&mut self, a: Addr) -> Option<Addr> {
+        match self.walk_spine(a) {
+            Spine::Nil(k) => Some(self.new_num(Number::from_ratio(k, 1)?)),
+            Spine::Open(k, v) => {
+                let id = self.length_entry(v);
+                let Length { n, svar, .. } = self.lengths[id].clone();
+                if k == 0 {
+                    return Some(n);
+                }
+                let mut e = LinExpr::var(svar);
+                e.constant = Number::from_ratio(k, 1)?;
+                Some(self.define_fresh(e))
+            }
+            Spine::Bad => None,
+        }
+    }
+
+    /// A length entry's list variable was bound, or its length determined.
+    /// Bound: the spine is followed and `|list| = k` or `|list| = k + |tail|`
+    /// asserted; a cycle or a non-list fails. Determined while the list is
+    /// still unbound: the value must be a non-negative integer `n`, and the
+    /// list becomes `<_1, …, _n>` (Prolog III's solved form for a list of
+    /// known length), which re-fires this waker to close the entry.
+    fn recheck_len(&mut self, id: usize) -> bool {
+        if id >= self.lengths.len() || !self.lengths[id].pending {
+            return true;
+        }
+        let Length { list, svar, .. } = self.lengths[id].clone();
+        let d = self.deref(list);
+        if self.is_unbound_var(d) {
+            let Some(c) = self.class_value(svar) else {
+                return true;
+            };
+            let Some(k) = as_count(&c) else {
+                return false;
+            };
+            let mut t = self.new_const(LIST);
+            for _ in 0..k {
+                let h = self.new_var();
+                t = self.new_struct(LIST, vec![h, t]);
+            }
+            return self.unify(d, t);
+        }
+        let mut e = LinExpr::var(svar);
+        match self.walk_spine(d) {
+            Spine::Nil(k) => {
+                let Some(k) = Number::from_ratio(k, 1) else {
+                    return false;
+                };
+                e.constant = -k;
+            }
+            Spine::Open(k, v) => {
+                let Some(k) = Number::from_ratio(k, 1) else {
+                    return false;
+                };
+                let other = self.length_entry(v);
+                e.sub(&LinExpr::var(self.lengths[other].svar));
+                e.constant = -k;
+            }
+            Spine::Bad => return false,
+        }
+        self.lengths[id].pending = false;
+        self.trail.push(Undo::LengthPending(id));
+        self.assert_lin(e, solver::RelOp::Eq)
+    }
+
     // --- attribute terms ---------------------------------------------------
 
     /// Structural key of the term at `a` modulo bindings; `None` if cyclic.
@@ -1163,6 +1328,14 @@ impl Store {
             }
         }
     }
+}
+
+/// A non-negative integer as a count, if the number is one.
+fn as_count(c: &Number) -> Option<usize> {
+    if !c.is_integer() || c.is_negative() {
+        return None;
+    }
+    usize::try_from(c.numer()).ok()
 }
 
 #[cfg(test)]

@@ -17,7 +17,7 @@ use crate::number::Number;
 use super::error::EvalError;
 use super::machine::Solutions;
 use super::store::{Addr, Store};
-use super::symbol::{Symbol, Symbols};
+use super::symbol::{LIST_LABEL, Symbol, Symbols};
 
 /// A term template: variables are clause-local indices.
 #[derive(Debug, Clone)]
@@ -30,6 +30,8 @@ pub(crate) enum TTerm {
     Neg(Box<TTerm>),
     /// Binary arithmetic: lowered to a fresh numeric variable at instantiation.
     Arith(ArithOp, Box<TTerm>, Box<TTerm>),
+    /// List length `|L|` (CLM-0015): lowered to the list's length unknown.
+    Len(Box<TTerm>),
 }
 
 /// A body goal template.
@@ -100,10 +102,6 @@ impl VarMap {
     }
 }
 
-/// The reserved label of list cells and of the empty list (CLM-0014):
-/// `'<>'(H, T)` is a cell, the nullary `'<>'` the empty list.
-pub(crate) const LIST_LABEL: &str = "<>";
-
 struct Lowerer<'a> {
     symbols: &'a mut Symbols,
     vars: VarMap,
@@ -120,6 +118,7 @@ impl Lowerer<'_> {
             Expr::Binary { op, left, right } => {
                 TTerm::Arith(*op, Box::new(self.term(left)?), Box::new(self.term(right)?))
             }
+            Expr::Len(e) => TTerm::Len(Box::new(self.term(e)?)),
             // CLM-0014: `<a, b> . T` is the chain '<>'(a, '<>'(b, T)); a list
             // without a tail ends in the constant '<>'.
             Expr::List { items, tail } => {
@@ -365,6 +364,10 @@ pub(crate) fn build_with(
             let a = build_with(store, l, var)?;
             let b = build_with(store, r, var)?;
             store.post_arith(*op, a, b)?
+        }
+        TTerm::Len(e) => {
+            let a = build_with(store, e, var)?;
+            store.post_len(a)?
         }
     })
 }
