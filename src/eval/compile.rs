@@ -305,40 +305,54 @@ fn push_clause(preds: &mut HashMap<PredKey, Vec<TClause>>, clause: TClause) {
     preds.entry(key).or_default().push(clause);
 }
 
-/// Instantiate a template on the heap, allocating fresh variables on first
-/// use (structure copying). Arithmetic nodes become fresh numeric variables
-/// with their defining constraint posted immediately; `None` if that makes
-/// the store unsatisfiable (or raises a store error).
-pub(crate) fn build(store: &mut Store, t: &TTerm, vars: &mut [Option<Addr>]) -> Option<Addr> {
+/// Instantiate a template on the heap. `var(store, i)` supplies the heap
+/// address of clause variable `i`. Arithmetic nodes over numbers fold to
+/// numbers; others become fresh numeric variables with their defining
+/// constraint posted immediately; `None` if that makes the store
+/// unsatisfiable (or raises a store error).
+pub(crate) fn build_with(
+    store: &mut Store,
+    t: &TTerm,
+    var: &mut dyn FnMut(&mut Store, u32) -> Addr,
+) -> Option<Addr> {
     Some(match t {
-        TTerm::Var(i) => {
-            let slot = &mut vars[*i as usize];
-            match slot {
-                Some(a) => *a,
-                None => {
-                    let a = store.new_var();
-                    *slot = Some(a);
-                    a
-                }
-            }
-        }
+        TTerm::Var(i) => var(store, *i),
         TTerm::Number(n) => store.new_num(n.clone()),
         TTerm::Const(c) => store.new_const(*c),
         TTerm::Compound(f, args) => {
             let mut addrs = Vec::with_capacity(args.len());
             for a in args {
-                addrs.push(build(store, a, vars)?);
+                addrs.push(build_with(store, a, var)?);
             }
             store.new_struct(*f, addrs)
         }
         TTerm::Neg(e) => {
-            let a = build(store, e, vars)?;
+            let a = build_with(store, e, var)?;
             store.post_neg(a)?
         }
         TTerm::Arith(op, l, r) => {
-            let a = build(store, l, vars)?;
-            let b = build(store, r, vars)?;
+            let a = build_with(store, l, var)?;
+            let b = build_with(store, r, var)?;
             store.post_arith(*op, a, b)?
         }
     })
+}
+
+/// The heap address of clause variable `i` in a lazily allocated frame: a
+/// fresh variable on first use (structure copying).
+pub(crate) fn lazy_var(store: &mut Store, vars: &mut [Option<Addr>], i: u32) -> Addr {
+    let slot = &mut vars[i as usize];
+    match slot {
+        Some(a) => *a,
+        None => {
+            let a = store.new_var();
+            *slot = Some(a);
+            a
+        }
+    }
+}
+
+/// [`build_with`] over a lazily allocated frame.
+pub(crate) fn build(store: &mut Store, t: &TTerm, vars: &mut [Option<Addr>]) -> Option<Addr> {
+    build_with(store, t, &mut |store, i| lazy_var(store, vars, i))
 }

@@ -1,9 +1,10 @@
 ---
 type: architecture-component
-last-verified: 2026-08-18
+last-verified: 2026-11-09
 decisions:
   - docs/design/2026-08-17-evaluator.md
   - docs/design/2026-08-17-arithmetic-in-terms.md
+  - docs/design/2026-11-09-fold-ground-arithmetic-before-the-solver.md
 aspects: [answer-soundness, exact-arithmetic]
 ---
 
@@ -42,12 +43,20 @@ answers in solved form. Public surface (re-exported from `claimr`):
   facts form the **initial store**, validated satisfiable at compile time;
   `?-` clauses become `Query`s in source order. Arithmetic stays in the
   templates (`TTerm::Neg` / `TTerm::Arith`) and is lowered at instantiation
-  by `build`, which posts each node's defining constraint immediately (part
-  of the clause's constraint system, as in Prolog III's abstract machine)
-  and fails the step if that is unsatisfiable. `Number` literals unify
-  structurally (exact equality).
+  by `build_with`: a node whose operands are all numbers at that moment
+  folds to a `Num` cell (CLM-0013, no solver variable), any other node
+  posts its defining constraint immediately (part of the clause's
+  constraint system, as in Prolog III's abstract machine) and fails the
+  step if that is unsatisfiable. `Number` literals unify structurally
+  (exact equality).
 - **`machine.rs`** — the SLD machine: goals left to right, clauses in program
-  order, chronological backtracking through choice points and the trail;
+  order, chronological backtracking through choice points and the trail.
+  **Body goals are instantiated lazily** (CLM-0013): at clause entry the
+  clause's variables are allocated once into a shared frame and the head is
+  built from it for unification; each body goal's terms are built from the
+  frame when the goal reaches the front of the list, so arithmetic over
+  values bound by earlier goals folds instead of defining solver rows.
+  Query goals are built eagerly (their variables are the answer's);
   **iterative** (explicit goal list and choice-point stack — resolution depth
   never uses the Rust stack). An undefined predicate has no clauses and fails.
   `Solutions::with_interrupt(Arc<AtomicBool>)` installs a flag polled every

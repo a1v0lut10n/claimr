@@ -1,8 +1,9 @@
 ---
 type: architecture-component
-last-verified: 2026-08-18
+last-verified: 2026-11-09
 decisions:
   - docs/design/2026-08-17-evaluator.md
+  - docs/design/2026-11-09-fold-ground-arithmetic-before-the-solver.md
   - docs/design/2026-08-17-arithmetic-in-terms.md
   - docs/design/2026-08-17-exact-rational-arithmetic.md
 aspects: [exact-arithmetic, answer-soundness]
@@ -74,11 +75,19 @@ Claimr's constraint store. Two layers:
   tree disequation, and rejects a non-linear residue.
 - **Alias classes.** `equate(a, b)` asserts `a − b = 0` through a defined
   slack and records `b → a`; printing treats a class as one variable.
+- **Ground arithmetic never reaches the solver** (CLM-0013,
+  `2026-11-09-fold-ground-arithmetic-before-the-solver.md`): when every
+  operand of `+ - * /` or unary `-` is a number at instantiation,
+  `post_arith`/`post_neg` compute the exact rational and bind a `Num` cell —
+  no solver variable, no row. Ground division by zero fails there. Only
+  terms with an unbound or attribute operand are lowered.
 - **Backtracking.** Bounds are trailed in the simplex; the registry, numeric
   variable map, disequations, products, aliases and "fired" set are trailed
   in the store; rows and solver variables created since a mark **persist**
-  (relaxed bounds make them inert) — memory grows with a query's search,
-  which is acceptable at Claimr's scale and noted for later work.
+  (relaxed bounds make them inert) and `update` walks every row, so their
+  number is a cost, not just memory. Since CLM-0013 that cost arises only
+  for non-ground arithmetic under search; truncating the tableau on undo is
+  the deferred structural fix (see the design record).
 
 ## Answer rendering
 
