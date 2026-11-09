@@ -837,6 +837,13 @@ impl Store {
         let mark = self.mark();
         let r = (|| {
             let mut e = self.unknown_of(a)?;
+            // Ground arithmetic folds to a number: no solver variable, no
+            // row (design record 2026-11-09-fold-ground-arithmetic-before-
+            // the-solver.md).
+            if let Some(c) = e.as_constant() {
+                let v = -c;
+                return Some(self.new_num(v));
+            }
             e.negate();
             Some(self.define_fresh(e))
         })();
@@ -853,6 +860,18 @@ impl Store {
         let r = (|| {
             let la = self.unknown_of(a)?;
             let lb = self.unknown_of(b)?;
+            // Ground arithmetic folds to a number: no solver variable, no
+            // row (design record 2026-11-09-fold-ground-arithmetic-before-
+            // the-solver.md). Division by zero fails, as below.
+            if let (Some(x), Some(y)) = (la.as_constant(), lb.as_constant()) {
+                let v = match op {
+                    ArithOp::Add => x + y,
+                    ArithOp::Sub => x - y,
+                    ArithOp::Mul => x * y,
+                    ArithOp::Div => x.checked_div(y)?,
+                };
+                return Some(self.new_num(v));
+            }
             match op {
                 ArithOp::Add => {
                     let mut e = la;
@@ -1314,5 +1333,47 @@ mod tests {
         assert!(st.post_eq(z, one));
         assert!(st.post_eq(w, two)); // now decidably different: dropped
         assert!(st.pending_difs().is_empty());
+    }
+
+    #[test]
+    fn ground_arithmetic_folds_without_solver_variables() {
+        let mut st = Store::new();
+        let n = |k: i64| Number::from_ratio(k, 1).unwrap();
+        let before = st.simplex.num_vars();
+        let ten = st.new_num(n(10));
+        let three = st.new_num(n(3));
+        let zero = st.new_num(n(0));
+
+        let prod = st.post_arith(ArithOp::Mul, ten, three).unwrap();
+        assert!(matches!(&st.heap[st.deref(prod)], Cell::Num(v) if *v == n(30)));
+        let quot = st.post_arith(ArithOp::Div, ten, three).unwrap();
+        assert!(matches!(
+            &st.heap[st.deref(quot)],
+            Cell::Num(v) if *v == Number::from_ratio(10, 3).unwrap()
+        ));
+        let neg = st.post_neg(quot).unwrap();
+        assert!(matches!(
+            &st.heap[st.deref(neg)],
+            Cell::Num(v) if *v == Number::from_ratio(-10, 3).unwrap()
+        ));
+        let sum = st.post_arith(ArithOp::Add, prod, neg).unwrap();
+        assert!(matches!(
+            &st.heap[st.deref(sum)],
+            Cell::Num(v) if *v == Number::from_ratio(80, 3).unwrap()
+        ));
+        assert_eq!(
+            st.simplex.num_vars(),
+            before,
+            "ground terms allocate nothing"
+        );
+
+        // Ground division by zero fails and allocates nothing.
+        assert!(st.post_arith(ArithOp::Div, ten, zero).is_none());
+        assert_eq!(st.simplex.num_vars(), before);
+
+        // A non-ground operand still goes to the solver.
+        let x = st.new_var();
+        st.post_arith(ArithOp::Mul, ten, x).unwrap();
+        assert!(st.simplex.num_vars() > before);
     }
 }

@@ -225,6 +225,36 @@ fn arithmetic_in_heads_and_arguments() {
 }
 
 #[test]
+fn ground_arithmetic_folds_to_numbers() {
+    // CLM-0013: no solver row is made for arithmetic over numbers, and the
+    // answers are what the solver would have printed.
+    assert_eq!(first("?- { X = 2 * 3 + 4 / 2 }."), "X = 8");
+    assert_eq!(first("?- { X = -(1 / 3) * 3 }."), "X = -1");
+    assert_eq!(first("?- { 10 * 3 > 10 * 2 }."), "true");
+    assert_eq!(first("?- { 10 * 2 > 10 * 3 }."), "");
+    assert_eq!(first("?- { X = 1 / 0 }."), "");
+    assert_eq!(first("?- { X = 7 / 2 + 1 / 2 }."), "X = 4");
+}
+
+#[test]
+fn body_goals_are_instantiated_when_reached() {
+    // CLM-0013: a body goal's terms are built when the goal runs, so
+    // arithmetic over values bound by earlier goals folds, and variables that
+    // first appear in a later goal are shared across the clause as before.
+    let out = answers(
+        "kn(a, 181, 199). kn(b, 250, 120). kn(c, 7, 10).
+         violation(C) :- kn(C, K, N), { 10 * K > 7 * N }.
+         chain(X) :- step(Y), link(Y, X), { X > Y }.
+         step(1). step(5).
+         link(1, 3). link(5, 2). link(5, 9).
+         ?- violation(C).
+         ?- chain(X).",
+    );
+    assert_eq!(out[0], vec!["C = a", "C = b"]);
+    assert_eq!(out[1], vec!["X = 3", "X = 9"]);
+}
+
+#[test]
 fn inequalities_bounds_and_residuals() {
     assert_eq!(first("?- { X >= 3, X <= 3 }."), "X = 3");
     assert_eq!(first("?- { X > 3, X < 3 }."), "");

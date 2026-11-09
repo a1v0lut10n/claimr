@@ -4,22 +4,29 @@
 //! chronological backtracking through choice points and the store's trail.
 //! Iterative — resolution depth never touches the Rust stack.
 //!
-//! A resolution step is taken only if head unification, the clause's
-//! arithmetic definitions and any constraint goals reached leave the store
-//! satisfiable; before an answer is yielded the store is finalized (exact
-//! determination, disequation re-checks) — `answer-soundness`.
+//! A resolution step is taken only if head unification, and later each body
+//! goal as it is reached, leave the store satisfiable; before an answer is
+//! yielded the store is finalized (exact determination, disequation
+//! re-checks) — `answer-soundness`.
+//!
+//! Body goals are instantiated **lazily**: a clause's variables are allocated
+//! once into a frame at clause entry (the head is built from it for
+//! unification), and each goal's terms are built from the frame when the goal
+//! reaches the front of the list. By then the preceding goals have bound what
+//! they bind, so arithmetic over values known at that point folds to numbers
+//! instead of defining solver rows (CLM-0013).
 
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::answer::{Answer, render_answer, render_terms};
-use super::compile::{PredKey, Program, Query, TGoal, build};
+use super::compile::{PredKey, Program, Query, TGoal, build_with, lazy_var};
 use super::error::EvalError;
 use super::store::{Addr, Cell, Mark, Store};
 use crate::ast::RelOp;
 
-/// A runtime goal.
+/// An instantiated runtime goal.
 #[derive(Debug, Clone, Copy)]
 enum RtGoal {
     Call(Addr),
@@ -28,22 +35,33 @@ enum RtGoal {
     Rel(RelOp, Addr, Addr),
 }
 
-/// Persistent goal list: cheap to snapshot into choice points.
-type Goals = Option<Rc<GoalNode>>;
+/// A clause's variables, allocated once at clause entry.
+type Frame = Rc<[Addr]>;
 
-#[derive(Debug)]
-struct GoalNode {
-    goal: RtGoal,
-    next: Goals,
+/// A goal in the list: already instantiated (query goals), or a clause body
+/// goal still to be built from its clause's frame when it is reached.
+#[derive(Debug, Clone)]
+enum Goal<'p> {
+    Built(RtGoal),
+    Pending { frame: Frame, goal: &'p TGoal },
 }
 
-fn cons(goal: RtGoal, next: Goals) -> Goals {
+/// Persistent goal list: cheap to snapshot into choice points.
+type Goals<'p> = Option<Rc<GoalNode<'p>>>;
+
+#[derive(Debug)]
+struct GoalNode<'p> {
+    goal: Goal<'p>,
+    next: Goals<'p>,
+}
+
+fn cons<'p>(goal: Goal<'p>, next: Goals<'p>) -> Goals<'p> {
     Some(Rc::new(GoalNode { goal, next }))
 }
 
-struct ChoicePoint {
+struct ChoicePoint<'p> {
     /// Goals remaining after the call being retried.
-    rest: Goals,
+    rest: Goals<'p>,
     call: Addr,
     key: PredKey,
     next_clause: usize,
@@ -57,8 +75,8 @@ struct ChoicePoint {
 pub struct Solutions<'p> {
     program: &'p Program,
     store: Store,
-    goals: Goals,
-    choice_points: Vec<ChoicePoint>,
+    goals: Goals<'p>,
+    choice_points: Vec<ChoicePoint<'p>>,
     query_vars: Vec<(String, Addr)>,
     started: bool,
     exhausted: bool,
@@ -77,12 +95,13 @@ impl<'p> Solutions<'p> {
         debug_assert!(initial_ok, "initial store validated at compile time");
         store.set_baseline();
         let mut vars = vec![None; query.var_names.len()];
-        let mut goals: Goals = None;
+        let mut goals: Goals<'p> = None;
         let mut ok = initial_ok;
-        // Build in source order (definitions post in order), then link reversed.
+        // Query goals are built eagerly (their variables are the answer's), in
+        // source order so definitions post in order; then link reversed.
         let mut built = Vec::with_capacity(query.goals.len());
         for g in &query.goals {
-            match instantiate_goal(&mut store, g, &mut vars) {
+            match instantiate_goal(&mut store, g, &mut |store, i| lazy_var(store, &mut vars, i)) {
                 Some(rg) => built.push(rg),
                 None => {
                     ok = false;
@@ -91,7 +110,7 @@ impl<'p> Solutions<'p> {
             }
         }
         for rg in built.into_iter().rev() {
-            goals = cons(rg, goals);
+            goals = cons(Goal::Built(rg), goals);
         }
         let query_vars = query
             .var_names
@@ -154,14 +173,17 @@ impl<'p> Solutions<'p> {
     }
 
     /// Try clauses `from..` of `key` against `call`; on success install the
-    /// clause body in front of `rest` (and a choice point if clauses remain).
-    fn try_clauses(&mut self, key: PredKey, from: usize, call: Addr, rest: Goals) -> bool {
-        let clauses = self.program.clauses(&key);
+    /// clause body, pending on the clause's frame, in front of `rest` (and a
+    /// choice point if clauses remain).
+    fn try_clauses(&mut self, key: PredKey, from: usize, call: Addr, rest: Goals<'p>) -> bool {
+        let program: &'p Program = self.program;
+        let clauses = program.clauses(&key);
         for j in from..clauses.len() {
             let mark = self.store.mark();
             let clause = &clauses[j];
-            let mut vars = vec![None; clause.nvars as usize];
-            let Some(head) = build(&mut self.store, &clause.head, &mut vars) else {
+            let frame: Frame = (0..clause.nvars).map(|_| self.store.new_var()).collect();
+            let head = build_with(&mut self.store, &clause.head, &mut |_, i| frame[i as usize]);
+            let Some(head) = head else {
                 self.store.undo_to(&mark);
                 if self.store.error.is_some() {
                     return false;
@@ -170,25 +192,6 @@ impl<'p> Solutions<'p> {
             };
             if !self.store.post_eq(head, call) {
                 self.store.undo_to(&mark);
-                continue;
-            }
-            // Instantiate the body (posting its arithmetic definitions).
-            let mut body = Vec::with_capacity(clause.body.len());
-            let mut ok = true;
-            for g in &clause.body {
-                match instantiate_goal(&mut self.store, g, &mut vars) {
-                    Some(rg) => body.push(rg),
-                    None => {
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-            if !ok {
-                self.store.undo_to(&mark);
-                if self.store.error.is_some() {
-                    return false;
-                }
                 continue;
             }
             if j + 1 < clauses.len() {
@@ -201,8 +204,14 @@ impl<'p> Solutions<'p> {
                 });
             }
             let mut goals = rest;
-            for rg in body.into_iter().rev() {
-                goals = cons(rg, goals);
+            for g in clause.body.iter().rev() {
+                goals = cons(
+                    Goal::Pending {
+                        frame: frame.clone(),
+                        goal: g,
+                    },
+                    goals,
+                );
             }
             self.goals = goals;
             return true;
@@ -244,7 +253,25 @@ impl<'p> Solutions<'p> {
                 continue;
             };
             let rest = node.next.clone();
-            let ok = match node.goal {
+            // A pending body goal is built now, from its clause's frame.
+            let goal = match &node.goal {
+                Goal::Built(g) => *g,
+                Goal::Pending { frame, goal } => {
+                    let frame = frame.clone();
+                    let built =
+                        instantiate_goal(&mut self.store, goal, &mut |_, i| frame[i as usize]);
+                    match built {
+                        Some(g) => g,
+                        None => {
+                            if self.store.error.is_some() || !self.backtrack() {
+                                return false;
+                            }
+                            continue;
+                        }
+                    }
+                }
+            };
+            let ok = match goal {
                 RtGoal::Call(call) => {
                     let key = pred_key(&self.store, call);
                     self.try_clauses(key, 0, call, rest)
@@ -314,22 +341,27 @@ impl Iterator for Solutions<'_> {
     }
 }
 
-fn instantiate_goal(store: &mut Store, g: &TGoal, vars: &mut [Option<Addr>]) -> Option<RtGoal> {
+/// Build a goal's terms; `var` resolves clause variables (see `build_with`).
+fn instantiate_goal(
+    store: &mut Store,
+    g: &TGoal,
+    var: &mut dyn FnMut(&mut Store, u32) -> Addr,
+) -> Option<RtGoal> {
     Some(match g {
-        TGoal::Call(t) => RtGoal::Call(build(store, t, vars)?),
+        TGoal::Call(t) => RtGoal::Call(build_with(store, t, var)?),
         TGoal::Eq(a, b) => {
-            let a = build(store, a, vars)?;
-            let b = build(store, b, vars)?;
+            let a = build_with(store, a, var)?;
+            let b = build_with(store, b, var)?;
             RtGoal::Eq(a, b)
         }
         TGoal::Dif(a, b) => {
-            let a = build(store, a, vars)?;
-            let b = build(store, b, vars)?;
+            let a = build_with(store, a, var)?;
+            let b = build_with(store, b, var)?;
             RtGoal::Dif(a, b)
         }
         TGoal::Rel(op, a, b) => {
-            let a = build(store, a, vars)?;
-            let b = build(store, b, vars)?;
+            let a = build_with(store, a, var)?;
+            let b = build_with(store, b, var)?;
             RtGoal::Rel(*op, a, b)
         }
     })
