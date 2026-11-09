@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: task
-status: in-progress
+status: done
 affects:
   - docs/reference/grammar.md
   - docs/reference/json-output.md
@@ -44,66 +44,77 @@ deferred truncation forward; measured, not addressed, here).
 ## Action items
 
 1. **Grammar**: terminal `Bar: '|';` and `| '|' inner=Expr '|' {LenExpr}`
-   in `Expr`, default priority (it is an atomic form like `( … )`). Check
-   the `--dot` automaton for the states that shift or reduce on `Bar`:
-   the lesson of CLM-0014 is that a zero-conflict report is not enough
-   once productions carry priorities.
+   in `Expr`, default priority. The `--dot` automaton (rustemo 0.9.1, 59
+   productions, 92 states) has `Bar` only as a shift, and the tuple-dot
+   decision inside `|…|` still falls after `>`; no action was removed by
+   priority resolution. **Done.**
 2. **AST and actions**: `Expr::Len(Box<Expr>)`, Display `|e|` at atomic
-   precedence; `expr_len_expr`.
+   precedence; `expr_len_expr`. **Done.**
 3. **Compile**: `TTerm::Len(Box<TTerm>)`; `build_with` lowers it with
-   `Store::post_len`, which returns a heap address like `post_arith`.
-4. **Store** (`src/eval/store.rs`), the substance:
-   - `Length { list: Addr, n: Addr, svar: SVar, pending: bool }` entries
-     in `lengths`, trailed like products (count in `Mark`, pending flag
-     in `Undo`), plus `len_index: HashMap<Addr, usize>` from an unbound
-     list variable to its entry so that every `|T|` of the same variable
-     is the same unknown (trailed like the attribute index).
-   - `post_len(a)`: walk the `'<>'/2` spine from `a` counting cells,
-     with a visited set. Spine ends in `'<>'`: the length is ground and
-     **folds to a number** (no solver variable, as CLM-0013 does for
-     arithmetic). Ends in an unbound non-numeric variable `T`: the
-     result is `k + |T|`, where `|T|` is the entry's numeric heap
-     variable (created with `svar >= 0` asserted and `Waker::Len`
-     suspended on `T` and on `n`), as a `define_fresh` when `k > 0` and
-     the entry's own heap variable when `k = 0`. Ends in anything else
-     (a number, another constant, another compound, a numeric variable)
-     or revisits a cell: fail.
-   - `Waker::Len(id)` fired by binding `T`: walk from `T`'s new value;
-     `'<>'` after `k` cells asserts `|T| = k`; an unbound variable `U`
-     after `k` cells asserts `|T| = k + |U|` through `U`'s entry; a
-     cycle or non-list fails. The entry is then no longer pending.
-   - `Waker::Len(id)` fired by the determination of `n`: the value must
-     be a non-negative integer, else fail; if `T` is still unbound, bind
-     it to `<_1, …, _n>` with fresh variables — Prolog III's solved form
-     for a list of known length, and what stage 3 needs to complete a
-     concatenation. Determination is detected cheaply in `settle` and
-     exactly in `finalize`, like every other numeric variable.
-5. **Answers** (`src/eval/answer.rs`): the length of a reachable unbound
-   list variable is a public numeric variable named `|L|` (rendered with
-   the variable's answer name), beside heap numeric variables and
-   attribute terms; survivors that are lengths print the same way.
-   `{ |L| > 2 }` answers `|L| > 2`; `{ L = <1> . T, |L| = N }` answers
-   `N = |T| + 1`; `{ |L| = 3 }` answers `L = <_1, _2, _3>`.
-6. **Highlight**: `|` joins the operator set; the terminal-coverage test
-   then passes.
-7. **Example and tests**: `examples/lengths.claimr` with golden answers
-   (ground fold, partial list, residual bounds, length arithmetic,
-   determination to a tuple, non-integer and negative failures, cyclic
-   and non-list failures, congruence of two `|T|`); machine tests for
-   the same and for undo across backtracking; parse test for `|L|` in
-   arguments and constraints and its display; a JSON test that a length
-   residual appears in `constraints`.
-8. **Docs**: `grammar.md`, README grammar section, `evaluator.md`
-   (lowering), `solver.md` (the length entries beside attribute terms and
-   products, backtracking note), `json-output.md` (constraint strings may
-   carry `|L|` terms: a contract note, no shape change); plan to what was
-   built.
-9. **Measurement**: the CLM-0013 benchmark shape with a list field,
-   `{ |Keys| >= 2 }` over a few thousand facts, to see whether the
-   row-persistence cost the record anticipates shows up now.
+   `Store::post_len`. The list label is now interned first in every symbol
+   table (`symbol::LIST`, `LIST_LABEL` moved to `symbol.rs`) so the store
+   recognises and builds list cells without the table. **Done.**
+4. **Store** (`src/eval/store.rs`): `Length { list, n, svar, pending }`
+   entries in `lengths`, `len_index` from an unbound list variable to its
+   entry, `Waker::Len`, `Undo::LengthPending` / `Undo::LenIndex`, the count
+   in `Mark`. `walk_spine` classifies a term as `Nil(k)`, `Open(k, var)` or
+   `Bad`. `post_len`: `Nil` folds to a number, `Open` is the entry's heap
+   variable (`k = 0`) or a `define_fresh` of `k + |T|`, `Bad` fails.
+   `length_entry` asserts `>= 0` and suspends on the variable and on the
+   length. `recheck_len`: list still unbound and length determined to a
+   non-negative integer `n` → unify with `<_1, …, _n>` (anything else
+   fails); list bound → `|T| = k` or `|T| = k + |U|` asserted and the entry
+   closed; cycle or non-list fails. **Done.**
+5. **Answers**: `public_names` names the length of a reachable pending
+   entry `|L|`; survivors that are lengths print the same way; the
+   implicit `|L| >= 0` (a single length variable, coefficient 1, non-strict,
+   constant 0) is filtered from the printed inequalities. **Done.**
+6. **Highlight**: `|` in the operator set. **Done.**
+7. **Example and tests**: `examples/lengths.claimr` with golden answers;
+   machine tests `list_lengths_are_numeric_terms` (19 queries: ground fold,
+   residuals, partial list, determination to a tuple, fractional and
+   negative lengths, cycle, non-lists including `||L||`, length arithmetic,
+   exact-time determination to 3/2 failing) and
+   `list_lengths_follow_backtracking`; parse test
+   `length_bars_parse_as_a_numeric_term`; JSON test
+   `length_residuals_are_constraint_strings`. **Done.**
+8. **Docs**: `grammar.md`, README grammar section, `evaluator.md`,
+   `solver.md` (new *List lengths* bullet, backtracking note with the
+   measurement), `json-output.md` (constraint strings may carry `|T|`).
+   **Done.**
+9. **Measurement** (release build, `violation(C) :- kn(C, Keys),
+   { |Keys| < 2 }.`, one to three keys per fact, all answers):
+
+   | Facts  | complete lists `<k1, k2>` | open lists `<k1, k2> . T` |
+   |--------|---------------------------|---------------------------|
+   | 1 820  | 0.02 s                    | 0.04 s                    |
+   | 3 640  | 0.03 s                    | 0.11 s                    |
+   | 7 280  | 0.06 s                    | 0.33 s                    |
+   | 14 560 | 0.12 s                    | 1.14 s                    |
+
+   Complete lists fold and scale linearly. Open lists create a length
+   entry and a defined variable per candidate, rows persist across
+   backtracking, and the time grows about quadratically, as the record
+   anticipated. Usable at these sizes; the tableau truncation deferred by
+   `2026-11-09-fold-ground-arithmetic-before-the-solver.md` is the fix
+   when it is not. **Done.**
+
+## Notes against the design record
+
+- The record does not say what happens to the list when its length is
+  determined. This task binds it to a tuple of fresh variables, Prolog
+  III's solved form for a list of known length, which is also what stage
+  3 needs to complete a concatenation once `|X|` is known. A very large
+  determined length allocates that many cells, as in Prolog III.
+- The record says binding `L` to a cell "posts `|L| = 1 + |T|`". The
+  implementation walks the whole spine at once and posts one equation
+  per binding event, which is the same system with fewer rows.
+- Reasoning on lengths is linear over the rationals, as the record states:
+  `{ |L| > 2 }` is kept as written, not tightened to `>= 3`.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test` clean; all previous golden files byte-identical.
-- [ ] `aivolution lint .` clean; the five `affects` docs current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` clean (121 tests); all previous golden files
+      byte-identical.
+- [x] `aivolution lint .` clean; the five `affects` docs current.

@@ -8,11 +8,31 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Symbol(u32);
 
+/// The reserved label of list cells and of the empty list (CLM-0014):
+/// `'<>'(H, T)` is a cell, the nullary `'<>'` the empty list.
+pub(crate) const LIST_LABEL: &str = "<>";
+
+/// The symbol of [`LIST_LABEL`]: interned first in every table, so the
+/// store can recognise and build list cells without the table.
+pub(crate) const LIST: Symbol = Symbol(0);
+
 /// The intern table.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Symbols {
     names: Vec<String>,
     index: HashMap<String, Symbol>,
+}
+
+impl Default for Symbols {
+    fn default() -> Self {
+        let mut s = Symbols {
+            names: Vec::new(),
+            index: HashMap::new(),
+        };
+        let list = s.intern(LIST_LABEL);
+        debug_assert_eq!(list, LIST);
+        s
+    }
 }
 
 impl Symbols {

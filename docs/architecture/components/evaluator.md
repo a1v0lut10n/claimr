@@ -53,7 +53,10 @@ answers in solved form. Public surface (re-exported from `claimr`):
   ending in the constant `'<>'` or in the written tail, so `<a, b> . T` and
   a hand-spelled `'<>'(a, '<>'(b, T))` are one term; a clause head named
   `'<>'` is rejected (`EvalError::ReservedName`, the one compile error that
-  carries a source position).
+  carries a source position). `|L|` (CLM-0015) stays in the template as
+  `TTerm::Len` and is lowered at instantiation by `Store::post_len`: a
+  complete list folds to its length, an open one yields a numeric variable
+  (see [`solver.md`](solver.md), *List lengths*).
 - **`machine.rs`** — the SLD machine: goals left to right, clauses in program
   order, chronological backtracking through choice points and the trail.
   **Body goals are instantiated lazily** (CLM-0013): at clause entry the
@@ -100,6 +103,9 @@ answers in solved form. Public surface (re-exported from `claimr`):
   attribute terms the query created *or looked up*. Iterative printer; a
   `'<>'/2` spine prints in list notation (`<1, 2, 3>`, `<1, 2> . T`, `<>`),
   stopping at a cyclic cell so a cyclic list is an equation (`X = <1> . X`).
+  The length of a reachable unbound list variable is a public numeric
+  variable named `|T|` (CLM-0015); its implicit bound `|T| >= 0` is not
+  printed.
 
 The CLI (`cli` component) loads a file and runs its queries in order,
 `--limit N` capping answers per query; a runtime error stops it with exit 1.

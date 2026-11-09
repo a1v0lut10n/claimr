@@ -4,6 +4,7 @@ last-verified: 2026-11-09
 decisions:
   - docs/design/2026-08-17-evaluator.md
   - docs/design/2026-11-09-fold-ground-arithmetic-before-the-solver.md
+  - docs/design/2026-11-09-lists-as-a-constraint-domain.md
   - docs/design/2026-08-17-arithmetic-in-terms.md
   - docs/design/2026-08-17-exact-rational-arithmetic.md
 aspects: [exact-arithmetic, answer-soundness]
@@ -24,8 +25,8 @@ Claimr's constraint store. Two layers:
   `x < value` and `x > value` for feasibility.
 - **the numeric glue in `src/eval/store.rs`** — how the heap and the solver
   meet: `numvar` (unbound heap variable → solver variable), the attribute
-  term registry, numeric disequations, delayed products, alias classes, and
-  the "determined" event that fires suspended wakers.
+  term registry, numeric disequations, delayed products, list lengths,
+  alias classes, and the "determined" event that fires suspended wakers.
 
 ## Semantics as implemented (stage 3 — CLM-0006)
 
@@ -81,13 +82,32 @@ Claimr's constraint store. Two layers:
   `post_arith`/`post_neg` compute the exact rational and bind a `Num` cell —
   no solver variable, no row. Ground division by zero fails there. Only
   terms with an unbound or attribute operand are lowered.
+- **List lengths** (CLM-0015,
+  `2026-11-09-lists-as-a-constraint-domain.md`, stage 2). `|L|` is posted
+  by `post_len`, which follows the `'<>'` spine of `L`: a complete list
+  folds to the number of its cells (no solver variable, as for ground
+  arithmetic); a spine ending in an unbound non-numeric variable `T` after
+  `k` cells is `k + |T|`, where `|T|` is a **length entry** registered once
+  per list variable (`len_index`, so every `|T|` is one unknown): a numeric
+  heap variable with `>= 0` asserted, suspended on `T` and on itself. A
+  cycle or a non-list (a number, another constant or compound, a numeric
+  variable) fails. Binding `T` re-walks the spine and asserts `|T| = k` or
+  `|T| = k + |U|` through `U`'s entry; the entry is then closed. The
+  determination of `|T|` while `T` is unbound requires a non-negative
+  integer `n` (else failure) and binds `T` to `<_1, …, _n>`, Prolog III's
+  solved form for a list of known length. Entries and the index are
+  trailed like products and the attribute index.
 - **Backtracking.** Bounds are trailed in the simplex; the registry, numeric
-  variable map, disequations, products, aliases and "fired" set are trailed
-  in the store; rows and solver variables created since a mark **persist**
-  (relaxed bounds make them inert) and `update` walks every row, so their
-  number is a cost, not just memory. Since CLM-0013 that cost arises only
-  for non-ground arithmetic under search; truncating the tableau on undo is
-  the deferred structural fix (see the design record).
+  variable map, disequations, products, lengths, aliases and "fired" set
+  are trailed in the store; rows and solver variables created since a mark
+  **persist** (relaxed bounds make them inert) and `update` walks every
+  row, so their number is a cost, not just memory. Since CLM-0013 that cost
+  arises only for non-ground arithmetic under search, and since CLM-0015
+  for lengths of open lists under search (measured: `{ |Keys| < 2 }` over
+  facts with a `<k1, k2> . T` field takes 0.04 s, 0.11 s, 0.33 s, 1.14 s at
+  1 820, 3 640, 7 280 and 14 560 facts, against 0.02 s to 0.12 s for
+  complete lists); truncating the tableau on undo is the deferred
+  structural fix (see the design record).
 
 ## Answer rendering
 
