@@ -201,6 +201,20 @@ fn string_literals_are_character_lists() {
 }
 
 #[test]
+fn the_anonymous_variable_parses_and_prints_as_written() {
+    // CLM-0020: `_` is a variable named `_`; `_foo` is not a name.
+    let clauses = parse_program("p(_, X, <_> . _).\n").expect("parses");
+    let Clause::Fact(p) = &clauses[0] else {
+        panic!("a fact")
+    };
+    assert_eq!(p.args[0], Expr::Var("_".into()));
+    assert!(matches!(&p.args[2], Expr::List { items, tail: Some(t) }
+        if items[0] == Expr::Var("_".into()) && **t == Expr::Var("_".into())));
+    assert_eq!(clauses[0].to_string(), "p(_, X, <_> . _).");
+    assert!(parse_program("p(_foo).\n").is_err());
+}
+
+#[test]
 fn every_example_file_parses() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
     let mut seen = 0;

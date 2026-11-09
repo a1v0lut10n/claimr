@@ -5,14 +5,14 @@
 append(<>, L, L).
 append(<H> . T, L, <H> . R) :- append(T, L, R).
 
-member(X, <X> . T).
-member(X, <H> . T) :- member(X, T).
+member(X, <X> . _).
+member(X, <_> . T) :- member(X, T).
 
 reverse(<>, <>).
 reverse(<H> . T, R) :- reverse(T, RT), append(RT, <H>, R).
 
 length(<>, zero).
-length(<H> . T, s(N)) :- length(T, N).
+length(<_> . T, s(N)) :- length(T, N).
 
 ?- append(<1, 2>, <3>, L).
 ?- append(X, Y, <a, b>).
@@ -26,3 +26,6 @@ length(<H> . T, s(N)) :- length(T, N).
 ?- { X = <1> . X }.
 ?- { '<>'(a, '<>') = <a> }.
 ?- { X = <<1, 2>, <>, f(<a>)> }.
+?- member(_, <a, b>).
+?- append(<1>, _, L).
+?- { X = <_, _> }.

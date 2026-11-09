@@ -132,12 +132,16 @@ LayoutItem: WS | Comment;
 terminals
 
 // identifier ::= letter { letter | digit | "_" }, lowercase-initial;
-// variable   ::= uppercase_letter { letter | digit | "_" }
+// variable   ::= uppercase_letter { letter | digit | "_" } | "_"
+// CLM-0020: `_` is the anonymous variable (docs/design/2026-11-09-anonymous-
+// variable.md): a fresh variable at every occurrence, never an answer
+// variable. `_foo` is not a name: it lexes as `_` then an identifier the
+// grammar does not expect there.
 Ident: /[a-z][A-Za-z0-9_]*/;
 // CLM-0011: quoted atom — any content, backslash escapes the next
 // character (\' is a quote, \\ a backslash).
 QuotedIdent: /'(?:[^'\\]|\\.)*'/;
-Var: /[A-Z][A-Za-z0-9_]*/;
+Var: /(?:[A-Z][A-Za-z0-9_]*|_)/;
 // CLM-0017: string literal — same escapes as a quoted atom (\" is a quote,
 // \\ a backslash); denotes the list of its characters as atoms.
 StringLit: /"(?:[^"\\]|\\.)*"/;

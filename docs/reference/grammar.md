@@ -99,7 +99,7 @@ quoted_atom    ::= "'" { any character except "'" and "\\" | "\\" any character 
                    (* backslash escapes the next character: \' \\ *)
 string         ::= '"' { any character except '"' and "\\" | "\\" any character } '"'
                    (* same escapes: \" \\ ; denotes a list of one-character atoms *)
-variable       ::= uppercase_letter { letter | digit | "_" }
+variable       ::= uppercase_letter { letter | digit | "_" } | "_"   (* CLM-0020: the anonymous variable *)
 number         ::= digit { digit } [ "." digit { digit } ]
 comment        ::= "%" { any character except newline }
 ```
@@ -159,6 +159,17 @@ pending concatenation prints as the residual `Z = X . Y`. A non-list operand
 and a cyclic left operand fail. One consequence for diagnostics: since `X .`
 can begin a concatenation, a clause missing its `)` before the terminator
 (`human(X.`) is reported at the token after the `.`, not at the `.`.
+
+**The anonymous variable** `_` (CLM-0020,
+[`../design/2026-11-09-anonymous-variable.md`](../design/2026-11-09-anonymous-variable.md))
+is admitted wherever a variable is. Every occurrence is a fresh variable:
+`p(_, _)` matches `p(a, b)`. In a query it is not an answer variable — it
+prints no equation and names nothing — while whatever it binds prints
+through the named variables that reach it (`?- { X = f(_) }.` answers
+`X = f(_1)`), and a constraint on anonymous variables alone projects away.
+The clause printer prints `_` where it was written. `_`-prefixed names such
+as `_Tail` are not names: `_foo` lexes as `_` followed by an identifier the
+grammar does not expect, and is reported as such.
 
 **Strings** (CLM-0017,
 [`../design/2026-11-09-strings-as-character-lists-and-type-relations.md`](../design/2026-11-09-strings-as-character-lists-and-type-relations.md))
