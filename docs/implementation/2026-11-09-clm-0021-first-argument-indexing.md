@@ -70,7 +70,7 @@ memory and undo work on deterministic lookups.
    | 1 820           | 0.71 s  | 0.03 s  |
    | 3 640           | 1.83 s  | 0.05 s  |
    | 7 280           | 7.13 s  | 0.09 s  |
-   | 14 560          | 28.24s | 0.18 s  |
+   | 14 560          | 28.24 s | 0.18 s  |
 
    The join is linear now. **Done.**
 5. **Docs**: `evaluator.md` (`compile.rs` index, `machine.rs` lookup, the
