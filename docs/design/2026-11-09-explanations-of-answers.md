@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: design
-status: proposed
+status: accepted
 components: [evaluator, cli]
 aspects: [answer-soundness]
 tags: [explanations, proof-tree, provenance, json-output, integrity-checker]
