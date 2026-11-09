@@ -408,6 +408,10 @@ impl Store {
         self.types.truncate(mark.types);
         self.chars.truncate(mark.chars);
         self.simplex.undo_to(mark.simplex);
+        // Definitions of solver variables the simplex dropped (their indices
+        // will be reused).
+        let live = self.simplex.num_vars();
+        self.defs.split_off(&SVar(live));
         self.woken.clear();
         self.touched.clear();
     }
