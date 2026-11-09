@@ -6,6 +6,7 @@ decisions:
   - docs/design/2026-08-17-arithmetic-in-terms.md
   - docs/design/2026-11-09-fold-ground-arithmetic-before-the-solver.md
   - docs/design/2026-11-09-lists-as-a-constraint-domain.md
+  - docs/design/2026-11-09-strings-as-character-lists-and-type-relations.md
 aspects: [answer-soundness, exact-arithmetic]
 ---
 
@@ -32,7 +33,17 @@ answers in solved form. Public surface (re-exported from `claimr`):
   and re-checked when any is bound or determined; each check records the
   would-bind pairs, which give the disequation's **reduced form** for
   printing (`Z != W` for `f(Z) != f(W)`). `post_eq` / `post_dif` are
-  transactional. The store's numeric half — solver variables for numeric heap
+  transactional. Since CLM-0017 the store carries a clone of the program's
+  **symbol table** (`Store::with_symbols`), so the atom that `atom_chars`
+  spells can be interned at wake time; and it holds the delayed built-in
+  constraints: **type relations** `atom(X)` / `list(X)` (pending on an
+  unbound variable, decided on binding, failing on a numeric variable or
+  on two kinds for one variable) and **`atom_chars(A, L)`** (decided when
+  `A` is a constant or `L` a complete list of one-character constants,
+  else pending on `A`, `L`'s open tail and its unbound elements). A
+  variable held by either cannot become numeric (`unknown_of` fails).
+  `number(X)` is `post_number`: a tree fails, an unbound variable becomes
+  numeric. The store's numeric half — solver variables for numeric heap
   variables, attribute terms, numeric disequations, delayed products,
   `finalize` before answers — is documented in
   [`solver.md`](solver.md); the goal-level entry points are
@@ -44,7 +55,8 @@ answers in solved form. Public surface (re-exported from `claimr`):
   facts form the **initial store**, validated satisfiable at compile time;
   `?-` clauses become `Query`s in source order. Arithmetic stays in the
   templates (`TTerm::Neg` / `TTerm::Arith`) and is lowered at instantiation
-  by `build_with`: a node whose operands are all numbers at that moment
+  by `build_with` (a string literal is already the `'<>'` chain of its
+  characters in the AST, CLM-0017): a node whose operands are all numbers at that moment
   folds to a `Num` cell (CLM-0013, no solver variable), any other node
   posts its defining constraint immediately (part of the clause's
   constraint system, as in Prolog III's abstract machine) and fails the
@@ -53,7 +65,8 @@ answers in solved form. Public surface (re-exported from `claimr`):
   ending in the constant `'<>'` or in the written tail, so `<a, b> . T` and
   a hand-spelled `'<>'(a, '<>'(b, T))` are one term; a clause head named
   `'<>'` is rejected (`EvalError::ReservedName`, the one compile error that
-  carries a source position). `|L|` (CLM-0015) stays in the template as
+  carries a source position, joined by `ReservedBuiltin` for the four
+  built-in names and arities of `docs/reference/builtins.md`). `|L|` (CLM-0015) stays in the template as
   `TTerm::Len` and is lowered at instantiation by `Store::post_len`: a
   complete list folds to its length, an open one yields a numeric variable
   (see [`solver.md`](solver.md), *List lengths*). `X . Y` (CLM-0016) is
@@ -64,6 +77,9 @@ answers in solved form. Public surface (re-exported from `claimr`):
   the depth of literal terms, not the machine.
 - **`machine.rs`** — the SLD machine: goals left to right, clauses in program
   order, chronological backtracking through choice points and the trail.
+  A call whose key is a **built-in** (`Program.builtins`: `atom_chars/2`,
+  `number/1`, `atom/1`, `list/1`, CLM-0017) posts its constraint through
+  the store and takes no choice point; every other call looks up clauses.
   **Body goals are instantiated lazily** (CLM-0013): at clause entry the
   clause's variables are allocated once into a shared frame and the head is
   built from it for unification; each body goal's terms are built from the
@@ -112,7 +128,9 @@ answers in solved form. Public surface (re-exported from `claimr`):
   variable named `|T|` (CLM-0015); its implicit bound `|T| >= 0` is not
   printed. A pending concatenation that mentions something the query can
   see prints as `Z = X . Y` among the constraints (CLM-0016), and the
-  length relation it implies is dropped when it appears as such.
+  length relation it implies is dropped when it appears as such. Pending
+  built-ins print in goal form after them: `atom(X)`, `list(X)`,
+  `atom_chars(A, L)` (CLM-0017).
 
 The CLI (`cli` component) loads a file and runs its queries in order,
 `--limit N` capping answers per query; a runtime error stops it with exit 1.

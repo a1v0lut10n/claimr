@@ -159,6 +159,48 @@ fn concatenation_is_right_associative_and_loosest() {
 }
 
 #[test]
+fn string_literals_are_character_lists() {
+    // CLM-0017: "abc" parses to <a, b, c>; "" to <>; escapes as quoted atoms.
+    let clauses = parse_program(r#"p("abc", "", "a\"b\\c", "x" . T)."#).expect("parses");
+    let Clause::Fact(p) = &clauses[0] else {
+        panic!("a fact")
+    };
+    let chars = |s: &str| -> Vec<Expr> { s.chars().map(|c| Expr::Ident(c.to_string())).collect() };
+    assert_eq!(
+        p.args[0],
+        Expr::List {
+            items: chars("abc"),
+            tail: None
+        }
+    );
+    assert_eq!(
+        p.args[1],
+        Expr::List {
+            items: vec![],
+            tail: None
+        }
+    );
+    assert_eq!(
+        p.args[2],
+        Expr::List {
+            items: chars("a\"b\\c"),
+            tail: None
+        }
+    );
+    assert_eq!(
+        p.args[3],
+        Expr::List {
+            items: chars("x"),
+            tail: Some(Box::new(Expr::Var("T".into())))
+        }
+    );
+    assert_eq!(
+        clauses[0].to_string(),
+        r#"p(<a, b, c>, <>, <a, '"', b, '\\', c>, <x> . T)."#
+    );
+}
+
+#[test]
 fn every_example_file_parses() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
     let mut seen = 0;

@@ -13,7 +13,7 @@ use crate::Number;
 use crate::solver::{LinExpr, SVar};
 
 use super::project::{Projected, project};
-use super::store::{Addr, Cell, PendingDif, Store};
+use super::store::{Addr, Cell, PendingDif, Store, TypeKind};
 use super::symbol::LIST_LABEL;
 use super::symbol::Symbols;
 
@@ -380,6 +380,32 @@ pub(crate) fn render_answer(
         p.find_cycles(y);
         let (rz, rx, ry) = (p.render(z), p.render(x), p.render(y));
         constraints.push(format!("{rz} = {rx} . {ry}"));
+    }
+
+    // Pass 8 (CLM-0017): pending type relations and `atom_chars`, in goal
+    // form, when they mention something the query can see.
+    for (v, kind) in store.pending_types() {
+        if !reachable.contains(&store.deref(v)) {
+            continue;
+        }
+        let name = match kind {
+            TypeKind::Atom => "atom",
+            TypeKind::List => "list",
+        };
+        let r = p.render(v);
+        constraints.push(format!("{name}({r})"));
+    }
+    for (a, l) in store.pending_chars() {
+        if !reachable_vars(store, [a, l])
+            .iter()
+            .any(|v| reachable.contains(v))
+        {
+            continue;
+        }
+        p.find_cycles(a);
+        p.find_cycles(l);
+        let (ra, rl) = (p.render(a), p.render(l));
+        constraints.push(format!("atom_chars({ra}, {rl})"));
     }
 
     Answer {

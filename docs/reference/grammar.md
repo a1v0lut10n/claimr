@@ -90,12 +90,15 @@ expr           ::= expr "+" expr          (* left-assoc *)
                  | tuple                  (* CLM-0014: a list *)
                  | expr "." expr          (* CLM-0016: concatenation; right-assoc, lowest *)
                  | "|" expr "|"           (* CLM-0015: the length of a list *)
+                 | string                 (* CLM-0017: a list of characters *)
 
 tuple          ::= "<" [ args ] ">"
 
 identifier     ::= letter { letter | digit | "_" }
 quoted_atom    ::= "'" { any character except "'" and "\\" | "\\" any character } "'"
                    (* backslash escapes the next character: \' \\ *)
+string         ::= '"' { any character except '"' and "\\" | "\\" any character } '"'
+                   (* same escapes: \" \\ ; denotes a list of one-character atoms *)
 variable       ::= uppercase_letter { letter | digit | "_" }
 number         ::= digit { digit } [ "." digit { digit } ]
 comment        ::= "%" { any character except newline }
@@ -156,6 +159,18 @@ pending concatenation prints as the residual `Z = X . Y`. A non-list operand
 and a cyclic left operand fail. One consequence for diagnostics: since `X .`
 can begin a concatenation, a clause missing its `)` before the terminator
 (`human(X.`) is reported at the token after the `.`, not at the `.`.
+
+**Strings** (CLM-0017,
+[`../design/2026-11-09-strings-as-character-lists-and-type-relations.md`](../design/2026-11-09-strings-as-character-lists-and-type-relations.md))
+are not a term kind: `"abc"` denotes the list of one-character atoms
+`<a, b, c>`, `""` denotes `<>`, and `"doc:x"` is `<d, o, c, ':', x>`. The
+two spellings are one term, so a string prints as the list it is, in answers
+and in query echoes alike (Prolog III prints `<'M', 'a', 'x', 9/5, meters,
+1'>`, never a string). String concatenation and length are list
+concatenation and length. The bridge between an atom and its characters is
+the built-in `atom_chars/2`; the type relations `number/1`, `atom/1` and
+`list/1` are the other built-ins, see [`builtins.md`](builtins.md). They are
+goals, not grammar: `Goal` already parses `atom(X)`.
 
 Semantics of `number`: a literal denotes an **exact rational** — `18.5` is
 37/2, `0.10` is 1/10 — and integers are the denominator-1 case. There is no

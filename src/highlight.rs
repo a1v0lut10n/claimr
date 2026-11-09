@@ -22,8 +22,10 @@ pub enum TokenKind {
     Ident,
     /// Exact-rational literal (`42`, `18.5`).
     Number,
-    /// `:-  ?-  =>  !=  <=  >=  =  <  >  +  -  *  /`.
+    /// `:-  ?-  =>  !=  <=  >=  =  <  >  +  -  *  /  |`.
     Operator,
+    /// `"…"` (CLM-0017): a string literal, the list of its characters.
+    String,
     /// `. , ( ) { }`.
     Punctuation,
 }
@@ -54,6 +56,28 @@ pub fn line_tokens(line: &str) -> Vec<Token> {
         // identifier: Predicate when applied, Ident otherwise. An
         // unterminated quote runs to end of line as Ident (the parser
         // will say so properly).
+        // CLM-0017: a string literal, with the quoted-atom escape rule; an
+        // unterminated one runs to the end of the line.
+        if c == b'"' {
+            let start = i;
+            i += 1;
+            while i < b.len() {
+                if b[i] == b'\\' && i + 1 < b.len() {
+                    i += 2;
+                    continue;
+                }
+                if b[i] == b'"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            out.push(Token {
+                range: start..i,
+                kind: TokenKind::String,
+            });
+            continue;
+        }
         if c == b'\'' {
             let start = i;
             i += 1;
@@ -250,6 +274,8 @@ mod tests {
         assert_eq!(line_tokens("abc")[0].kind, TokenKind::Ident);
         assert_eq!(line_tokens("Abc")[0].kind, TokenKind::Variable);
         assert_eq!(line_tokens("12.5")[0].kind, TokenKind::Number);
+        assert_eq!(line_tokens("\"a\\\"b\"")[0].kind, TokenKind::String);
+        assert_eq!(line_tokens("\"a\\\"b\"")[0].range, 0..6);
         assert_eq!(line_tokens("% x")[0].kind, TokenKind::Comment);
     }
 }

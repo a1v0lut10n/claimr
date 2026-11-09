@@ -266,6 +266,36 @@ pub fn expr_concat_expr(_ctx: &Ctx, left: Expr, right: Expr) -> Expr {
         left => ast::Expr::Concat(Box::new(left), Box::new(right)),
     }
 }
+/// CLM-0017: resolve backslash escapes between the delimiters of a quoted
+/// atom or a string literal.
+fn unescape(inner: &str) -> String {
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                if let Some(escaped) = chars.next() {
+                    out.push(escaped);
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+/// CLM-0017: a string literal is the list of its characters, each a
+/// one-character atom: `"abc"` is `<a, b, c>`, `""` is `<>`.
+pub type StringLit = Vec<ast::Expr>;
+pub fn string_lit(_ctx: &Ctx, token: Token) -> StringLit {
+    let inner = &token.value[1..token.value.len() - 1];
+    unescape(inner).chars().map(|c| ast::Expr::Ident(c.to_string())).collect()
+}
+pub fn expr_string_expr(_ctx: &Ctx, string: StringLit) -> Expr {
+    ast::Expr::List {
+        items: string,
+        tail: None,
+    }
+}
 /// CLM-0015: `|L|` — the length of the list `L`, a numeric term.
 pub fn expr_len_expr(_ctx: &Ctx, inner: Expr) -> Expr {
     ast::Expr::Len(Box::new(inner))
@@ -281,20 +311,7 @@ pub type QuotedIdent = String;
 /// AST carries CONTENT; identity is content, quoting is spelling
 /// (docs/design/2026-09-10-quoted-atoms.md).
 pub fn quoted_ident(_ctx: &Ctx, token: Token) -> QuotedIdent {
-    let inner = &token.value[1..token.value.len() - 1];
-    let mut out = String::with_capacity(inner.len());
-    let mut chars = inner.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => {
-                if let Some(escaped) = chars.next() {
-                    out.push(escaped);
-                }
-            }
-            c => out.push(c),
-        }
-    }
-    out
+    unescape(&token.value[1..token.value.len() - 1])
 }
 /// A name is its content, however spelled — both alternatives are the
 /// same `String`, so `Atom.name` and `Expr::Ident` are untouched.

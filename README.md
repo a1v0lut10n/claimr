@@ -65,7 +65,7 @@ relop           ::= "=" | "!=" | "<" | ">" | "<=" | ">="
 
 expr           ::= expr ("+" | "-") expr | expr ("*" | "/") expr | "-" expr
                  | "(" expr ")" | name | number | atom | variable
-                 | tuple | expr "." expr | "|" expr "|"
+                 | tuple | expr "." expr | "|" expr "|" | string
 tuple          ::= "<" [ args ] ">"
 
 name           ::= identifier | quoted_atom
@@ -84,7 +84,11 @@ list a tuple of fresh variables (`{ |L| = 3 }` answers `L = <_1, _2, _3>`).
 `X . Y` is the concatenation of two lists: with a known left operand it is
 the chain, with an open one a constraint that completes as soon as `|X|` is
 known, so `last(L, X) :- { L = F . <X> }.` and the two-clause `reverse` run
-in both directions.
+in both directions. A string `"abc"` is the list of its characters
+`<a, b, c>`, not a type of its own; `atom_chars(A, L)` bridges an atom and
+its characters as a delayed constraint, and `number/1`, `atom/1`, `list/1`
+are type relations with Prolog III's semantics — the only built-in
+predicates ([`docs/reference/builtins.md`](docs/reference/builtins.md)).
 
 ## Examples
 

@@ -169,7 +169,7 @@ fn main() -> ExitCode {
                 );
             } else {
                 match e.span() {
-                    Some(_) => eprintln!("{path}:{e}"),
+                    Some(s) => eprintln!("{path}:{}:{}: {e}", s.line, s.column),
                     None => eprintln!("{path}: {e}"),
                 }
             }
