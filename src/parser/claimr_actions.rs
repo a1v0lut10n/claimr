@@ -235,27 +235,35 @@ pub fn expr_list_expr(_ctx: &Ctx, tuple: Tuple) -> Expr {
         tail: None,
     }
 }
-/// CLM-0014: `<a, b> . T` — the items followed by the tail `T`. The empty
-/// chain `<> . T` is `T` itself, and `<a> . <b> . T` is the one chain
-/// `<a, b> . T` (the same term; the answer printer would print it so).
-pub fn expr_list_tail_expr(_ctx: &Ctx, mut tuple: Tuple, tail: Expr) -> Expr {
-    if tuple.is_empty() {
-        return tail;
-    }
-    match tail {
-        ast::Expr::List { items, tail } => {
-            tuple.extend(items);
-            ast::Expr::List {
-                items: tuple,
-                tail,
+/// CLM-0016: `X . Y` — the concatenation of two lists. With a literal
+/// tuple on the left it is the chain of CLM-0014: `<a, b> . T` is the items
+/// followed by the tail `T`, the empty chain `<> . T` is `T` itself, and
+/// `<a> . <b> . T` is the one chain `<a, b> . T` (the same term; the answer
+/// printer would print it so). Any other left operand is a concatenation
+/// constraint.
+pub fn expr_concat_expr(_ctx: &Ctx, left: Expr, right: Expr) -> Expr {
+    match left {
+        ast::Expr::List { items: mut tuple, tail: None } => {
+            if tuple.is_empty() {
+                return right;
+            }
+            match right {
+                ast::Expr::List { items, tail } => {
+                    tuple.extend(items);
+                    ast::Expr::List {
+                        items: tuple,
+                        tail,
+                    }
+                }
+                tail => {
+                    ast::Expr::List {
+                        items: tuple,
+                        tail: Some(Box::new(tail)),
+                    }
+                }
             }
         }
-        tail => {
-            ast::Expr::List {
-                items: tuple,
-                tail: Some(Box::new(tail)),
-            }
-        }
+        left => ast::Expr::Concat(Box::new(left), Box::new(right)),
     }
 }
 /// CLM-0015: `|L|` — the length of the list `L`, a numeric term.

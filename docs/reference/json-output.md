@@ -34,8 +34,9 @@ change here is a consumer break and must be deliberate.
   - `disequations` — pending tree disequations (`t1 != t2`);
   - `constraints` — numeric bounds, linear equations, and numeric
     disequations (`age(alice) = 30`). Since CLM-0015 a constraint may
-    mention the length of a list variable, `|T| >= 1`; the shape of the
-    document is unchanged, the vocabulary of the strings grew.
+    mention the length of a list variable, `|T| >= 1`, and since CLM-0016
+    a pending list concatenation, `Z = X . Y`; the shape of the document
+    is unchanged, the vocabulary of the strings grew.
   A proof that binds nothing (the human mode's `true`) is one answer
   whose three lists are all empty.
 

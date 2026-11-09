@@ -56,7 +56,12 @@ answers in solved form. Public surface (re-exported from `claimr`):
   carries a source position). `|L|` (CLM-0015) stays in the template as
   `TTerm::Len` and is lowered at instantiation by `Store::post_len`: a
   complete list folds to its length, an open one yields a numeric variable
-  (see [`solver.md`](solver.md), *List lengths*).
+  (see [`solver.md`](solver.md), *List lengths*). `X . Y` (CLM-0016) is
+  `TTerm::Concat`, lowered by `Store::post_concat`: the chain when `X`'s
+  spine is complete, else a fresh list variable with a pending
+  concatenation (*List concatenation* there). Lowering recurses once per
+  nesting level; its per-level stack cost in debug builds is what bounds
+  the depth of literal terms, not the machine.
 - **`machine.rs`** — the SLD machine: goals left to right, clauses in program
   order, chronological backtracking through choice points and the trail.
   **Body goals are instantiated lazily** (CLM-0013): at clause entry the
@@ -105,7 +110,9 @@ answers in solved form. Public surface (re-exported from `claimr`):
   stopping at a cyclic cell so a cyclic list is an equation (`X = <1> . X`).
   The length of a reachable unbound list variable is a public numeric
   variable named `|T|` (CLM-0015); its implicit bound `|T| >= 0` is not
-  printed.
+  printed. A pending concatenation that mentions something the query can
+  see prints as `Z = X . Y` among the constraints (CLM-0016), and the
+  length relation it implies is dropped when it appears as such.
 
 The CLI (`cli` component) loads a file and runs its queries in order,
 `--limit N` capping answers per query; a runtime error stops it with exit 1.

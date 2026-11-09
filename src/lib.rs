@@ -412,12 +412,14 @@ q(b).
 
     #[test]
     fn error_carries_position() {
-        // Missing closing paren: the `.` on line 2 sits at column 21 (1-based).
+        // Missing closing paren. Since CLM-0016 `X .` can begin a
+        // concatenation, so the parser gives up at the token after the `.`:
+        // the end of input on line 3, column 1 (1-based).
         let err = parse_program("human(socrates).\nmortal(X) :- human(X.\n").unwrap_err();
-        assert_eq!(err.line, Some(2));
-        assert_eq!(err.column, Some(21));
+        assert_eq!(err.line, Some(3));
+        assert_eq!(err.column, Some(1));
         assert!(err.message.contains("Expected"), "message: {}", err.message);
-        assert!(err.to_string().starts_with("2:21: "), "display: {err}");
+        assert!(err.to_string().starts_with("3:1: "), "display: {err}");
     }
 
     #[test]

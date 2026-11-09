@@ -71,6 +71,10 @@ pub enum Expr {
     /// The length of a list (CLM-0015): `|L|`, a numeric term whose value
     /// lives in the constraint store.
     Len(Box<Expr>),
+    /// The concatenation of two lists (CLM-0016): `X . Y`, a list whose
+    /// length is `|X| + |Y|` and which is completed once `|X|` is known. A
+    /// literal tuple on the left is [`Expr::List`] instead.
+    Concat(Box<Expr>, Box<Expr>),
 }
 
 /// Binary arithmetic operators.
@@ -147,10 +151,11 @@ impl ArithOp {
 }
 
 impl Expr {
-    /// Binding strength: a list with a tail (`.`) is 0, below arithmetic.
+    /// Binding strength: `.` (a tailed list, a concatenation) is 0, below
+    /// arithmetic.
     fn precedence(&self) -> u8 {
         match self {
-            Expr::List { tail: Some(_), .. } => 0,
+            Expr::List { tail: Some(_), .. } | Expr::Concat(..) => 0,
             Expr::Binary { op, .. } => op.precedence(),
             Expr::Neg(_) => 3,
             _ => 4,
@@ -179,6 +184,12 @@ impl Expr {
                 right.fmt_prec(f, prec + 1)?;
             }
             Expr::Len(e) => write!(f, "|{e}|")?,
+            Expr::Concat(l, r) => {
+                // Right-associative: a `.` on the left needs parentheses.
+                l.fmt_prec(f, 1)?;
+                f.write_str(" . ")?;
+                r.fmt_prec(f, 0)?;
+            }
             Expr::List { items, tail } => {
                 f.write_str("<")?;
                 for (i, item) in items.iter().enumerate() {

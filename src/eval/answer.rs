@@ -364,7 +364,23 @@ pub(crate) fn render_answer(
 
     // Pass 6: the numeric store, projected onto what the query can see and
     // simplified (design D7, stage 4).
-    let constraints = render_numeric(&mut p, store, &reachable);
+    let mut constraints = render_numeric(&mut p, store, &reachable);
+
+    // Pass 7 (CLM-0016): pending concatenations that mention something the
+    // query can see, as `Z = X . Y`.
+    for (z, x, y) in store.pending_concats() {
+        if !reachable_vars(store, [z, x, y])
+            .iter()
+            .any(|v| reachable.contains(v))
+        {
+            continue;
+        }
+        p.find_cycles(z);
+        p.find_cycles(x);
+        p.find_cycles(y);
+        let (rz, rx, ry) = (p.render(z), p.render(x), p.render(y));
+        constraints.push(format!("{rz} = {rx} . {ry}"));
+    }
 
     Answer {
         equations,
@@ -548,8 +564,43 @@ fn render_numeric(p: &mut Printer<'_>, store: &Store, reachable: &HashSet<Addr>)
             }
         }
     }
+    // The length relation `|Z| = |X| + |Y|` of a pending concatenation is
+    // implied by the printed `Z = X . Y` (CLM-0016): drop it when it appears
+    // as such, over three unbound list variables.
+    let implied: Vec<BTreeMap<SVar, Number>> = store
+        .pending_concats()
+        .into_iter()
+        .filter_map(|(z, x, y)| {
+            let (lz, lx, ly) = (
+                store.length_svar(z)?,
+                store.length_svar(x)?,
+                store.length_svar(y)?,
+            );
+            let mut m = BTreeMap::new();
+            *m.entry(store.root(lz)).or_insert_with(Number::zero) += &Number::one();
+            *m.entry(store.root(lx)).or_insert_with(Number::zero) -= &Number::one();
+            *m.entry(store.root(ly)).or_insert_with(Number::zero) -= &Number::one();
+            Some(m)
+        })
+        .collect();
+    let is_implied = |subject: SVar, rhs: &LinExpr| -> bool {
+        if !rhs.constant.is_zero() {
+            return false;
+        }
+        let mut e = rhs.clone();
+        e.negate();
+        e.add_term(subject, &Number::one());
+        implied.iter().any(|m| {
+            e.terms.len() == m.len()
+                && (e.terms.iter().all(|(v, a)| m.get(v) == Some(a))
+                    || e.terms.iter().all(|(v, a)| m.get(v) == Some(&-a)))
+        })
+    };
     // Equalities in solved form, by subject.
     for (subject, rhs) in &eqs {
+        if is_implied(*subject, rhs) {
+            continue;
+        }
         if let (Some(name), Some(r)) = (names.get(subject), render_expr(rhs)) {
             out.push(format!("{name} = {r}"));
         }

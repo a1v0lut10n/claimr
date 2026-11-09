@@ -32,6 +32,10 @@ pub(crate) enum TTerm {
     Arith(ArithOp, Box<TTerm>, Box<TTerm>),
     /// List length `|L|` (CLM-0015): lowered to the list's length unknown.
     Len(Box<TTerm>),
+    /// List concatenation `X . Y` (CLM-0016): lowered to the chain when the
+    /// left spine is complete, else to a fresh list variable with a pending
+    /// concatenation.
+    Concat(Box<TTerm>, Box<TTerm>),
 }
 
 /// A body goal template.
@@ -119,6 +123,7 @@ impl Lowerer<'_> {
                 TTerm::Arith(*op, Box::new(self.term(left)?), Box::new(self.term(right)?))
             }
             Expr::Len(e) => TTerm::Len(Box::new(self.term(e)?)),
+            Expr::Concat(l, r) => TTerm::Concat(Box::new(self.term(l)?), Box::new(self.term(r)?)),
             // CLM-0014: `<a, b> . T` is the chain '<>'(a, '<>'(b, T)); a list
             // without a tail ends in the constant '<>'.
             Expr::List { items, tail } => {
@@ -138,11 +143,13 @@ impl Lowerer<'_> {
 
     fn atom(&mut self, a: &ast::Atom) -> Result<TTerm, EvalError> {
         let f = self.symbols.intern(&a.name);
-        let args = a
-            .args
-            .iter()
-            .map(|e| self.term(e))
-            .collect::<Result<Vec<_>, _>>()?;
+        // A plain loop, not `collect`: lowering recurses once per nesting
+        // level, and the iterator adapters' frames dominated the per-level
+        // stack cost of deep terms in debug builds.
+        let mut args = Vec::with_capacity(a.args.len());
+        for e in &a.args {
+            args.push(self.term(e)?);
+        }
         Ok(TTerm::Compound(f, args))
     }
 
@@ -368,6 +375,11 @@ pub(crate) fn build_with(
         TTerm::Len(e) => {
             let a = build_with(store, e, var)?;
             store.post_len(a)?
+        }
+        TTerm::Concat(l, r) => {
+            let x = build_with(store, l, var)?;
+            let y = build_with(store, r, var)?;
+            store.post_concat(x, y)?
         }
     })
 }

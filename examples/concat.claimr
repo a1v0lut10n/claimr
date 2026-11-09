@@ -1,0 +1,33 @@
+% List concatenation (CLM-0016, docs/design/2026-11-09-lists-as-a-constraint-
+% domain.md, stage 3): X . Y is the concatenation of two lists. With a known
+% left operand it is the chain; with an open one it is a constraint: the
+% length relation |Z| = |X| + |Y| is in the store at once and the cells are
+% unified as soon as |X| is known — from X's spine or from the simplex. A
+% concatenation is never searched (append/3 stays the predicate for that);
+% a pending one prints as a residual Z = X . Y.
+last(L, X) :- { L = F . <X> }.
+has_prefix(L, P) :- { L = P . S }.
+reverse(<>, <>).
+reverse(<E> . X, Y . <E>) :- reverse(X, Y).
+palindrome(<>).
+palindrome(<E>).
+palindrome(<E> . X . <E>) :- palindrome(X).
+
+?- { Z = <a, b> . <c> }.
+?- { Z = X . Y }.
+?- { Z = X . Y, X = <a> }.
+?- { Z = X . <c>, Z = <a, b, c> }.
+?- { <a, b, c> = X . Y, |X| = 1 }.
+?- last(<1, 2, 3>, X).
+?- has_prefix(<a, b, c>, <a, b>).
+?- has_prefix(<a, b, c>, <b>).
+?- has_prefix(<a, b, c>, P), { |P| = 2 }.
+?- reverse(<1, 2, 3>, R).
+?- reverse(X, <1, 2, 3>).
+?- { |Z| = 10, <1, 2, 3> . Z = Z . <2, 3, 1> }.
+?- palindrome(<a, b, a>).
+?- { |P| = 3 }, palindrome(P).
+?- { Z = X . Y, |Z| = 2, |X| = 1 }.
+?- { Z = foo . <a> }.
+?- { Z = X . foo, X = <a> }.
+?- { X = <1> . X, Z = X . <a> }.

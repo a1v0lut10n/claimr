@@ -136,6 +136,97 @@ fn list_lengths_follow_backtracking() {
 }
 
 #[test]
+fn list_concatenation_is_a_constraint() {
+    // CLM-0016: X . Y with a known left operand is the chain; with an open
+    // one it is pending until |X| is known, from the spine or the simplex.
+    let out = answers(
+        "last(L, X) :- { L = F . <X> }.
+         has_prefix(L, P) :- { L = P . S }.
+         ?- { Z = <a, b> . <c> }.
+         ?- { Z = X . Y }.
+         ?- { Z = X . Y, X = <a> }.
+         ?- { Z = X . <c>, Z = <a, b, c> }.
+         ?- { Z = X . Y, Y = <c>, Z = <a, b, c> }.
+         ?- { <a, b, c> = X . Y, |X| = 1 }.
+         ?- { Z = X . Y, |Z| = 2, |X| = 1 }.
+         ?- last(<1, 2, 3>, X).
+         ?- has_prefix(<a, b, c>, <a, b>).
+         ?- has_prefix(<a, b, c>, <b>).
+         ?- has_prefix(<a, b, c>, P), { |P| = 2 }.
+         ?- { |Z| = 10, <1, 2, 3> . Z = Z . <2, 3, 1> }.
+         ?- { Z = X . Y . W }.
+         ?- { Z = (X . Y) . W }.
+         ?- { Z = foo . <a> }.
+         ?- { Z = X . foo, X = <a> }.
+         ?- { X = <1> . X, Z = X . <a> }.
+         ?- { Z = -X . Y }.",
+    );
+    assert_eq!(out[0], vec!["Z = <a, b, c>"]);
+    assert_eq!(out[1], vec!["Z = X . Y"]);
+    assert_eq!(out[2], vec!["Z = <a> . Y, X = <a>"]);
+    assert_eq!(out[3], vec!["Z = <a, b, c>, X = <a, b>"]);
+    assert_eq!(out[4], vec!["Z = <a, b, c>, X = <a, b>, Y = <c>"]);
+    assert_eq!(out[5], vec!["X = <a>, Y = <b, c>"]);
+    assert_eq!(out[6], vec!["Z = <_1, _2>, X = <_1>, Y = <_2>"]);
+    assert_eq!(out[7], vec!["X = 3"]);
+    assert_eq!(out[8], vec!["true"]);
+    assert!(out[9].is_empty());
+    assert_eq!(out[10], vec!["P = <a, b>"]);
+    assert_eq!(out[11], vec!["Z = <1, 2, 3, 1, 2, 3, 1, 2, 3, 1>"]);
+    assert_eq!(
+        out[12],
+        vec!["|Z| = |Y| + |W| + |X|, _1 = Y . W, Z = X . _1"]
+    );
+    assert_eq!(
+        out[13],
+        vec!["|Z| = |X| + |Y| + |W|, _1 = X . Y, Z = _1 . W"]
+    );
+    for (i, failing) in out.iter().enumerate().skip(14) {
+        assert!(failing.is_empty(), "query {i} should fail: {failing:?}");
+    }
+}
+
+#[test]
+fn list_concatenation_bounds_the_search() {
+    // The two-clause reverse runs in both directions: in the reversed one
+    // the length relation prunes the search, so it terminates.
+    let out = answers(
+        "reverse(<>, <>).
+         reverse(<E> . X, Y . <E>) :- reverse(X, Y).
+         palindrome(<>).
+         palindrome(<E>).
+         palindrome(<E> . X . <E>) :- palindrome(X).
+         ?- reverse(<1, 2, 3>, R).
+         ?- reverse(X, <1, 2, 3>).
+         ?- reverse(X, <>).
+         ?- palindrome(<a, b, a>).
+         ?- palindrome(<a, b, c>).
+         ?- { |P| = 3 }, palindrome(P).",
+    );
+    assert_eq!(out[0], vec!["R = <3, 2, 1>"]);
+    assert_eq!(out[1], vec!["X = <3, 2, 1>"]);
+    assert_eq!(out[2], vec!["X = <>"]);
+    assert_eq!(out[3], vec!["true"]);
+    assert!(out[4].is_empty());
+    assert_eq!(out[5], vec!["P = <_1, _2, _1>"]);
+}
+
+#[test]
+fn a_list_variable_aliased_to_another_shares_its_length() {
+    // Regression: binding a list variable that has a length entry to another
+    // variable must post |W| = |Y|, in either orientation. Found when the
+    // reversed `reverse` failed to terminate.
+    let out = answers(
+        "?- { Z = Y . <E>, |Z| = 1, W = Y2 . <E2>, W = Y }.
+         ?- { Z = Y . <E>, |Z| = 1, W = Y2 . <E2>, Y = W }.
+         ?- { |L| = N, L = M, |M| = 2 }.",
+    );
+    assert!(out[0].is_empty());
+    assert!(out[1].is_empty());
+    assert_eq!(out[2], vec!["L = <_1, _2>, N = 2, M = <_1, _2>"]);
+}
+
+#[test]
 fn the_list_constructor_cannot_be_defined_as_a_predicate() {
     let clauses = parse_program_spanned("ok(a).\n'<>'(a, b).\n").expect("parses");
     let err = Program::compile_spanned(&clauses).expect_err("reserved");

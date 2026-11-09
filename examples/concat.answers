@@ -1,0 +1,36 @@
+?- { Z = <a, b, c> }.
+Z = <a, b, c>
+?- { Z = X . Y }.
+Z = X . Y
+?- { Z = X . Y, X = <a> }.
+Z = <a> . Y, X = <a>
+?- { Z = X . <c>, Z = <a, b, c> }.
+Z = <a, b, c>, X = <a, b>
+?- { <a, b, c> = X . Y, |X| = 1 }.
+X = <a>, Y = <b, c>
+?- last(<1, 2, 3>, X).
+X = 3
+?- has_prefix(<a, b, c>, <a, b>).
+true
+?- has_prefix(<a, b, c>, <b>).
+false
+?- has_prefix(<a, b, c>, P), { |P| = 2 }.
+P = <a, b>
+?- reverse(<1, 2, 3>, R).
+R = <3, 2, 1>
+?- reverse(X, <1, 2, 3>).
+X = <3, 2, 1>
+?- { |Z| = 10, <1, 2, 3> . Z = Z . <2, 3, 1> }.
+Z = <1, 2, 3, 1, 2, 3, 1, 2, 3, 1>
+?- palindrome(<a, b, a>).
+true
+?- { |P| = 3 }, palindrome(P).
+P = <_1, _2, _1>
+?- { Z = X . Y, |Z| = 2, |X| = 1 }.
+Z = <_1, _2>, X = <_1>, Y = <_2>
+?- { Z = foo . <a> }.
+false
+?- { Z = X . foo, X = <a> }.
+false
+?- { X = <1> . X, Z = X . <a> }.
+false
