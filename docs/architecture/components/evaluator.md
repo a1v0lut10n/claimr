@@ -10,6 +10,7 @@ decisions:
   - docs/design/2026-11-09-negation-disjunction-and-if-then-else.md
   - docs/design/2026-11-09-explanations-of-answers.md
   - docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md
+  - docs/design/2026-11-09-numbers-numeric-variables-and-attribute-terms.md
 aspects: [answer-soundness, exact-arithmetic]
 ---
 
@@ -52,8 +53,10 @@ answers in solved form. Public surface (re-exported from `claimr`):
   variables, attribute terms, numeric disequations, delayed products,
   `finalize` before answers — is documented in
   [`solver.md`](solver.md); the goal-level entry points are
-  `post_eq_goal` / `post_dif_goal` (numeric or tree by operand) and
-  `post_rel` (`< > <= >=`).
+  `post_eq_goal` / `post_dif_goal` (numeric when either operand denotes a
+  number, else tree — CLM-0026) and `post_rel` (`< > <= >=`). A numeric
+  variable the store determines is bound to its number, so head
+  unification, indexing and every later goal see the number.
 - **`compile.rs`** — `ast::Clause` → clause templates with pre-numbered
   variables (structure copying at instantiation; every occurrence of the
   anonymous variable `_` gets its own number, CLM-0020) indexed by predicate
