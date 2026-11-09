@@ -13,7 +13,7 @@ The idea, in two layers:
 
 1. **All-solutions:** `findall(Template, Goal, List)`, and possibly `bagof`/`setof`, which
    need the list syntax to be pleasant (see
-   `docs/design/2026-11-09-list-notation.md`).
+   `docs/design/2026-11-09-lists-as-a-constraint-domain.md`).
 2. **Aggregates over them:** `count(Goal, N)` and `sum(Template, Goal, S)`. `min`/`max`
    can be written as constraints, but are worth having. Exact rationals make `sum` and
    `average` exact, which is a selling point.

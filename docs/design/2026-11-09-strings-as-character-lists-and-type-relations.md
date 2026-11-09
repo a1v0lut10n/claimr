@@ -47,14 +47,16 @@ and printing cases for little gain.
 ## Decision
 
 1. **A string literal denotes a list of one-character atoms.**
-   `"abc"` parses to `[a, b, c]`; `""` to `[]`. The literal uses the same
-   backslash escapes as quoted atoms (`\"`, `\\`, any other `\c` is `c`).
-   Characters are ordinary atoms, so `'a'` and `a` are the same character
-   and `"doc:x"` is `[d, o, c, ':', x]`. No new term kind, no new leaf
-   type. Depends on `2026-11-09-list-notation.md`.
-2. **Printing is list form, as in Prolog III.** `[a, b]` and `"ab"` are
+   `"abc"` parses to `<a, b, c>`; `""` to `<>`, which is the paper's
+   `"c1...cm" = <'c1', ..., 'cm'>` with characters as atoms. The literal
+   uses the same backslash escapes as quoted atoms (`\"`, `\\`, any other
+   `\c` is `c`). `'a'` and `a` are the same character, so `"doc:x"` is
+   `<d, o, c, ':', x>`. No new term kind, no new leaf type. Depends on
+   stage 1 of `2026-11-09-lists-as-a-constraint-domain.md`.
+2. **Printing is list form, as in Prolog III.** `<a, b>` and `"ab"` are
    the same term, so the printer never guesses a string reading; a list of
-   one-character atoms prints as `[a, b]`.
+   one-character atoms prints as `<a, b>`, as the paper prints
+   `<'M', 'a', 'x', 9/5, meters, 1'>`.
 3. **One bridge between an atom and its characters: `atom_chars(A, L)`.**
    It behaves as a delayed constraint, not a test: when `A` is a bound
    atom it unifies `L` with the character list; when `L` is a ground list
@@ -74,37 +76,42 @@ and printing cases for little gain.
    - `atom(X)`: `X` is an atom (a nullary name, quoted or plain). Unbound,
      a delayed type constraint on `X` that fails any later binding to a
      number, compound or list, and prints as `atom(X)` if still pending.
-   - `list(X)`: `X` is `[]` or a cons cell, the shallow label test
-     Prolog III's `list` relation makes. Same delaying behaviour.
+   - `list(X)`: `X` is `<>` or a cell, the shallow label test Prolog
+     III's `list` relation makes. Same delaying behaviour.
    These are the only built-in predicates introduced; they are reserved
    names in the evaluator, not grammar changes, since `Goal` already
    parses `number(X)`.
 5. **No `var/1`, following Prolog III.** The question "is this variable
    still unbound" has no sound answer when the variable may be constrained,
    and the type relations plus `dif` cover the uses that motivated it.
-6. **No `atom_prefix`, `atom_concat`, `atom_length`.** They are `append`
-   and `length` over character lists (see Consequences). Case-insensitive
-   comparison is left out: Prolog III has nothing for it, and a
-   character-mapping built-in can be its own small record when a rule
-   needs one.
+6. **No `atom_prefix`, `atom_concat`, `atom_length`.** They are
+   concatenation and length over character lists, as constraints once
+   stages 2 and 3 of the lists record land and as `append`/`length`
+   predicates from stage 1 (see Consequences). Case-insensitive comparison
+   is left out: Prolog III has nothing for it, and a character-mapping
+   built-in can be its own small record when a rule needs one.
 
 ## Consequences
 
-- The integrity-rule idioms become ordinary list programming over the
-  characters of an id:
+- The integrity-rule idioms become list programming over the characters
+  of an id. With the full lists record, a prefix test is a constraint that
+  completes at once because the left operand's length is known, and a
+  length is a number in the store:
 
   ```
-  has_prefix(Id, Prefix) :- atom_chars(Id, Cs), append(Prefix, _, Cs).
-  scheme(Id, Scheme)     :- atom_chars(Id, Cs), append(Scheme, [':' | _], Cs).
-  id_length(Id, N)       :- atom_chars(Id, Cs), length(Cs, N).
+  has_prefix(Id, Prefix) :- atom_chars(Id, Cs), { Cs = Prefix ++ _ }.
+  id_length(Id, N)       :- atom_chars(Id, Cs), { N = |Cs| }.
+  scheme(Id, Scheme)     :- atom_chars(Id, Cs), append(Scheme, <':'> ++ _, Cs).
 
   ?- has_prefix('doc:h3fa21c9d', "doc:").
   ?- scheme('doc:h3fa21c9d', S).
   ```
 
-  Text operations are O(n) list walks rather than O(1) atom operations,
-  which is fine for identifiers; `length/2` here is the library predicate
-  from `examples/lists.claimr` with numbers instead of `s/1` counting.
+  `scheme` keeps `append`: the scheme's length is unknown, and Prolog III
+  does not search a concatenation with an unknown left length either.
+  From stage 1 alone, `has_prefix` and `id_length` are `append/3` and
+  `length/2` as in `examples/lists.claimr`. Text operations are O(n) list
+  walks rather than O(1) atom operations, which is fine for identifiers.
 - Grammar path per `grammar-authority`: one `String` terminal with the
   quoted-atom escape regex over `"`, one `Expr` alternative, an action
   that builds the cons list, an example under `examples/`, the EBNF view,
