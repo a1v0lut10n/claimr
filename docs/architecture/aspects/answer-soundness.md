@@ -8,6 +8,7 @@ decisions:
   - docs/design/2026-11-09-negation-disjunction-and-if-then-else.md
   - docs/design/2026-11-09-explanations-of-answers.md
   - docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md
+  - docs/design/2026-11-09-numbers-numeric-variables-and-attribute-terms.md
 ---
 
 # answer-soundness
@@ -88,3 +89,20 @@ realise the store.
    program, give the same answer), `explanations_discard_abandoned_derivations`,
    `explanation_names_agree_with_the_answer`, and the golden run
    `examples/explain.claimr` under `--explain`.
+7. **A block relation means what its operands denote.** Whether `=` / `!=`
+   in a `{ … }` goal is a numeric relation or tree unification / `dif` is
+   decided by the terms its operands denote when the goal is reached — a
+   number by any route (literal, arithmetic result, variable bound to a
+   number, numeric variable) or a tree — never by how they came to denote
+   them (CLM-0026,
+   `2026-11-09-numbers-numeric-variables-and-attribute-terms.md`). A
+   variable bound to a number by a fact and a numeric variable fixed by a
+   constraint behave alike; a determined numeric variable is bound to its
+   number, so it has that value in every solution and every later goal
+   sees the number; unification never creates an attribute term, so a head
+   unification's outcome does not depend on whether a variable was numeric
+   before it. *Test:* `numeric_equality_follows_what_the_operands_denote`
+   (the record's probe in both goal orders),
+   `first_argument_indexing_preserves_clause_order_and_answers` (a
+   determined variable indexes as its number),
+   `attribute_terms_and_congruence`.

@@ -8,6 +8,7 @@ decisions:
   - docs/design/2026-11-09-truncate-the-tableau-on-undo.md
   - docs/design/2026-08-17-arithmetic-in-terms.md
   - docs/design/2026-08-17-exact-rational-arithmetic.md
+  - docs/design/2026-11-09-numbers-numeric-variables-and-attribute-terms.md
 aspects: [exact-arithmetic, answer-soundness]
 ---
 
@@ -41,10 +42,13 @@ Claimr's constraint store. Two layers:
 ## Semantics as implemented (stage 3 — CLM-0006)
 
 - **Numeric position.** Operands of `< > <= >=`; operands of `+ - * /` and
-  unary `-`; and both sides of `=` / `!=` inside `{ … }` when either side is
-  a number (a literal, or an arithmetic result) or an unbound *numeric
-  variable*. Any other `=`/`!=` is tree unification / `dif`; head
-  unification is always tree unification.
+  unary `-`; and both sides of `=` / `!=` inside `{ … }` when either side
+  *denotes a number* — dereferenced, a number cell (a literal, an
+  arithmetic result, or a variable bound to a number by whatever route) or
+  an unbound *numeric variable* (rule 2 of
+  `2026-11-09-numbers-numeric-variables-and-attribute-terms.md`, CLM-0026).
+  Any other `=`/`!=` is tree unification / `dif`; head unification is
+  always tree unification.
 - **Unknown of a term** (`unknown_of`): a number is a constant; a heap
   variable gets (or has) a solver variable and is thereafter *numeric*; a
   compound or constant is an **attribute term** — its unknown is looked up in
@@ -54,17 +58,24 @@ Claimr's constraint store. Two layers:
   determined) the key is recomputed and, if another entry now has that key,
   the two unknowns are equated (**congruence**). Cyclic attribute terms
   raise `EvalError::CyclicAttributeTerm`.
-- **Numeric variables stay variables of the solver.** Unifying one with a
-  number is an equation (no heap binding); with another variable a merge
-  (heap binding plus `equate`, or a transfer of the solver variable); with a
-  compound or constant, that term becomes an attribute term equated with it.
-  A determined numeric variable meeting a number or another determined
-  variable compares values without touching the store, so trial
-  unification (`dif`) sees "already equal". **Stated consequence of D4**:
-  because any non-arithmetic tree can be an attribute term, "numeric
-  typing" never fails on its own — `{ X > 3 }, X = foo` succeeds with
-  residual `foo > 3` (Prolog III proper would fail); `p(3). ?- p(foo).`
-  still fails, because a number literal in a term is a tree.
+- **Numeric variables and numbers** (CLM-0026,
+  `2026-11-09-numbers-numeric-variables-and-attribute-terms.md`). A numeric
+  variable is a variable of the solver until its value is known; the moment
+  the store determines it — a fixing equation, coinciding bounds, the exact
+  probe before an answer — it is **bound to its number** (a fresh number
+  cell, trailed like any binding), and from then on it *is* the number: a
+  tree leaf for unification and for first-argument indexing, a number for
+  the `=`/`!=` rule above, its value for arithmetic and printing (D5 as
+  written). Unifying an undetermined numeric variable with a number fixes
+  it and binds it the same way; with another variable it merges (heap
+  binding plus `equate`, or a transfer of the solver variable); with a
+  compound or constant it **fails** — unification never creates an
+  attribute term (D4 as written). Attribute terms arise only from a
+  compound or constant that is a direct operand of a block relation:
+  `{ X > 3 }` followed by a head binding `X` to `foo` fails, while `X`
+  bound to `foo` first and then `{ X > 3 }` answers `foo > 3`; inside
+  structures numbers are leaves (`{ <2> = <f(a)> }` fails); `p(3).
+  ?- p(foo).` fails, as ever.
 - **Arithmetic terms** are lowered at clause instantiation: each `Neg` /
   `Binary` becomes a fresh numeric heap variable `N` defined in the solver
   (`define`) as the linear expression; constants fold exactly. `t1 * t2` and
@@ -79,13 +90,15 @@ Claimr's constraint store. Two layers:
   determined and non-zero, otherwise pending — re-checked cheaply on
   determinations and exactly before every answer.
 - **Determined variables.** After every store change, variables whose bounds
-  coincide (or whose row is over such variables) count as determined and
-  fire their heap variable's wakers (`dif`, attribute congruence); before an
+  coincide (or whose row is over such variables) count as determined, are
+  bound to their number and fire their heap variable's wakers (`dif`,
+  attribute congruence); before an
   answer, `finalize` runs the exact probe on every numeric variable and
   disequation, tightens bounds to fixed values, re-checks every pending
   tree disequation, and rejects a non-linear residue. The pass walks only
   its open **candidates** (CLM-0024): the numeric variables still unbound
-  and unfired, the pending disequations and the pending products, kept as
+  (a determined one has left by its binding, CLM-0026), the pending
+  disequations and the pending products, kept as
   sets maintained at every creation, settle, bind and undo (a variable
   leaving the set by being bound is trailed), so a long derivation does not
   rescan what it has already settled; `class_value` likewise looks at a
@@ -143,8 +156,8 @@ Claimr's constraint store. Two layers:
   is a sound residual, printed `Z = X . Y`, unlike a pending product.
 - **Backtracking.** Bounds are trailed in the simplex; the registry, numeric
   variable map, disequations, products, lengths, concatenations, type
-  relations, `atom_chars`, aliases and "fired" set are trailed in the
-  store. Since CLM-0018 (`2026-11-09-truncate-the-tableau-on-undo.md`)
+  relations, `atom_chars`, aliases and the candidate sets are trailed in
+  the store. Since CLM-0018 (`2026-11-09-truncate-the-tableau-on-undo.md`)
   `Simplex::undo_to` also **truncates the tableau**: a mark records the
   variable count, and on undo every post-mark variable that pivots wrote
   into a pre-mark row is pivoted back into basic position there, the rows

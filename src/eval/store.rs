@@ -185,7 +185,6 @@ enum Undo {
     AttrKey(usize, AttrKey),
     NumDifPending(usize),
     ProductPending(usize),
-    Fired(Addr),
     /// CLM-0024: a numeric variable left the candidate set by being bound.
     Undetermined(Addr),
     Alias(SVar),
@@ -264,10 +263,9 @@ pub struct Store {
     /// World attribute entries looked up during the current query: they are
     /// visible to the answer like entries the query created.
     pub(crate) attr_touched: HashSet<usize>,
-    /// Heap variables whose "determined" event has fired.
-    fired: HashSet<Addr>,
     /// CLM-0024: the determination pass's candidates, kept incrementally —
-    /// numeric heap variables that are unbound and not yet fired, the
+    /// numeric heap variables that are still unbound (CLM-0026: a determined
+    /// one is bound to its number, so it leaves the set by that binding), the
     /// pending numeric disequations and the pending products — so that the
     /// pass after every post walks only what is still open, not every entry
     /// ever registered (which made a long numeric derivation quadratic).
@@ -419,10 +417,6 @@ impl Store {
                         self.pending_products.insert(id);
                     }
                 }
-                Undo::Fired(a) => {
-                    self.fired.remove(&a);
-                    self.undetermined.insert(a);
-                }
                 Undo::Undetermined(a) => {
                     self.undetermined.insert(a);
                 }
@@ -506,27 +500,37 @@ impl Store {
             self.fire(v);
             return true;
         };
-        // A numeric variable stays a variable of the solver: meeting a
-        // number is an equation (no heap binding), meeting a variable merges,
-        // meeting a compound or constant makes that term an attribute term.
-        // A determined numeric variable meeting a number or another
-        // determined variable just compares values — no store change, so a
-        // trial unification sees "already equal" (dif) rather than a binding.
+        // A numeric variable (docs/design/2026-11-09-numbers-numeric-
+        // variables-and-attribute-terms.md): meeting a number fixes its
+        // solver variable and binds it to the number, so from then on it is
+        // the number (rule 1); meeting a variable merges; meeting a compound
+        // or constant fails — unification never creates an attribute term
+        // (rule 3, D4 as written).
         let d = self.deref(t);
         let fixed = self.class_value(sv);
         match self.heap[d].clone() {
             Cell::Num(c) => {
                 if let Some(f) = fixed {
-                    return f == c;
+                    // Determined in the solver but not yet exhibited by the
+                    // cheap pass: equal values bind, different values fail.
+                    if f != c {
+                        return false;
+                    }
+                } else if !self.simplex.fix(sv, c) {
+                    return false;
                 }
                 self.touched.push(v);
-                self.simplex.fix(sv, c)
+                self.set(v, Cell::Var(d));
+                self.leave_undetermined(v);
+                self.fire(v);
+                true
             }
             Cell::Var(_) => {
                 if let (Some(f), Some(other)) = (&fixed, self.numvar.get(&d).copied()) {
                     if let Some(g) = self.class_value(other) {
-                        // Both determined: equal values are no new information
-                        // (nothing changes), different values fail.
+                        // Both determined (neither yet exhibited): equal
+                        // values are no new information, different values
+                        // fail.
                         return *f == g;
                     }
                 }
@@ -542,16 +546,7 @@ impl Store {
                     }
                 }
             }
-            Cell::Const(_) | Cell::Struct(..) => {
-                self.touched.push(v);
-                self.set(v, Cell::Var(t));
-                self.leave_undetermined(v);
-                self.fire(v);
-                match self.attribute(d) {
-                    Some(other) => self.equate(sv, other),
-                    None => false,
-                }
-            }
+            Cell::Const(_) | Cell::Struct(..) => false,
         }
     }
 
@@ -669,15 +664,18 @@ impl Store {
         }
     }
 
-    /// A goal operand is numeric if it is itself a number (a literal or an
-    /// arithmetic result) or an unbound numeric variable — not if it is a
-    /// plain variable that happens to be bound to a number tree.
+    /// A goal operand is numeric if it denotes a number (rule 2 of
+    /// docs/design/2026-11-09-numbers-numeric-variables-and-attribute-terms.md):
+    /// dereferenced, it is a number cell — a literal, an arithmetic result,
+    /// or a variable bound to a number by whatever route — or an unbound
+    /// numeric variable.
     fn is_numericish(&self, a: Addr) -> bool {
-        if matches!(self.heap[a], Cell::Num(_)) {
-            return true;
-        }
         let d = self.deref(a);
-        matches!(self.heap[d], Cell::Var(_)) && self.numvar.contains_key(&d)
+        match &self.heap[d] {
+            Cell::Num(_) => true,
+            Cell::Var(_) => self.numvar.contains_key(&d),
+            Cell::Const(_) | Cell::Struct(..) => false,
+        }
     }
 
     // --- tree disequations -------------------------------------------------
@@ -796,11 +794,14 @@ impl Store {
         loop {
             let mut progress = false;
             // Determined heap variables: the open candidates (CLM-0024), in
-            // address order.
+            // address order. A determined variable is bound to its number
+            // (CLM-0026, rule 1): from then on it is a tree leaf for
+            // unification and a number for every goal, and it leaves the
+            // candidates by that binding.
             let candidates: Vec<(Addr, SVar)> = self
                 .undetermined
                 .iter()
-                .filter(|a| !self.fired.contains(*a) && self.is_unbound_var(**a))
+                .filter(|a| self.is_unbound_var(**a))
                 .filter_map(|a| self.numvar.get(a).map(|s| (*a, *s)))
                 .collect();
             for (a, sv) in candidates {
@@ -810,12 +811,12 @@ impl Store {
                     self.cheap_value(sv)
                 };
                 if let Some(c) = val {
-                    if !self.simplex.fix(sv, c) {
+                    if !self.simplex.fix(sv, c.clone()) {
                         return false;
                     }
-                    self.fired.insert(a);
-                    self.undetermined.remove(&a);
-                    self.trail.push(Undo::Fired(a));
+                    let n = self.new_num(c);
+                    self.set(a, Cell::Var(n));
+                    self.leave_undetermined(a);
                     self.fire(a);
                     progress = true;
                 }
@@ -2202,7 +2203,7 @@ mod tests {
                 .numvar
                 .keys()
                 .copied()
-                .filter(|a| st.is_unbound_var(*a) && !st.fired.contains(a))
+                .filter(|a| st.is_unbound_var(*a))
                 .collect();
             assert_eq!(st.undetermined, expect, "undetermined");
             let expect: BTreeSet<usize> = (0..st.numdifs.len())
@@ -2229,7 +2230,7 @@ mod tests {
         assert!(st.post_rel(RelOp::Gt, prod, zero));
         check(&st);
         let mark = st.mark();
-        assert!(st.post_eq_goal(y, two)); // y determined and fired; product linearised
+        assert!(st.post_eq_goal(y, two)); // y determined and bound; product linearised
         check(&st);
         assert!(st.post_eq(z, w)); // plain variables: no candidates involved
         assert!(st.post_eq(x, z)); // x bound to a plain variable: leaves the set

@@ -429,14 +429,89 @@ fn first_argument_indexing_preserves_clause_order_and_answers() {
     assert_eq!(out[7].len(), 7);
     assert_eq!(out[7][0], "W = a, N = 1");
     assert_eq!(out[7][6], "W = f(_1, _2), N = 7");
-    // A determined numeric variable is a `Var` cell: treated as unbound, so
-    // every clause is tried, and the number clause matches. (The constant
-    // and compound heads match too, as attribute terms — the D4 consequence
-    // documented in solver.md, unchanged by the index.)
-    assert_eq!(out[8].len(), 7);
-    assert_eq!(out[8][1], "V = 1/2, N = 2");
-    assert_eq!(out[8][5], "V = 1/2, N = 6");
-    assert_eq!(out[9], vec!["V = a, N = 1", "V = a, N = 2", "V = a, N = 4"]);
+    // A determined numeric variable is bound to its number (CLM-0026), so
+    // the index sees the number: the variable-first clause and the number
+    // clause match, exactly as for `p(0.5, N)`.
+    assert_eq!(out[8], vec!["V = 1/2, N = 2", "V = 1/2, N = 6"]);
+    // `{ V = a }` with `V` bound to `1/2` is a numeric equation (rule 2) in
+    // which the constant `a` names an attribute term, as `{ 1/2 = a }` does;
+    // whether a bare constant should be admitted there is deferred by the
+    // record (item 5).
+    assert_eq!(
+        out[9],
+        vec![
+            "V = a, N = 1",
+            "V = a, N = 2",
+            "V = a, N = 4",
+            "V = 1/2, N = 6, a = 1/2"
+        ]
+    );
+}
+
+/// CLM-0026 (docs/design/2026-11-09-numbers-numeric-variables-and-attribute-
+/// terms.md): a determined numeric variable is bound to its number, a block
+/// `=`/`!=` is numeric when either side denotes a number, and unification
+/// never creates an attribute term — the record's probe, in both goal orders.
+#[test]
+fn numeric_equality_follows_what_the_operands_denote() {
+    let prog = "{ age(alice) = 30 }.
+                person(alice, 30).
+                q(f(a)).
+                same(X, X).";
+    let out = answers(&format!(
+        "{prog}
+         ?- person(alice, A), {{ A = age(alice) }}.
+         ?- {{ A = 30 }}, {{ A = age(alice) }}.
+         ?- {{ A = age(alice) }}, person(alice, A).
+         ?- person(alice, A), {{ A != age(alice) }}.
+         ?- {{ f(a) = 2 }}.
+         ?- q(2).
+         ?- {{ M = 2 }}, q(M).
+         ?- q(M), {{ M = 2 }}.
+         ?- {{ M > 1 }}, q(M).
+         ?- q(M), {{ M > 1 }}.
+         ?- {{ X = <2> }}, {{ X = <f(a)> }}.
+         ?- {{ X = 31 }}, {{ X = age(bob) }}.
+         ?- {{ X = age(bob) }}, {{ X = 31 }}.
+         ?- {{ X > 1 }}, {{ X < 3 }}, {{ 2 * X = 5 }}, same(X, 5/2).
+         ?- {{ X > 1 }}, {{ X < 3 }}, {{ 2 * X = 5 }}, same(X, 2).
+         ?- {{ X = Y }}, {{ Y = 3 }}, same(X, 3).
+         ?- {{ X = Y }}, {{ Y = 3 }}, {{ X != Z }}, same(Z, 3).
+         ?- {{ A = 30 }}, {{ A != 30 }}.
+         ?- {{ X != 3 }}, {{ X > 2 }}, {{ X < 4 }}."
+    ));
+    // The integrity-checker shape: a stored number meets its attribute term
+    // (rule 2 — a variable bound to a number denotes it), in either route to
+    // the number.
+    assert_eq!(out[0], vec!["A = 30, age(alice) = 30"]);
+    assert_eq!(out[1], vec!["A = 30, age(alice) = 30"]);
+    // With the block first, `A` is unbound and meets a tree: tree
+    // unification (D4), and the head's number then fails against the tree.
+    assert!(out[2].is_empty());
+    assert!(out[3].is_empty()); // 30 != age(alice) with age(alice) = 30
+    // A compound in numeric position names an attribute term (unchanged).
+    assert_eq!(out[4], vec!["f(a) = 2"]);
+    // Rule 1: `{ M = 2 }` makes `M` the number 2, so `q(M)` fails as `q(2)`
+    // does; a compound already denoted by the operand is in numeric position.
+    assert!(out[5].is_empty());
+    assert!(out[6].is_empty());
+    assert_eq!(out[7], vec!["M = f(a), f(a) = 2"]);
+    // Rule 3: an undetermined numeric variable meeting a compound fails.
+    assert!(out[8].is_empty());
+    assert_eq!(out[9], vec!["M = f(a), f(a) > 1"]);
+    // Rule 4: inside structures, numbers are leaves.
+    assert!(out[10].is_empty());
+    assert_eq!(out[11], vec!["X = 31, age(bob) = 31"]);
+    assert_eq!(out[12], vec!["X = age(bob), age(bob) = 31"]);
+    // Determination by the store binds the variable to its number: head
+    // unification with that number succeeds, with another fails.
+    assert_eq!(out[13], vec!["X = 5/2"]);
+    assert!(out[14].is_empty());
+    assert_eq!(out[15], vec!["X = 3, Y = 3"]);
+    assert!(out[16].is_empty());
+    assert!(out[17].is_empty());
+    // An undetermined variable stays a variable of the solver.
+    assert_eq!(out[18], vec!["X > 2, X < 4, X != 3"]);
 }
 
 #[test]
@@ -775,8 +850,11 @@ fn attribute_terms_and_congruence() {
     assert_eq!(out[3], vec!["age(X) >= 18"]);
     assert!(out[4].is_empty()); // 3 >= 18 fails
     assert_eq!(out[5], vec!["foo > 3"]);
-    // Stated consequence of D4: attribute terms make numeric typing succeed.
-    assert_eq!(out[6], vec!["X = foo, foo > 3"]);
+    // CLM-0026, rule 3: a numeric variable meeting a constant in unification
+    // fails (D4 as written) — unification never creates an attribute term.
+    // A constant already denoted by the operand of a block relation is in
+    // numeric position and names one.
+    assert!(out[6].is_empty());
     assert_eq!(out[7], vec!["X = foo, foo > 3"]);
     assert_eq!(out[8], vec!["X = 3, f(a) = 3"]);
     assert_eq!(out[9], vec!["X = f(a), f(a) = 3"]);
