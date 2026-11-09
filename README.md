@@ -29,6 +29,10 @@ declarative programs.
 - **Machine-readable output** (`claimr --json`): one JSON document per
   query, structured diagnostics — a pinned contract for programmatic
   consumers ([`docs/reference/json-output.md`](docs/reference/json-output.md))
+- **Explanations** (`claimr --explain`, `:explain` in the REPL): each
+  answer with its proof tree — the clauses, by position and text, and the
+  constraint instances that derived it
+  ([`docs/design/2026-11-09-explanations-of-answers.md`](docs/design/2026-11-09-explanations-of-answers.md))
 - **Parser generated with [rustemo](https://crates.io/crates/rustemo)**, an
   LR parser generator for Rust — the grammar file is the single source of
   truth for the syntax, and syntax errors carry line/column positions
@@ -144,6 +148,7 @@ cargo run -- examples/family.claimr
 claimr path/to/program.claimr
 claimr --limit 5 program.claimr    # cap answers per query (unlimited by default)
 claimr --json program.claimr       # one JSON document per query (docs/reference/json-output.md)
+claimr --explain program.claimr    # each answer with its proof tree: the clauses and constraints that derived it
 claimr --parse program.claimr      # dump the parsed clauses instead of running
 claimr                             # the interactive loop
 claimr -i program.claimr           # run the program, then continue interactively

@@ -244,3 +244,19 @@ fn control_constructs_list_as_written_and_step() {
         "{err}"
     );
 }
+
+#[test]
+fn explain_toggles_the_proof_tree_under_answers() {
+    // CLM-0023: `:explain` records proof trees; the session compiles without
+    // positions, so a citation is the kind and, for a rule, its text. While
+    // stepping, the tree follows the answer and the marker takes its own line.
+    let (out, err, code) = run(
+        &[],
+        "q(1). q(2).\nr(X) :- q(X).\n:explain\n?- r(X).\n;\n:explain\n?- r(1).\n",
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        "explaining answers\n?- r(X).\nX = 1\n  r(1)  rule  r(X) :- q(X).\n    q(1)  fact\n ;\nX = 2.\n  r(2)  rule  r(X) :- q(X).\n    q(2)  fact\nnot explaining answers\n?- r(1).\ntrue.\n"
+    );
+}

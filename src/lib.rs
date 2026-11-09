@@ -24,7 +24,7 @@ mod parser;
 pub mod solver;
 
 pub use ast::*;
-pub use eval::{Answer, EvalError, Program, Query, Solutions};
+pub use eval::{Answer, EvalError, Program, ProofNode, Query, Resolution, Solutions};
 pub use number::{Number, ParseNumberError};
 
 use rustemo::Parser as _;

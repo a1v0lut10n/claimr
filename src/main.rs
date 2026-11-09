@@ -12,6 +12,8 @@
 //!   stdout and structured diagnostics on stderr — the machine-readable
 //!   contract in `docs/reference/json-output.md`; the human format above is
 //!   untouched.
+//! - `--explain` (CLM-0023) prints each answer's proof tree under it (and
+//!   adds the `explanation` field to the JSON answer objects).
 //!
 //! Diagnostics are GCC-style `file:line:column: message`.
 
@@ -23,15 +25,17 @@ use std::{env, fs, path::Path, process::ExitCode};
 use claimr::{Program, parse_program_spanned};
 
 const USAGE: &str = "\
-usage: claimr [--parse] [--limit N] <file.claimr>   run a program
-       claimr --json [--limit N] <file.claimr>      run a program, JSON per query
-       claimr [--limit N]                            interactive loop
-       claimr -i <file.claimr>                       run, then interactive";
+usage: claimr [--parse] [--limit N] [--explain] <file.claimr>   run a program
+       claimr --json [--limit N] [--explain] <file.claimr>      run a program, JSON per query
+       claimr [--limit N]                                        interactive loop
+       claimr -i <file.claimr>                                   run, then interactive
+--explain prints each answer's proof tree (the clauses and constraints that derived it).";
 
 struct Options {
     parse_only: bool,
     interactive: bool,
     json: bool,
+    explain: bool,
     limit: Option<usize>,
     path: Option<String>,
 }
@@ -40,6 +44,7 @@ fn parse_args() -> Result<Options, String> {
     let mut parse_only = false;
     let mut interactive = false;
     let mut json = false;
+    let mut explain = false;
     let mut limit = None;
     let mut path = None;
     let mut args = env::args().skip(1);
@@ -47,6 +52,7 @@ fn parse_args() -> Result<Options, String> {
         match arg.as_str() {
             "--parse" => parse_only = true,
             "--json" => json = true,
+            "--explain" => explain = true,
             "-i" | "--interactive" => interactive = true,
             "--limit" => {
                 let n = args.next().ok_or("--limit needs a number")?;
@@ -82,6 +88,7 @@ fn parse_args() -> Result<Options, String> {
         parse_only,
         interactive,
         json,
+        explain,
         limit,
         path,
     })
@@ -183,6 +190,9 @@ fn main() -> ExitCode {
         for query in program.queries() {
             let mut answers = Vec::new();
             let mut solutions = program.solve(query);
+            if opts.explain {
+                solutions = solutions.with_explanations();
+            }
             for answer in solutions.by_ref() {
                 answers.push(answer);
                 if opts.limit.is_some_and(|l| answers.len() >= l) {
@@ -205,8 +215,14 @@ fn main() -> ExitCode {
         println!("{}", query.text());
         let mut count = 0usize;
         let mut solutions = program.solve(query);
+        if opts.explain {
+            solutions = solutions.with_explanations();
+        }
         for answer in solutions.by_ref() {
             println!("{answer}");
+            for line in answer.explanation_lines() {
+                println!("{line}");
+            }
             count += 1;
             if opts.limit.is_some_and(|l| count >= l) {
                 break;

@@ -49,13 +49,15 @@ cargo run -- examples/family.claimr       # run a program: prints each query and
 cargo run -- --parse examples/socrates.claimr   # dump the parsed clauses instead
 cargo run -- --limit 5 file.claimr        # cap answers per query (unlimited by default)
 cargo run -- --json file.claimr           # one JSON document per query (CLM-0010, docs/reference/json-output.md)
+cargo run -- --explain file.claimr        # each answer with its proof tree (CLM-0023); combines with --json
 cargo run                                 # the REPL (claimr> prompt); `cargo run -- -i file` runs then continues
 printf '?- p(X).\n;\n' | cargo run -q     # the REPL through a pipe (how tests/repl.rs drives it)
 ```
 
 Adding a sample program under `examples/` automatically puts it under parse
 test; adding a sibling `.answers` file (the expected stdout) puts it under
-golden run test.
+golden run test, and an optional `.args` sibling supplies the flags the
+golden run passes (`explain.args` holds `--explain`).
 The generated parser lives in `OUT_DIR` (never committed); rustemo regenerates
 it when the grammar changes and appends action stubs for new productions to
 `claimr_actions.rs` without touching existing ones.

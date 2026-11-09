@@ -23,7 +23,15 @@ fn golden_answers_match() {
         }
         let program = path.with_extension("claimr");
         let expected = std::fs::read_to_string(&path).expect("read .answers");
-        let out = claimr().arg(&program).output().expect("run claimr");
+        // CLM-0023: an optional `.args` sibling supplies flags (`--explain`).
+        let args: Vec<String> = std::fs::read_to_string(path.with_extension("args"))
+            .map(|s| s.split_whitespace().map(str::to_string).collect())
+            .unwrap_or_default();
+        let out = claimr()
+            .args(&args)
+            .arg(&program)
+            .output()
+            .expect("run claimr");
         assert!(
             out.status.success(),
             "{} failed: {}",

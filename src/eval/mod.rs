@@ -20,7 +20,7 @@ mod symbol;
 #[cfg(test)]
 mod tests;
 
-pub use answer::Answer;
+pub use answer::{Answer, ProofNode, Resolution};
 pub use compile::{Program, Query};
 pub use error::EvalError;
 pub use machine::Solutions;

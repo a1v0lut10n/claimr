@@ -267,12 +267,15 @@ fn resolve_conditions(
     }
 }
 
-/// A compiled clause: head, body, and the number of distinct variables.
+/// A compiled clause: head, body, the number of distinct variables, and
+/// (CLM-0023) its source position and text as written, for explanations.
 #[derive(Debug, Clone)]
 pub(crate) struct TClause {
     pub head: TTerm,
     pub body: Vec<TGoal>,
     pub nvars: u32,
+    pub span: Option<Span>,
+    pub text: String,
 }
 
 /// Predicate key: functor and arity.
@@ -669,6 +672,8 @@ impl Program {
                             head,
                             body: vec![],
                             nvars,
+                            span,
+                            text: clause.to_string(),
                         },
                     );
                 }
@@ -677,7 +682,16 @@ impl Program {
                     let mut body = lw.body(body)?;
                     lw.finish_body(&mut body, Some(&head), clause);
                     let nvars = lw.vars.names.len() as u32;
-                    push_clause(&mut preds, TClause { head, body, nvars });
+                    push_clause(
+                        &mut preds,
+                        TClause {
+                            head,
+                            body,
+                            nvars,
+                            span,
+                            text: clause.to_string(),
+                        },
+                    );
                 }
                 // `{c} => head.` is sugar for `head :- {c}.` (design D3).
                 Clause::Implication { constraint, head } => {
@@ -688,7 +702,16 @@ impl Program {
                         .map(|c| lw.constraint(c))
                         .collect::<Result<Vec<_>, _>>()?;
                     let nvars = lw.vars.names.len() as u32;
-                    push_clause(&mut preds, TClause { head, body, nvars });
+                    push_clause(
+                        &mut preds,
+                        TClause {
+                            head,
+                            body,
+                            nvars,
+                            span,
+                            text: clause.to_string(),
+                        },
+                    );
                 }
                 // Global constraints: the initial store (design D3).
                 Clause::ConstraintFact(ce) => {

@@ -1226,3 +1226,257 @@ fn control_constructs_and_may_continue() {
     assert_eq!(sols.next().unwrap().to_string(), "X = 1, Y = 1");
     assert!(!sols.may_continue());
 }
+
+/// Answers with explanations (CLM-0023), compiled with positions.
+fn explained(src: &str) -> Vec<Vec<crate::Answer>> {
+    let clauses = parse_program_spanned(src).expect("parses");
+    let program = Program::compile_spanned(&clauses).expect("compiles");
+    program
+        .queries()
+        .iter()
+        .map(|q| program.solve(q).with_explanations().collect())
+        .collect()
+}
+
+const INTEGRITY: &str = "k(c17, 5). k(c18, 2).
+n(c17, 3). n(c18, 4).
+violation(C) :- k(C, K), n(C, N), { K > N }.
+?- violation(C).";
+
+#[test]
+fn explanations_record_the_derivation_with_citations() {
+    // CLM-0023: the proof tree cites the rule and the facts by position and
+    // text, and the constraint as the instance posted; off by default.
+    use crate::Resolution::*;
+    let out = explained(INTEGRITY);
+    assert_eq!(out[0].len(), 1);
+    let a = &out[0][0];
+    assert_eq!(a.to_string(), "C = c17");
+    let roots = a.explanation.as_ref().expect("explained");
+    assert_eq!(roots.len(), 1);
+    let root = &roots[0];
+    assert_eq!(root.goal, "violation(c17)");
+    assert_eq!(root.by, Rule);
+    assert_eq!((root.line, root.column), (Some(3), Some(1)));
+    assert_eq!(
+        root.clause.as_deref(),
+        Some("violation(C) :- k(C, K), n(C, N), { K > N }.")
+    );
+    let subs: Vec<(&str, crate::Resolution, Option<usize>, Option<usize>)> = root
+        .subgoals
+        .iter()
+        .map(|n| (n.goal.as_str(), n.by, n.line, n.column))
+        .collect();
+    assert_eq!(
+        subs,
+        vec![
+            ("k(c17, 5)", Fact, Some(1), Some(1)),
+            ("n(c17, 3)", Fact, Some(2), Some(1)),
+            ("{ 5 > 3 }", Constraint, Some(3), Some(1)),
+        ]
+    );
+    assert_eq!(root.subgoals[0].clause.as_deref(), Some("k(c17, 5)."));
+    assert_eq!(root.subgoals[2].clause, None);
+    assert_eq!(
+        a.explanation_lines(),
+        vec![
+            "  violation(c17)  rule 3:1  violation(C) :- k(C, K), n(C, N), { K > N }.",
+            "    k(c17, 5)  fact 1:1",
+            "    n(c17, 3)  fact 2:1",
+            "    { 5 > 3 }  constraint 3:1",
+        ]
+    );
+    // Off by default: the answer is the same and carries no explanation.
+    let plain = answers(INTEGRITY);
+    assert_eq!(plain[0], vec!["C = c17"]);
+    let clauses = parse_program(INTEGRITY).unwrap();
+    let program = Program::compile(&clauses).unwrap();
+    let first = program.solve(&program.queries()[0]).next().unwrap();
+    assert!(first.explanation.is_none());
+    assert!(first.explanation_lines().is_empty());
+}
+
+#[test]
+fn explanations_cover_the_control_constructs_and_builtins() {
+    // CLM-0023: a committed condition's proofs go under it and the then
+    // branch follows; a failed condition and a negation are `no-solution`
+    // leaves as written; disjunction is transparent; a built-in and a
+    // query-level constraint are leaves without a citation.
+    use crate::Resolution::*;
+    let out = explained(
+        "curated(k1, cv1). harvested(k2, hv2).
+value(K, V) :- (curated(K, X) -> { V = X } ; harvested(K, V)).
+model_file(m1). claim(m1, x, y). model_file(m2).
+missing(F) :- model_file(F), \\+ claim(F, x, _).
+colour(red). colour(blue).
+feature(X) :- colour(X) ; { X = none }.
+?- value(k1, V).
+?- value(k2, V).
+?- missing(F).
+?- feature(X).
+?- atom_chars(A, \"ab\"), { L = |\"abc\"| }.",
+    );
+    let kinds = |a: &crate::Answer| -> Vec<(String, crate::Resolution, usize)> {
+        let root = &a.explanation.as_ref().unwrap()[0];
+        root.subgoals
+            .iter()
+            .map(|n| (n.goal.clone(), n.by, n.subgoals.len()))
+            .collect()
+    };
+    assert_eq!(
+        kinds(&out[0][0]),
+        vec![
+            (
+                "curated(K, X) -> { V = X } ; harvested(K, V)".to_string(),
+                Committed,
+                1
+            ),
+            ("{ cv1 = cv1 }".to_string(), Constraint, 0),
+        ]
+    );
+    assert_eq!(
+        out[0][0].explanation.as_ref().unwrap()[0].subgoals[0].subgoals[0].goal,
+        "curated(k1, cv1)"
+    );
+    assert_eq!(
+        kinds(&out[1][0]),
+        vec![
+            (
+                "curated(K, X) -> { V = X } ; harvested(K, V)".to_string(),
+                NoSolution,
+                0
+            ),
+            ("harvested(k2, hv2)".to_string(), Fact, 0),
+        ]
+    );
+    assert_eq!(
+        kinds(&out[2][0]),
+        vec![
+            ("model_file(m2)".to_string(), Fact, 0),
+            ("\\+ claim(F, x, _)".to_string(), NoSolution, 0),
+        ]
+    );
+    assert_eq!(out[3].len(), 3);
+    assert_eq!(
+        kinds(&out[3][0]),
+        vec![("colour(red)".to_string(), Fact, 0)]
+    );
+    assert_eq!(
+        kinds(&out[3][1]),
+        vec![("colour(blue)".to_string(), Fact, 0)]
+    );
+    assert_eq!(
+        kinds(&out[3][2]),
+        vec![("{ none = none }".to_string(), Constraint, 0)]
+    );
+    let roots = out[4][0].explanation.as_ref().unwrap();
+    assert_eq!(roots.len(), 2);
+    assert_eq!(
+        (roots[0].goal.as_str(), roots[0].by),
+        ("atom_chars(ab, <a, b>)", Builtin)
+    );
+    assert_eq!(
+        (roots[1].goal.as_str(), roots[1].by),
+        ("{ 3 = 3 }", Constraint)
+    );
+    assert_eq!((roots[1].line, roots[1].clause.as_deref()), (None, None));
+}
+
+#[test]
+fn explanation_names_agree_with_the_answer() {
+    // CLM-0023: the explanation is rendered by the answer's own printer.
+    let out = explained("p(f(Y)) :- q(Y).\nany(_).\nq(Y) :- any(Y).\n?- p(X).");
+    let a = &out[0][0];
+    assert_eq!(a.to_string(), "X = f(_1)");
+    assert_eq!(
+        a.explanation_lines(),
+        vec![
+            "  p(f(_1))  rule 1:1  p(f(Y)) :- q(Y).",
+            "    q(_1)  rule 3:1  q(Y) :- any(Y).",
+            "      any(_1)  fact 2:1",
+        ]
+    );
+}
+
+#[test]
+fn explanations_discard_abandoned_derivations() {
+    // CLM-0023: a clause tried and backtracked over leaves no record.
+    let out = explained("a(1). a(2).\nb(2).\nr(X) :- a(X), b(X).\n?- r(X).");
+    assert_eq!(out[0].len(), 1);
+    assert_eq!(
+        out[0][0].explanation_lines(),
+        vec![
+            "  r(2)  rule 3:1  r(X) :- a(X), b(X).",
+            "    a(2)  fact 1:7",
+            "    b(2)  fact 2:1",
+        ]
+    );
+}
+
+#[test]
+fn cited_clauses_reproduce_the_answer() {
+    // CLM-0023, answer-soundness: an explanation cites only steps on the
+    // answer's own derivation, so the cited clauses alone, as a program,
+    // give the same answer.
+    let out = explained(INTEGRITY);
+    let roots = out[0][0].explanation.as_ref().unwrap();
+    let mut cited: Vec<String> = Vec::new();
+    let mut work: Vec<&crate::ProofNode> = roots.iter().collect();
+    while let Some(n) = work.pop() {
+        if let Some(c) = &n.clause {
+            if !cited.contains(c) {
+                cited.push(c.clone());
+            }
+        }
+        work.extend(n.subgoals.iter());
+    }
+    assert_eq!(cited.len(), 3);
+    let program = format!("{}\n?- violation(C).", cited.join("\n"));
+    assert_eq!(answers(&program)[0], vec!["C = c17"]);
+}
+
+#[test]
+fn a_deep_derivation_explains_on_a_small_stack() {
+    // CLM-0023: the arena is built into a tree, rendered and dropped without
+    // recursion, so a 20 000-deep derivation explains on a 1 MiB thread. The
+    // chain keeps every goal instance small (an explanation prints each
+    // goal in full, so a recursion over a deep term is quadratic in text by
+    // nature, as is the indentation of the human form in depth): the human
+    // lines are exercised at a depth of 500, the tree at 20 000.
+    fn chain(n: usize) -> String {
+        let mut src = String::new();
+        for i in 0..n {
+            src.push_str(&format!("next(a{i}, a{}).\n", i + 1));
+        }
+        src.push_str("reach(X, X).\nreach(X, Z) :- next(X, Y), reach(Y, Z).\n");
+        src.push_str(&format!("?- reach(a0, a{n})."));
+        src
+    }
+    on_small_stack(|| {
+        let out = explained(&chain(20_000));
+        let a = &out[0][0];
+        assert_eq!(a.to_string(), "true");
+        let roots = a.explanation.as_ref().unwrap();
+        let (mut depth, mut node) = (1, &roots[0]);
+        while let Some(last) = node.subgoals.last() {
+            depth += 1;
+            node = last;
+        }
+        assert_eq!(depth, 20_001);
+        assert_eq!(
+            (node.goal.as_str(), node.by),
+            ("reach(a20000, a20000)", crate::Resolution::Fact)
+        );
+        drop(out);
+        let out = explained(&chain(500));
+        let lines = out[0][0].explanation_lines();
+        // Per level a `reach` node and a `next` leaf; the last level a fact.
+        assert_eq!(lines.len(), 2 * 500 + 1);
+        assert_eq!(
+            lines[0],
+            "  reach(a0, a500)  rule 502:1  reach(X, Z) :- next(X, Y), reach(Y, Z)."
+        );
+        assert_eq!(lines[1], "    next(a0, a1)  fact 1:1");
+        assert_eq!(lines[1000].trim_start(), "reach(a500, a500)  fact 501:1");
+    });
+}
