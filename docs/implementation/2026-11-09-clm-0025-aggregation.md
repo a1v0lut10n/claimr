@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: task
-status: in-progress
+status: done
 affects:
   - docs/architecture/components/evaluator.md
   - docs/architecture/components/solver.md
@@ -32,10 +32,13 @@ finalized exactly, and every instance must be ground.
 
 1. **Grammar** (`claimr.rustemo`): `Expr` gains
    `'<' template=Expr '|' body=Body '>' {ComprehensionExpr}`; no new
-   terminal. `rcomp --force --dot` checked for silenced conflicts.
+   terminal. `rcomp --force --dot` checked for silenced conflicts. **Done**
+   — no conflict; the new alternative carries no priority, so none could
+   be silenced.
 2. **AST and printer** (`src/ast.rs`): `Expr::Comprehension { template,
    body }`, printed `<T | body>`; precedence atomic; drop iterative.
-3. **Actions**: `expr_comprehension_expr`.
+   **Done.**
+3. **Actions**: `expr_comprehension_expr`. **Done.**
 4. **Compile** (`compile.rs`): `TGoal::Collect { template, body, into,
    check }`; `Lowerer::term` replaces a comprehension by a fresh clause
    variable and queues the collect, `Lowerer::body` emits the queued
@@ -44,39 +47,44 @@ finalized exactly, and every instance must be ground.
    `EvalError::ComprehensionInHead` with the clause's position; the
    external-variable analysis covers `Collect` (template and body, with the
    rest of the enclosing goal as outside); `Builtin::Sum` (`sum/2`).
+   **Done.** One lesson: a comprehension inside a *template* is evaluated
+   once per solution, so its collection goes at the end of the enclosing
+   body, not before the outer collection (the first version got this wrong
+   and the nested example errored). The constraint of `{c} => head` is a
+   body and admits a comprehension.
 5. **Store** (`store.rs`): `snapshot(addr)` — a closed term template of a
    ground instance (determined numeric variables as their values), `None`
    on an unbound variable or a cycle; `post_sum(l, s)` with a pending `Sum`
    entry, `Waker::Sum`, `recheck_sum`, undo and mark fields,
-   `pending_sums()` for the printer.
+   `pending_sums()` for the printer. **Done.**
 6. **Machine** (`machine.rs`): opening a `Collect` checks the groundness
    rule, pushes a `Retry::Finish` choice point holding the accumulator, and
    runs the body followed by `Goal::CollectOne`; reaching it finalizes,
    snapshots the instance (`EvalError::NonGroundSolution` otherwise), pushes
    it and fails; the finish builds the list, unifies it with `into` and
    continues, recording a `collected` proof leaf. `run_builtin` gains
-   `Sum`.
+   `Sum`. **Done.**
 7. **Answer and JSON**: `Resolution::Collected` (`"collected"`); the
-   pending `sum(L, S)` goal-form residual.
+   pending `sum(L, S)` goal-form residual. **Done.**
 8. **Error** (`error.rs`): `ComprehensionInHead { span }` (positioned),
-   `NonGroundSolution { construct, instance }`.
+   `NonGroundSolution { construct, instance }`. **Done.**
 9. **Example** `examples/aggregation.claimr` + `.answers`: the cohort
    floor, distinct sources, precedents, a sum and an exact average, `sum`
    solving for an element and pending on an open tail, a comprehension
-   under negation, a nested one.
+   under negation, a nested one. **Done** (16 queries).
 10. **Tests**: machine tests for the semantics (order, empty, nested,
     under negation and in a condition, the two errors, the external rule
     with the rest of the goal as outside, a cyclic instance, exactness of
     each solution), `sum` cases, parse round trip, head error, explanations
-    leaf, JSON vocabulary; a deep collection (20 000 solutions).
+    leaf, JSON vocabulary; a deep collection (20 000 solutions). **Done**: 167 tests.
 11. **Docs**: EBNF view and README; `builtins.md` (sum); `evaluator.md`;
     `solver.md`; `answer-soundness.md` (invariant 5 restated for the three
     sub-search constructs); `json-output.md` (`collected`, `sum(L, S)`);
-    this plan.
+    this plan. **Done.**
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
       `cargo test` clean; every existing golden file byte-identical.
-- [ ] `rcomp --force --dot` automaton inspected for silenced conflicts.
-- [ ] `aivolution lint .` clean; the six `affects` docs current.
+- [x] `rcomp --force --dot` automaton inspected for silenced conflicts.
+- [x] `aivolution lint .` clean; the six `affects` docs current.

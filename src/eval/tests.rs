@@ -1501,3 +1501,157 @@ fn a_long_numeric_derivation_is_linear() {
         start.elapsed()
     );
 }
+
+#[test]
+fn comprehensions_collect_all_solutions_in_order() {
+    // CLM-0025: `<T | Body>` is the list of the instances of T for each
+    // solution of Body, in solution order; `<>` when there is none; nested
+    // in a template it is collected per solution; its length is a count.
+    let out = answers(
+        "p(1). p(2). p(3).
+         member_of(m1, c1). member_of(m2, c1). member_of(m3, c2).
+         cohort(c1). cohort(c2).
+         small(C) :- cohort(C), { |<M | member_of(M, C)>| < 2 }.
+         ?- { L = <X | p(X)> }.
+         ?- { L = <<X, Y> | p(X), p(Y), { X < Y }> }.
+         ?- { L = <X | p(X), { X > 7 }> }.
+         ?- { L = <<X, |<Y | p(Y), { Y < X }>|> | p(X)> }.
+         ?- { N = |<X | p(X)>| }, { N > 2 }.
+         ?- small(C).
+         ?- { L = <X + 1 | p(X)> }.
+         ?- \\+ { |<X | p(X)>| > 5 }.
+         ?- cohort(C), ({ |<M | member_of(M, C)>| > 1 } -> { S = big } ; { S = small }).",
+    );
+    assert_eq!(out[0], vec!["L = <1, 2, 3>"]);
+    assert_eq!(out[1], vec!["L = <<1, 2>, <1, 3>, <2, 3>>"]);
+    assert_eq!(out[2], vec!["L = <>"]);
+    assert_eq!(out[3], vec!["L = <<1, 0>, <2, 1>, <3, 2>>"]);
+    assert_eq!(out[4], vec!["N = 3"]);
+    assert_eq!(out[5], vec!["C = c2"]);
+    assert_eq!(out[6], vec!["L = <2, 3, 4>"]);
+    assert_eq!(out[7], vec!["true"]);
+    assert_eq!(out[8], vec!["C = c1, S = big", "C = c2, S = small"]);
+}
+
+#[test]
+fn comprehensions_apply_the_groundness_rules() {
+    // CLM-0025: an external variable (shared with the clause outside the
+    // comprehension, the rest of its goal included) must be ground; every
+    // instance must be ground (no unbound or undetermined variable, no
+    // cycle); each solution is finalized exactly before its instance is
+    // taken.
+    let err = query_error("p(1).\n?- { N = |<X | p(X, N)>| }.");
+    assert!(
+        matches!(&err, EvalError::NonGroundCondition { construct, variable, .. }
+            if construct == "<X | p(X, N)>" && variable == "N"),
+        "{err}"
+    );
+    let err = query_error("q(X) :- { X > 1 }.\n?- { L = <X | q(X)> }.");
+    assert_eq!(
+        err,
+        EvalError::NonGroundSolution {
+            construct: "<X | q(X)>".into(),
+            instance: "X".into(),
+        }
+    );
+    let err = query_error("r(f(Y)).\n?- { L = <T | r(T)> }.");
+    assert!(
+        matches!(&err, EvalError::NonGroundSolution { instance, .. } if instance == "f(_1)"),
+        "{err}"
+    );
+    // A cyclic instance has no finite copy.
+    let err = query_error("?- { L = <X | { X = f(X) }> }.");
+    assert!(matches!(&err, EvalError::NonGroundSolution { .. }), "{err}");
+    // A determined numeric variable is ground; a solution a disequation
+    // rejects is not a solution (the exact check at each one).
+    let out = answers(
+        "?- { L = <X | { X + Y = 2, X - Y = 0 }> }.
+         ?- { L = <X | { X + Y = 2, X - Y = 0, X != 1 }> }.",
+    );
+    assert_eq!(out[0], vec!["L = <1>"]);
+    assert_eq!(out[1], vec!["L = <>"]);
+    // A comprehension in a head or a constraint fact is a compile error; the
+    // constraint of an implication `{c} => head` is a body and admits one.
+    for src in ["bad(<X | p(X)>).", "{ |<X | p(X)>| > 1 }."] {
+        let clauses = parse_program_spanned(src).expect("parses");
+        let err = Program::compile_spanned(&clauses).unwrap_err();
+        assert!(
+            matches!(err, EvalError::ComprehensionInHead { span: Some(_) }),
+            "{src}: {err}"
+        );
+    }
+    let out = answers("p(1). p(2).\n{ |<X | p(X)>| > 1 } => two().\n?- two().");
+    assert_eq!(out[0], vec!["true"]);
+}
+
+#[test]
+fn sum_is_a_linear_relation_over_a_list() {
+    // CLM-0025: exact, solvable in either direction, delayed on an open
+    // spine, printed in goal form while pending; a non-list fails.
+    let out = answers(
+        "amount(a, 1/3). amount(b, 1/3). amount(c, 1/3).
+         total(T) :- sum(<A | amount(_, A)>, T).
+         average(V) :- { L = <A | amount(_, A)> }, sum(L, T), { V = T / |L| }.
+         ?- total(T).
+         ?- average(V).
+         ?- sum(<1, X, 3>, 10).
+         ?- sum(<>, S).
+         ?- sum(L, S), { L = <1, 2> }.
+         ?- { L = <1> . T }, sum(L, S).
+         ?- sum(<1> . T, S), { T = <2, 3> }.
+         ?- sum(<X, Y>, 5), { X - Y = 1 }.
+         ?- sum(a, S).
+         ?- sum(<age(alice), 1>, S), { age(alice) = 29 }.",
+    );
+    assert_eq!(out[0], vec!["T = 1"]);
+    assert_eq!(out[1], vec!["V = 1/3"]);
+    assert_eq!(out[2], vec!["X = 6"]);
+    assert_eq!(out[3], vec!["S = 0"]);
+    assert_eq!(out[4], vec!["L = <1, 2>, S = 3"]);
+    assert_eq!(out[5], vec!["L = <1> . T, sum(<1> . T, S)"]);
+    assert_eq!(out[6], vec!["T = <2, 3>, S = 6"]);
+    assert_eq!(out[7], vec!["X = 3, Y = 2"]);
+    assert!(out[8].is_empty());
+    assert_eq!(out[9], vec!["S = 30, age(alice) = 29"]);
+    // sum/2 is reserved.
+    let clauses = parse_program("sum(X, Y).").unwrap();
+    assert!(matches!(
+        Program::compile(&clauses).unwrap_err(),
+        EvalError::ReservedBuiltin { .. }
+    ));
+}
+
+#[test]
+fn a_comprehension_explains_as_one_collected_leaf() {
+    // CLM-0025 with CLM-0023: the solutions' proofs are discarded; the leaf
+    // shows the comprehension and its list.
+    let out = explained("p(1). p(2).\ncount(N) :- { N = |<X | p(X)>| }.\n?- count(N).");
+    assert_eq!(
+        out[0][0].explanation_lines(),
+        vec![
+            "  count(2)  rule 2:1  count(N) :- { N = |<X | p(X)>| }.",
+            "    <X | p(X)> = <1, 2>  collected",
+            "    { 2 = 2 }  constraint 2:1",
+        ]
+    );
+    assert_eq!(
+        out[0][0].explanation.as_ref().unwrap()[0].subgoals[0].by,
+        crate::Resolution::Collected
+    );
+}
+
+#[test]
+fn a_large_collection_builds_on_a_small_stack() {
+    // CLM-0025: 20 000 solutions are copied and the list is rebuilt
+    // iteratively.
+    on_small_stack(|| {
+        let mut src = String::new();
+        for i in 0..20_000 {
+            src.push_str(&format!("v(a{i}).\n"));
+        }
+        src.push_str("?- { N = |<X | v(X)>| }.\n?- { L = <X | v(X)> }, { |L| = 20000 }.");
+        let out = answers(&src);
+        assert_eq!(out[0], vec!["N = 20000"]);
+        assert_eq!(out[1].len(), 1);
+    });
+}

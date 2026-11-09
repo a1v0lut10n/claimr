@@ -306,3 +306,35 @@ fn control_constructs_parse_with_iso_precedence_and_round_trip() {
         "?- colour(X), size(Y) ; { X = none }."
     );
 }
+
+#[test]
+fn comprehensions_parse_and_round_trip() {
+    // CLM-0025: `<T | Body>` is an expression; the body may hold constraint
+    // blocks and constructs; it nests in a template; length bars around it
+    // nest as before.
+    use claimr::{Clause, Expr, Goal, parse_clause};
+    let Clause::ConstraintRule { body, .. } =
+        parse_clause("c(N) :- { N = |<X | p(X), { X > 1 }>| }.").unwrap()
+    else {
+        panic!("rule");
+    };
+    let Goal::Constraint(ce) = &body[0] else {
+        panic!("constraint");
+    };
+    let Expr::Len(inner) = &ce.terms[0].right else {
+        panic!("length");
+    };
+    assert!(matches!(&**inner, Expr::Comprehension { body, .. } if body.len() == 2));
+    for src in [
+        "c(N) :- { N = |<X | p(X), { X > 1 }>| }.",
+        "t(T) :- sum(<A | amount(_, A)>, T).",
+        "?- { L = <<X, Y> | p(X), p(Y), { X < Y }> }.",
+        "?- { L = <<X, |<Y | p(Y), { Y < X }>|> | p(X)> }.",
+        "?- { L = <X | p(X) ; q(X)> }.",
+        "?- { L = <X | \\+ p(X), q(X)> }.",
+    ] {
+        let clause = parse_clause(src).unwrap();
+        assert_eq!(clause.to_string(), src);
+        assert_eq!(parse_clause(&clause.to_string()).unwrap(), clause);
+    }
+}

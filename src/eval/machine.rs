@@ -22,16 +22,18 @@
 //! length and backtracking truncates it. The answer's explanation is the
 //! arena rendered as a tree.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::answer::{Answer, ProofNode, Resolution, render_answer, render_terms};
 use super::compile::{
-    ANONYMOUS, ArgKey, Builtin, CondCheck, PredKey, Program, Query, TGoal, build_with,
+    ANONYMOUS, ArgKey, Builtin, CondCheck, PredKey, Program, Query, TGoal, TTerm, build_with,
 };
 use super::error::EvalError;
 use super::store::{Addr, Cell, Mark, Store, TypeKind};
+use super::symbol::LIST;
 use crate::ast::RelOp;
 
 /// An instantiated runtime goal.
@@ -66,6 +68,17 @@ enum Goal<'p> {
     /// the choice points above `height` — the condition's alternatives and
     /// the else branch — and continues with `then`.
     Commit { height: usize, then: Then<'p> },
+    /// CLM-0025: a solution of a comprehension's body has been reached.
+    /// Reaching it finalizes the store, copies the instance of the template
+    /// into the accumulator (an error if it is not ground) and fails, so
+    /// the search moves to the next solution; the finishing choice point
+    /// below collects the copies.
+    CollectOne {
+        frame: Frame,
+        template: &'p TTerm,
+        construct: &'p str,
+        acc: Rc<RefCell<Vec<TTerm>>>,
+    },
 }
 
 /// What follows a committed condition (CLM-0022).
@@ -139,6 +152,17 @@ enum Retry<'p> {
         goals: Goals<'p>,
         note: Option<(Under, &'p str)>,
     },
+    /// CLM-0025: the body of a comprehension is exhausted — build the list
+    /// from the accumulated copies, unify it with the comprehension's
+    /// variable and continue.
+    Finish {
+        rest: Goals<'p>,
+        frame: Frame,
+        into: u32,
+        acc: Rc<RefCell<Vec<TTerm>>>,
+        under: Under,
+        text: &'p str,
+    },
 }
 
 /// One record of the proof arena (CLM-0023).
@@ -170,6 +194,11 @@ enum ProofKind<'p> {
     /// A condition that had no solution (an else branch or a negation taken).
     NoSolution {
         text: &'p str,
+    },
+    /// A comprehension (CLM-0025) and the list it produced.
+    Collected {
+        text: &'p str,
+        into: Addr,
     },
 }
 
@@ -388,6 +417,32 @@ impl<'p> Solutions<'p> {
                     self.goals = goals;
                     return true;
                 }
+                Retry::Finish {
+                    rest,
+                    frame,
+                    into,
+                    acc,
+                    under,
+                    text,
+                } => {
+                    // The list of the copies, as a closed template rebuilt on
+                    // the restored heap.
+                    let mut list = TTerm::Const(LIST);
+                    for item in acc.borrow().iter().rev() {
+                        list = TTerm::Compound(LIST, vec![item.clone(), list]);
+                    }
+                    let Some(addr) = build_with(&mut self.store, &list, &mut |s, _| s.new_var())
+                    else {
+                        continue;
+                    };
+                    let target = frame[into as usize];
+                    if !self.store.post_eq(target, addr) {
+                        continue;
+                    }
+                    self.record(under, ProofKind::Collected { text, into: target });
+                    self.goals = rest;
+                    return true;
+                }
             }
         }
         false
@@ -491,6 +546,37 @@ impl<'p> Solutions<'p> {
                 // never survive; they go under the clause's record meanwhile.
                 self.goals = prepend(cond, frame, under, cons(commit, rest));
             }
+            TGoal::Collect {
+                template,
+                body,
+                into,
+                check,
+            } => {
+                if !self.check_condition(frame, check) {
+                    return false;
+                }
+                let acc: Rc<RefCell<Vec<TTerm>>> = Rc::new(RefCell::new(Vec::new()));
+                let mark = self.store.mark();
+                self.push_choice_point(
+                    Retry::Finish {
+                        rest: rest.clone(),
+                        frame: frame.clone(),
+                        into: *into,
+                        acc: acc.clone(),
+                        under,
+                        text: check.construct.as_str(),
+                    },
+                    mark,
+                );
+                let one = Goal::CollectOne {
+                    frame: frame.clone(),
+                    template,
+                    construct: check.construct.as_str(),
+                    acc,
+                };
+                // The body's records are discarded with each solution.
+                self.goals = prepend(body, frame, under, cons(one, rest));
+            }
             TGoal::Call(_) | TGoal::Eq(..) | TGoal::Dif(..) | TGoal::Rel(..) => {
                 unreachable!("not a control construct")
             }
@@ -546,9 +632,62 @@ impl<'p> Solutions<'p> {
                     }
                     continue;
                 }
+                Goal::CollectOne {
+                    frame,
+                    template,
+                    construct,
+                    acc,
+                } => {
+                    if !self.store.finalize() {
+                        if self.store.error.is_some()
+                            || self.store.nonlinear.is_some()
+                            || !self.backtrack()
+                        {
+                            return false;
+                        }
+                        continue;
+                    }
+                    let frame = frame.clone();
+                    let built =
+                        build_with(&mut self.store, template, &mut |_, i| frame[i as usize]);
+                    let Some(inst) = built else {
+                        // The template's own arithmetic failed: not a solution.
+                        if self.store.error.is_some() || !self.backtrack() {
+                            return false;
+                        }
+                        continue;
+                    };
+                    match self.store.snapshot(inst) {
+                        Some(copy) => {
+                            acc.borrow_mut().push(copy);
+                            if !self.backtrack() {
+                                return false;
+                            }
+                            continue;
+                        }
+                        None => {
+                            let instance = render_terms(
+                                &self.store.symbols,
+                                &self.store,
+                                &self.query_vars,
+                                &[inst],
+                            )
+                            .remove(0);
+                            self.store.error = Some(EvalError::NonGroundSolution {
+                                construct: construct.to_string(),
+                                instance,
+                            });
+                            return false;
+                        }
+                    }
+                }
                 Goal::Pending {
                     frame,
-                    goal: goal @ (TGoal::Or(..) | TGoal::IfThenElse { .. } | TGoal::Not { .. }),
+                    goal:
+                        goal @ (TGoal::Or(..)
+                        | TGoal::IfThenElse { .. }
+                        | TGoal::Not { .. }
+                        | TGoal::Collect { .. }),
                     under,
                 } => {
                     if !self.open_construct(frame, goal, rest, *under) {
@@ -644,6 +783,7 @@ impl<'p> Solutions<'p> {
             Builtin::Number => self.store.post_number(args[0]),
             Builtin::Atom => self.store.post_type(args[0], TypeKind::Atom),
             Builtin::List => self.store.post_type(args[0], TypeKind::List),
+            Builtin::Sum => self.store.post_sum(args[0], args[1]),
         }
     }
 
@@ -663,6 +803,7 @@ impl<'p> Solutions<'p> {
                     addrs.push(a);
                     addrs.push(b);
                 }
+                ProofKind::Collected { into, .. } => addrs.push(into),
                 ProofKind::Committed { .. } | ProofKind::NoSolution { .. } => {}
             }
         }
@@ -717,6 +858,15 @@ impl<'p> Solutions<'p> {
                 }
                 ProofKind::NoSolution { text } => {
                     (text.to_string(), Resolution::NoSolution, None, None)
+                }
+                ProofKind::Collected { text, .. } => {
+                    let list = rendered.next().unwrap_or_default();
+                    (
+                        format!("{text} = {list}"),
+                        Resolution::Collected,
+                        None,
+                        None,
+                    )
                 }
             };
             let _ = i;
@@ -809,7 +959,7 @@ fn instantiate_goal(
             let b = build_with(store, b, var)?;
             RtGoal::Rel(*op, a, b)
         }
-        TGoal::Or(..) | TGoal::IfThenElse { .. } | TGoal::Not { .. } => {
+        TGoal::Or(..) | TGoal::IfThenElse { .. } | TGoal::Not { .. } | TGoal::Collect { .. } => {
             unreachable!("control constructs are opened by the machine, not instantiated")
         }
     })

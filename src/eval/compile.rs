@@ -98,6 +98,15 @@ pub(crate) enum TGoal {
         cond: Vec<TGoal>,
         check: CondCheck,
     },
+    /// A list comprehension (CLM-0025): collect the instances of `template`
+    /// for every solution of `body` into the fresh clause variable `into`,
+    /// which the goal that followed the comprehension then uses.
+    Collect {
+        template: TTerm,
+        body: Vec<TGoal>,
+        into: u32,
+        check: CondCheck,
+    },
 }
 
 /// What the machine checks when it reaches a condition (CLM-0022,
@@ -113,12 +122,13 @@ pub(crate) struct CondCheck {
     pub clause: String,
 }
 
-/// Does a body contain a control construct (CLM-0022)?
+/// Does a body contain a control construct (CLM-0022) or a collection
+/// (CLM-0025)?
 fn has_control(goals: &[TGoal]) -> bool {
     goals.iter().any(|g| {
         matches!(
             g,
-            TGoal::Or(..) | TGoal::IfThenElse { .. } | TGoal::Not { .. }
+            TGoal::Or(..) | TGoal::IfThenElse { .. } | TGoal::Not { .. } | TGoal::Collect { .. }
         )
     })
 }
@@ -167,6 +177,16 @@ fn goals_vars(goals: &[TGoal], out: &mut BTreeSet<u32>) {
                 }
             }
             TGoal::Not { cond, .. } => goals_vars(cond, out),
+            TGoal::Collect {
+                template,
+                body,
+                into,
+                ..
+            } => {
+                term_vars(template, out);
+                goals_vars(body, out);
+                out.insert(*into);
+            }
         }
     }
 }
@@ -261,6 +281,28 @@ fn resolve_conditions(
                     .collect();
                 check.clause = clause.to_string();
                 resolve_conditions(cond, &around, names, clause);
+            }
+            // CLM-0025: the comprehension's variables are the template's and
+            // the body's; `into` is the result, outside the construct.
+            TGoal::Collect {
+                template,
+                body,
+                check,
+                ..
+            } => {
+                let mut vt = BTreeSet::new();
+                term_vars(template, &mut vt);
+                let mut vb = BTreeSet::new();
+                goals_vars(body, &mut vb);
+                check.external = vt
+                    .union(&vb)
+                    .filter(|v| around.contains(v))
+                    .map(|v| (*v, names[*v as usize].clone()))
+                    .collect();
+                check.clause = clause.to_string();
+                let mut ob = around;
+                ob.extend(vt.iter().copied());
+                resolve_conditions(body, &ob, names, clause);
             }
             TGoal::Call(_) | TGoal::Eq(..) | TGoal::Dif(..) | TGoal::Rel(..) => {}
         }
@@ -381,13 +423,17 @@ pub(crate) enum Builtin {
     Atom,
     /// `list(X)`, delayed.
     List,
+    /// `sum(L, S)` (CLM-0025): `S` is the sum of the list's elements, a
+    /// linear equation once the spine is complete; delayed on the tail.
+    Sum,
 }
 
-const BUILTINS: [(&str, usize, Builtin); 4] = [
+const BUILTINS: [(&str, usize, Builtin); 5] = [
     ("atom_chars", 2, Builtin::AtomChars),
     ("number", 1, Builtin::Number),
     ("atom", 1, Builtin::Atom),
     ("list", 1, Builtin::List),
+    ("sum", 2, Builtin::Sum),
 ];
 
 /// A compiled query: its goals, its variable names in order of first
@@ -429,6 +475,11 @@ struct VarMap {
 pub(crate) const ANONYMOUS: &str = "_";
 
 impl VarMap {
+    /// A fresh, unnamed variable (CLM-0025: the result of a comprehension).
+    fn fresh(&mut self) -> u32 {
+        self.get(ANONYMOUS)
+    }
+
     fn get(&mut self, name: &str) -> u32 {
         if name != ANONYMOUS {
             if let Some(&i) = self.index.get(name) {
@@ -447,6 +498,9 @@ impl VarMap {
 struct Lowerer<'a> {
     symbols: &'a mut Symbols,
     vars: VarMap,
+    /// CLM-0025: the collections the terms lowered so far asked for, to be
+    /// emitted before the goal they belong to.
+    collects: Vec<TGoal>,
 }
 
 /// A step of an explicit post-order walk (CLM-0019): `Enter` schedules a
@@ -493,6 +547,8 @@ impl Lowerer<'_> {
                             work.extend(tail.iter().map(|t| Walk::Enter(t.as_ref())));
                             work.extend(items.iter().rev().map(Walk::Enter));
                         }
+                        // A comprehension is lowered as a unit at Build time.
+                        Expr::Comprehension { .. } => {}
                     }
                 }
                 Walk::Build(e) => {
@@ -513,6 +569,30 @@ impl Lowerer<'_> {
                         Expr::Concat(..) => {
                             let (l, r) = take_two(&mut out).ok_or_else(unbalanced)?;
                             TTerm::Concat(Box::new(l), Box::new(r))
+                        }
+                        // CLM-0025: a comprehension becomes a fresh variable
+                        // here and a collection step before the goal.
+                        Expr::Comprehension { template, body } => {
+                            // The template is evaluated once per solution, so
+                            // a comprehension inside it is collected at the
+                            // end of the body, not before this one.
+                            let outer = std::mem::take(&mut self.collects);
+                            let template = self.term(template)?;
+                            let in_template = std::mem::take(&mut self.collects);
+                            self.collects = outer;
+                            let mut body = self.body(body)?;
+                            body.extend(in_template);
+                            let into = self.vars.fresh();
+                            self.collects.push(TGoal::Collect {
+                                template,
+                                body,
+                                into,
+                                check: CondCheck {
+                                    construct: e.to_string(),
+                                    ..CondCheck::default()
+                                },
+                            });
+                            TTerm::Var(into)
                         }
                         // CLM-0014: `<a, b> . T` is the chain '<>'(a, '<>'(b, T));
                         // a list without a tail ends in the constant '<>'.
@@ -558,13 +638,28 @@ impl Lowerer<'_> {
     /// constructs (CLM-0022); a construct's external variables are resolved
     /// afterwards by `resolve_conditions`, once the whole clause is known.
     fn body(&mut self, goals: &[Goal]) -> Result<Vec<TGoal>, EvalError> {
+        // Collections queued by an enclosing goal's earlier terms belong to
+        // that goal, not to this body (CLM-0025).
+        let saved = std::mem::take(&mut self.collects);
+        let result = self.body_goals(goals);
+        self.collects = saved;
+        result
+    }
+
+    fn body_goals(&mut self, goals: &[Goal]) -> Result<Vec<TGoal>, EvalError> {
         let mut out = Vec::new();
         for g in goals {
             match g {
-                Goal::Atom(a) => out.push(TGoal::Call(self.atom(a)?)),
+                Goal::Atom(a) => {
+                    let call = TGoal::Call(self.atom(a)?);
+                    out.append(&mut self.collects);
+                    out.push(call);
+                }
                 Goal::Constraint(ce) => {
                     for c in &ce.terms {
-                        out.push(self.constraint(c)?);
+                        let goal = self.constraint(c)?;
+                        out.append(&mut self.collects);
+                        out.push(goal);
                     }
                 }
                 Goal::Or(a, b) => out.push(TGoal::Or(self.body(a)?, self.body(b)?)),
@@ -590,6 +685,15 @@ impl Lowerer<'_> {
             }
         }
         Ok(out)
+    }
+
+    /// CLM-0025: a head or a constraint fact admits no comprehension.
+    fn no_collects(&self, span: Option<Span>) -> Result<(), EvalError> {
+        if self.collects.is_empty() {
+            Ok(())
+        } else {
+            Err(EvalError::ComprehensionInHead { span })
+        }
     }
 
     /// Finish a lowered body (CLM-0022): resolve the conditions' external
@@ -661,10 +765,12 @@ impl Program {
             let mut lw = Lowerer {
                 symbols: &mut symbols,
                 vars: VarMap::default(),
+                collects: Vec::new(),
             };
             match clause {
                 Clause::Fact(atom) => {
                     let head = lw.atom(atom)?;
+                    lw.no_collects(span)?;
                     let nvars = lw.vars.names.len() as u32;
                     push_clause(
                         &mut preds,
@@ -679,6 +785,7 @@ impl Program {
                 }
                 Clause::Rule { head, body } | Clause::ConstraintRule { head, body } => {
                     let head = lw.atom(head)?;
+                    lw.no_collects(span)?;
                     let mut body = lw.body(body)?;
                     lw.finish_body(&mut body, Some(&head), clause);
                     let nvars = lw.vars.names.len() as u32;
@@ -696,11 +803,12 @@ impl Program {
                 // `{c} => head.` is sugar for `head :- {c}.` (design D3).
                 Clause::Implication { constraint, head } => {
                     let head = lw.atom(head)?;
-                    let body = constraint
-                        .terms
-                        .iter()
-                        .map(|c| lw.constraint(c))
-                        .collect::<Result<Vec<_>, _>>()?;
+                    lw.no_collects(span)?;
+                    // The constraints as a body, so a comprehension among them
+                    // is collected before its constraint (CLM-0025).
+                    let as_body = vec![Goal::Constraint(constraint.clone())];
+                    let mut body = lw.body(&as_body)?;
+                    lw.finish_body(&mut body, Some(&head), clause);
                     let nvars = lw.vars.names.len() as u32;
                     push_clause(
                         &mut preds,
@@ -720,6 +828,7 @@ impl Program {
                         .iter()
                         .map(|c| lw.constraint(c))
                         .collect::<Result<Vec<_>, _>>()?;
+                    lw.no_collects(span)?;
                     initial.push((goals, lw.vars.names.len() as u32));
                 }
                 Clause::Query(body) => {
@@ -807,7 +916,8 @@ impl Program {
                     TGoal::Call(_)
                     | TGoal::Or(..)
                     | TGoal::IfThenElse { .. }
-                    | TGoal::Not { .. } => {
+                    | TGoal::Not { .. }
+                    | TGoal::Collect { .. } => {
                         unreachable!("constraint facts hold constraints only")
                     }
                 };

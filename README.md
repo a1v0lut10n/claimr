@@ -75,7 +75,7 @@ relop           ::= "=" | "!=" | "<" | ">" | "<=" | ">="
 expr           ::= expr ("+" | "-") expr | expr ("*" | "/") expr | "-" expr
                  | "(" expr ")" | name | number | atom | variable
                  | tuple | expr "." expr | "|" expr "|" | string
-tuple          ::= "<" [ args ] ">"
+tuple          ::= "<" [ args ] ">" | "<" expr "|" body ">"   (* a list comprehension *)
 
 name           ::= identifier | quoted_atom
 ```

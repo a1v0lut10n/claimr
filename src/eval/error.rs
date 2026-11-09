@@ -43,6 +43,21 @@ pub enum EvalError {
         /// The clause (or query) as written.
         clause: String,
     },
+    /// A list comprehension (CLM-0025) in a clause head or a constraint
+    /// fact: a head is a pattern that is matched, not a goal that runs.
+    /// `span` is the clause's position when parsed with positions.
+    ComprehensionInHead { span: Option<Span> },
+    /// A solution of a comprehension's body (CLM-0025) whose instance of
+    /// the template is not ground — it carries an unbound variable, an
+    /// undetermined numeric variable, or a cycle — so it has no single value
+    /// to collect; the query stops rather than copying it with fresh
+    /// variables and dropping its constraints.
+    NonGroundSolution {
+        /// The comprehension as written.
+        construct: String,
+        /// The instance, rendered.
+        instance: String,
+    },
     /// An internal invariant of the evaluator failed; reported rather than
     /// panicked so the CLI and REPL stay up. Never expected.
     InternalInvariant { what: String },
@@ -82,6 +97,16 @@ impl fmt::Display for EvalError {
                 f,
                 "condition `{construct}` reached with `{variable}` unbound, in `{clause}`; a variable shared with the clause outside the construct must be bound before it (bind it earlier, or keep it local to the construct)"
             ),
+            EvalError::ComprehensionInHead { .. } => f.write_str(
+                "a list comprehension `<T | Body>` cannot appear in a clause head or a constraint fact; move it into the body",
+            ),
+            EvalError::NonGroundSolution {
+                construct,
+                instance,
+            } => write!(
+                f,
+                "a solution of `{construct}` has the instance `{instance}`, which is not ground, so there is no single value to collect; constrain the template's variables inside the comprehension"
+            ),
             EvalError::InternalInvariant { what } => {
                 write!(f, "internal error: {what} (please report)")
             }
@@ -95,11 +120,14 @@ impl EvalError {
     /// there is one.
     pub fn span(&self) -> Option<Span> {
         match self {
-            EvalError::ReservedName { span, .. } | EvalError::ReservedBuiltin { span, .. } => *span,
+            EvalError::ReservedName { span, .. }
+            | EvalError::ReservedBuiltin { span, .. }
+            | EvalError::ComprehensionInHead { span } => *span,
             EvalError::InitialStoreUnsatisfiable
             | EvalError::NonLinear { .. }
             | EvalError::CyclicAttributeTerm { .. }
             | EvalError::NonGroundCondition { .. }
+            | EvalError::NonGroundSolution { .. }
             | EvalError::InternalInvariant { .. } => None,
         }
     }
