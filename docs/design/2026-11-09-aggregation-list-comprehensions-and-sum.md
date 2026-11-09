@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: design
-status: proposed
+status: accepted
 components: [grammar, parser, evaluator, solver, highlight]
 aspects: [grammar-authority, answer-soundness, exact-arithmetic]
 tags: [aggregation, findall, comprehension, sum, count, lists, soundness, prolog-iii]
