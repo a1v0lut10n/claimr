@@ -475,38 +475,73 @@ fn solutions_are_lazy_and_resumable() {
 
 #[test]
 fn deep_derivations_do_not_touch_the_rust_stack() {
-    // 100 000 resolution steps: ten walks down a 10 000-deep Peano number.
-    // The machine is iterative; what does recurse is the AST side (parsing
-    // actions, lowering, Display of a 10 000-deep literal), so run on a
-    // thread with a roomy stack — the machine would be indifferent either way.
+    // 100 000 resolution steps: ten walks down a 10 000-deep Peano number,
+    // then a long goal list. Since CLM-0019 the AST side (lowering,
+    // instantiation, printing, dropping) is iterative too, so this runs on a
+    // 1 MiB thread; only the parser's own frames remain, and they are flat.
+    on_small_stack(|| {
+        let mut term = "zero".to_string();
+        for _ in 0..10_000 {
+            term = format!("s({term})");
+        }
+        let calls: Vec<String> = (0..10).map(|_| format!("count({term})")).collect();
+        let src = format!(
+            "count(zero). count(s(N)) :- count(N). ?- {}.",
+            calls.join(", ")
+        );
+        let out = answers(&src);
+        assert_eq!(out[0], vec!["true"]);
+        // And a long goal list: 20 000 goals in one query.
+        let many: Vec<&str> = std::iter::repeat_n("p", 20_000).collect();
+        let src = format!(
+            "p(). ?- {}.",
+            many.iter()
+                .map(|p| format!("{p}()"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        assert_eq!(answers(&src)[0], vec!["true"]);
+    });
+}
+
+fn on_small_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
-        .stack_size(64 * 1024 * 1024)
-        .spawn(|| {
-            let mut term = "zero".to_string();
-            for _ in 0..10_000 {
-                term = format!("s({term})");
-            }
-            let calls: Vec<String> = (0..10).map(|_| format!("count({term})")).collect();
-            let src = format!(
-                "count(zero). count(s(N)) :- count(N). ?- {}.",
-                calls.join(", ")
-            );
-            let out = answers(&src);
-            assert_eq!(out[0], vec!["true"]);
-            // And a long goal list: 20 000 goals in one query.
-            let many: Vec<&str> = std::iter::repeat_n("p", 20_000).collect();
-            let src = format!(
-                "p(). ?- {}.",
-                many.iter()
-                    .map(|p| format!("{p}()"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-            assert_eq!(answers(&src)[0], vec!["true"]);
-        })
-        .unwrap()
+        .stack_size(1024 * 1024)
+        .spawn(f)
+        .expect("spawn")
         .join()
-        .unwrap();
+        .expect("no panic on the small stack");
+}
+
+#[test]
+fn deep_literals_cost_no_stack() {
+    // CLM-0019: a 100 000-deep term is parsed, lowered, echoed (the query
+    // text is its Display), run and dropped; a 200 000-element list literal
+    // lowers to a chain that deep and is measured and dropped — all on a
+    // 1 MiB thread.
+    on_small_stack(|| {
+        let mut term = "zero".to_string();
+        for _ in 0..100_000 {
+            term = format!("s({term})");
+        }
+        let src = format!("depth(zero, 0).\n?- {{ X = {term} }}.");
+        let clauses = parse_program(&src).expect("parses");
+        let program = Program::compile(&clauses).expect("compiles");
+        let q = &program.queries()[0];
+        assert!(q.text().starts_with("?- { X = s(s(s("));
+        // `s(` and `)` per level around `zero`.
+        assert_eq!(q.text().len(), 100_000 * 3 + "?- { X = zero }.".len());
+        let out: Vec<String> = program.solve(q).map(|a| a.to_string()).collect();
+        assert_eq!(out.len(), 1);
+        assert!(out[0].starts_with("X = s(s(s("));
+        drop(program);
+        drop(clauses);
+
+        let items: Vec<String> = (0..200_000).map(|i| i.to_string()).collect();
+        let src = format!("?- {{ N = |<{}>| }}.", items.join(", "));
+        let out = answers(&src);
+        assert_eq!(out[0], vec!["N = 200000"]);
+    });
 }
 
 // --- stage 3: the linear store -----------------------------------------------

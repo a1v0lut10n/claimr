@@ -162,60 +162,130 @@ impl Expr {
         }
     }
 
-    fn fmt_prec(&self, f: &mut fmt::Formatter<'_>, min: u8) -> fmt::Result {
-        let prec = self.precedence();
-        let parens = prec < min;
-        if parens {
-            f.write_str("(")?;
-        }
+    /// Move the children out, leaving leaves behind (CLM-0019).
+    fn take_children(&mut self, out: &mut Vec<Expr>) {
         match self {
-            Expr::Atom(a) => write!(f, "{a}")?,
-            Expr::Var(v) => f.write_str(v)?,
-            Expr::Number(n) => write!(f, "{n}")?,
-            Expr::Ident(i) => f.write_str(&display_name(i))?,
-            Expr::Neg(e) => {
-                f.write_str("-")?;
-                e.fmt_prec(f, 3)?;
+            Expr::Var(_) | Expr::Number(_) | Expr::Ident(_) => {}
+            Expr::Atom(a) => out.append(&mut a.args),
+            Expr::Neg(x) | Expr::Len(x) => {
+                out.push(std::mem::replace(x, Expr::Ident(String::new())))
             }
-            Expr::Binary { op, left, right } => {
-                // Left-associative: the right operand needs parentheses at equal precedence.
-                left.fmt_prec(f, prec)?;
-                write!(f, " {op} ")?;
-                right.fmt_prec(f, prec + 1)?;
-            }
-            Expr::Len(e) => write!(f, "|{e}|")?,
-            Expr::Concat(l, r) => {
-                // Right-associative: a `.` on the left needs parentheses.
-                l.fmt_prec(f, 1)?;
-                f.write_str(" . ")?;
-                r.fmt_prec(f, 0)?;
+            Expr::Binary { left, right, .. } | Expr::Concat(left, right) => {
+                out.push(std::mem::replace(left, Expr::Ident(String::new())));
+                out.push(std::mem::replace(right, Expr::Ident(String::new())));
             }
             Expr::List { items, tail } => {
-                f.write_str("<")?;
-                for (i, item) in items.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "{item}")?;
-                }
-                f.write_str(">")?;
-                if let Some(tail) = tail {
-                    // Right-associative and loosest: the tail never needs parentheses.
-                    f.write_str(" . ")?;
-                    tail.fmt_prec(f, 0)?;
+                out.append(items);
+                if let Some(t) = tail.take() {
+                    out.push(*t);
                 }
             }
         }
-        if parens {
-            f.write_str(")")?;
-        }
-        Ok(())
     }
+}
+
+/// A term of any depth drops in constant stack (CLM-0019): the children are
+/// moved into a worklist and dropped in a loop instead of by the recursive
+/// drop glue — a long list literal is a chain as deep as it is long.
+impl Drop for Expr {
+    fn drop(&mut self) {
+        let mut work: Vec<Expr> = Vec::new();
+        self.take_children(&mut work);
+        while let Some(mut e) = work.pop() {
+            e.take_children(&mut work);
+        }
+    }
+}
+
+/// A unit of the iterative renderer's work (CLM-0019): an expression to
+/// print at a minimum precedence, an atom, or text.
+enum Piece<'a> {
+    Expr(&'a Expr, u8),
+    Atom(&'a Atom),
+    Text(&'static str),
+}
+
+/// Render terms with an explicit stack, so the depth of a literal costs no
+/// Rust stack. Items are pushed in reverse of their output order.
+fn render(f: &mut fmt::Formatter<'_>, root: Piece<'_>) -> fmt::Result {
+    let mut work = vec![root];
+    while let Some(piece) = work.pop() {
+        match piece {
+            Piece::Text(t) => f.write_str(t)?,
+            Piece::Atom(a) => {
+                write!(f, "{}(", display_name(&a.name))?;
+                work.push(Piece::Text(")"));
+                for (i, arg) in a.args.iter().enumerate().rev() {
+                    work.push(Piece::Expr(arg, 0));
+                    if i > 0 {
+                        work.push(Piece::Text(", "));
+                    }
+                }
+            }
+            Piece::Expr(e, min) => {
+                let prec = e.precedence();
+                if prec < min {
+                    f.write_str("(")?;
+                    work.push(Piece::Text(")"));
+                }
+                match e {
+                    Expr::Atom(a) => work.push(Piece::Atom(a)),
+                    Expr::Var(v) => f.write_str(v)?,
+                    Expr::Number(n) => write!(f, "{n}")?,
+                    Expr::Ident(i) => f.write_str(&display_name(i))?,
+                    Expr::Neg(x) => {
+                        f.write_str("-")?;
+                        work.push(Piece::Expr(x, 3));
+                    }
+                    Expr::Binary { op, left, right } => {
+                        // Left-associative: the right operand needs parentheses
+                        // at equal precedence.
+                        work.push(Piece::Expr(right, prec + 1));
+                        work.push(Piece::Text(match op {
+                            ArithOp::Add => " + ",
+                            ArithOp::Sub => " - ",
+                            ArithOp::Mul => " * ",
+                            ArithOp::Div => " / ",
+                        }));
+                        work.push(Piece::Expr(left, prec));
+                    }
+                    Expr::Len(x) => {
+                        f.write_str("|")?;
+                        work.push(Piece::Text("|"));
+                        work.push(Piece::Expr(x, 0));
+                    }
+                    Expr::Concat(l, r) => {
+                        // Right-associative: a `.` on the left needs parentheses.
+                        work.push(Piece::Expr(r, 0));
+                        work.push(Piece::Text(" . "));
+                        work.push(Piece::Expr(l, 1));
+                    }
+                    Expr::List { items, tail } => {
+                        f.write_str("<")?;
+                        if let Some(t) = tail {
+                            // Right-associative and loosest: the tail never
+                            // needs parentheses.
+                            work.push(Piece::Expr(t, 0));
+                            work.push(Piece::Text(" . "));
+                        }
+                        work.push(Piece::Text(">"));
+                        for (i, item) in items.iter().enumerate().rev() {
+                            work.push(Piece::Expr(item, 0));
+                            if i > 0 {
+                                work.push(Piece::Text(", "));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.fmt_prec(f, 0)
+        render(f, Piece::Expr(self, 0))
     }
 }
 
@@ -248,14 +318,7 @@ pub fn display_name(name: &str) -> std::borrow::Cow<'_, str> {
 
 impl fmt::Display for Atom {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}(", display_name(&self.name))?;
-        for (i, arg) in self.args.iter().enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            write!(f, "{arg}")?;
-        }
-        f.write_str(")")
+        render(f, Piece::Atom(self))
     }
 }
 

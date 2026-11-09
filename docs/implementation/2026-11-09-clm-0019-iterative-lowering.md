@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: task
-status: in-progress
+status: done
 affects:
   - docs/architecture/components/evaluator.md
 components: [parser, evaluator]
@@ -38,33 +38,46 @@ pins by format; its recursion is noted. Parsing is already iterative (LR).
 ## Action items
 
 1. **Lowering** (`src/eval/compile.rs`): `Lowerer::term` walks the `Expr`
-   with an explicit stack of enter/build frames and a result stack,
-   post-order, so children are built before their parent in source order;
-   `List` builds its chain from the item results. `atom` and `constraint`
-   call it; no recursion remains.
+   with an explicit stack of `Walk::Enter`/`Walk::Build` frames and a
+   result stack, post-order, children entered in reverse so they are built
+   left to right; `List` builds its chain from the item results. A result
+   stack out of step is `EvalError::InternalInvariant` (new variant,
+   reported rather than panicked; never expected). **Done.**
 2. **Instantiation** (`build_with`): the same frames over `TTerm` with an
-   address result stack; side effects (`post_neg`, `post_arith`,
-   `post_len`, `post_concat`) occur in the same post-order as before.
-3. **Printing** (`src/ast.rs`): one iterative engine renders `Expr` and
-   `Atom` from a work stack of expression-with-minimum-precedence, atom,
-   and text items; parenthesisation is unchanged (same precedence rules,
-   same output). `Expr::fmt` and `Atom::fmt` call it.
-4. **Dropping**: `impl Drop for Expr` and `for TTerm` move the children
-   into a worklist and drop them in a loop, so a chain of any depth drops
-   in constant stack. The actions' `expr_concat_expr` destructures by
-   mutable reference and `mem::take` instead of by value.
-5. **Tests**: the deep-derivation test loses its 64 MiB thread and runs
-   on a 1 MiB one, with a 10 000-deep term parsed, compiled, echoed and
-   run; a new test lowers and runs a 200 000-element list literal and
-   prints a 100 000-deep term, on the same small thread. Golden examples
-   unchanged.
-6. **Docs**: `evaluator.md` (the recursion remark from CLM-0016 replaced);
-   this plan.
+   address result stack; `post_neg`, `post_arith`, `post_len`,
+   `post_concat` run in the same post-order as before. **Done.**
+3. **Printing** (`src/ast.rs`): `render` drives a work stack of
+   `Piece::Expr(e, min_prec)`, `Piece::Atom`, `Piece::Text`; `Expr::fmt`
+   and `Atom::fmt` call it; parenthesisation rules unchanged, every golden
+   file and the parse tests' round trips byte-identical. **Done.**
+4. **Dropping**: `impl Drop for Expr` and `for TTerm` move children into a
+   worklist (`take_children`) and drop them in a loop. `expr_concat_expr`
+   destructures by mutable reference and `mem::take`; it also avoids
+   `let … else`, which the pretty-printer rustemo re-emits the actions
+   file through does not know (the build script panicked on it).
+   **Done.**
+5. **Tests**: `deep_derivations_do_not_touch_the_rust_stack` runs on a
+   1 MiB thread (was 64 MiB); `deep_literals_cost_no_stack` parses,
+   lowers, echoes, runs and drops a 100 000-deep term and measures a
+   200 000-element list literal on the same 1 MiB thread. 135 tests.
+   **Done.**
+6. **Docs**: `evaluator.md` (the CLM-0016 recursion remark replaced); this
+   plan. **Done.**
+
+## Measured on the CLI (release, default 8 MiB stack)
+
+| Input | before | after |
+|---|---|---|
+| 10 000-deep term, run / echo | stack overflow | `true` / prints |
+| 100 000-deep term, run / echo | stack overflow | `true` / prints |
+| 50 000-element list literal, `|L|` | stack overflow | `N = 50000`, 0.10 s |
+| 200 000-element list literal, `|L|` | stack overflow | `N = 200000`, 0.37 s |
+| `--parse` of a 100 000-deep term | stack overflow | stack overflow (derived `Debug`, documented) |
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test` clean; every golden file byte-identical.
-- [ ] The CLI runs a 100 000-deep term and a 200 000-element list literal
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` clean (135 tests); every golden file byte-identical.
+- [x] The CLI runs a 100 000-deep term and a 200 000-element list literal
       on its default stack.
-- [ ] `aivolution lint .` clean; `evaluator.md` current.
+- [x] `aivolution lint .` clean; `evaluator.md` current.

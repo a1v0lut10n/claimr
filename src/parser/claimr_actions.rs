@@ -241,29 +241,27 @@ pub fn expr_list_expr(_ctx: &Ctx, tuple: Tuple) -> Expr {
 /// `<a> . <b> . T` is the one chain `<a, b> . T` (the same term; the answer
 /// printer would print it so). Any other left operand is a concatenation
 /// constraint.
-pub fn expr_concat_expr(_ctx: &Ctx, left: Expr, right: Expr) -> Expr {
-    match left {
-        ast::Expr::List { items: mut tuple, tail: None } => {
-            if tuple.is_empty() {
-                return right;
-            }
-            match right {
-                ast::Expr::List { items, tail } => {
-                    tuple.extend(items);
-                    ast::Expr::List {
-                        items: tuple,
-                        tail,
-                    }
-                }
-                tail => {
-                    ast::Expr::List {
-                        items: tuple,
-                        tail: Some(Box::new(tail)),
-                    }
-                }
-            }
-        }
-        left => ast::Expr::Concat(Box::new(left), Box::new(right)),
+pub fn expr_concat_expr(_ctx: &Ctx, mut left: Expr, mut right: Expr) -> Expr {
+    if !matches!(left, ast::Expr::List { tail : None, .. }) {
+        return ast::Expr::Concat(Box::new(left), Box::new(right));
+    }
+    let mut tuple = match &mut left {
+        ast::Expr::List { items, .. } => std::mem::take(items),
+        _ => Vec::new(),
+    };
+    if tuple.is_empty() {
+        return right;
+    }
+    if let ast::Expr::List { items, tail } = &mut right {
+        tuple.extend(std::mem::take(items));
+        return ast::Expr::List {
+            items: tuple,
+            tail: tail.take(),
+        };
+    }
+    ast::Expr::List {
+        items: tuple,
+        tail: Some(Box::new(right)),
     }
 }
 /// CLM-0017: resolve backslash escapes between the delimiters of a quoted
