@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: design
-status: proposed
+status: accepted
 components: [grammar, parser, evaluator, solver, cli, highlight]
 aspects: [grammar-authority, exact-arithmetic, answer-soundness]
 tags: [lists, tuples, concatenation, grammar, solver, prolog-iii]
