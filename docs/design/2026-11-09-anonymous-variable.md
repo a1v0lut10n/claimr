@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: design
-status: proposed
+status: accepted
 components: [grammar, parser, evaluator, highlight]
 aspects: [grammar-authority, answer-soundness]
 tags: [anonymous-variable, grammar, variables, prolog-iii]
