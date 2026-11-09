@@ -12,6 +12,7 @@ use std::fmt;
 use crate::Number;
 use crate::solver::{LinExpr, SVar};
 
+use super::compile::LIST_LABEL;
 use super::project::{Projected, project};
 use super::store::{Addr, Cell, PendingDif, Store};
 use super::symbol::Symbols;
@@ -63,6 +64,12 @@ impl fmt::Display for Answer {
         }
         Ok(())
     }
+}
+
+/// A unit of the iterative renderer's work list.
+enum Item {
+    Term(Addr),
+    Text(&'static str),
 }
 
 struct Printer<'a> {
@@ -142,14 +149,55 @@ impl<'a> Printer<'a> {
         }
     }
 
+    /// CLM-0014: queue the rendering of the list whose first cell is `cell`
+    /// (a `'<>'/2` structure): `<h1, h2, h3>` when the spine ends in `'<>'`,
+    /// `<h1, h2> . t` when it ends in anything else. The spine stops at a
+    /// cyclic node, which prints by name, so `X = <1> . X` is the finite form
+    /// of a cyclic list.
+    fn push_list(&self, stack: &mut Vec<Item>, cell: Addr) {
+        let mut heads = Vec::new();
+        let mut tail = cell;
+        let mut first = true;
+        loop {
+            let a = self.store.deref(tail);
+            match self.store.cell(a) {
+                // The first cell is walked even when it is cyclic (its inner
+                // occurrences print by name); any later cyclic cell ends the
+                // spine, which also stops a cycle back to the first cell.
+                Cell::Struct(f, args)
+                    if args.len() == 2
+                        && self.symbols.name(*f) == LIST_LABEL
+                        && (first || !self.cyclic.contains(&a)) =>
+                {
+                    heads.push(args[0]);
+                    tail = args[1];
+                    first = false;
+                }
+                _ => break,
+            }
+        }
+        let a = self.store.deref(tail);
+        let proper =
+            matches!(self.store.cell(a), Cell::Const(c) if self.symbols.name(*c) == LIST_LABEL);
+        if proper {
+            stack.push(Item::Text(">"));
+        } else {
+            stack.push(Item::Term(tail));
+            stack.push(Item::Text("> . "));
+        }
+        for (i, &h) in heads.iter().enumerate().rev() {
+            if i + 1 < heads.len() {
+                stack.push(Item::Text(", "));
+            }
+            stack.push(Item::Term(h));
+        }
+        stack.push(Item::Text("<"));
+    }
+
     /// Render the term at `root`. If `root` is itself a cyclic node it is
     /// expanded here (its inner occurrences print as its name); other cyclic
     /// nodes print as names and are queued for their own equations.
     fn render(&mut self, root: Addr) -> String {
-        enum Item {
-            Term(Addr),
-            Text(&'static str),
-        }
         let root = self.store.deref(root);
         let mut out = String::new();
         let mut stack = vec![Item::Term(root)];
@@ -177,6 +225,7 @@ impl<'a> Printer<'a> {
                                 }
                             }
                         }
+                        Cell::Const(c) if self.symbols.name(c) == LIST_LABEL => out.push_str("<>"),
                         Cell::Const(c) => {
                             out.push_str(&crate::ast::display_name(self.symbols.name(c)))
                         }
@@ -189,6 +238,10 @@ impl<'a> Printer<'a> {
                                     self.pending_nodes.push(a);
                                 }
                                 out.push_str(&self.names[&a]);
+                                continue;
+                            }
+                            if args.len() == 2 && self.symbols.name(f) == LIST_LABEL {
+                                self.push_list(&mut stack, a);
                                 continue;
                             }
                             out.push_str(&crate::ast::display_name(self.symbols.name(f)));

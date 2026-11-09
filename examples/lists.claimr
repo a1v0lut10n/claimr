@@ -1,20 +1,28 @@
-% Lists as terms (there is no list syntax yet): nil, cons(Head, Tail).
-append(nil, L, L).
-append(cons(H, T), L, cons(H, R)) :- append(T, L, R).
+% Lists (CLM-0014, docs/design/2026-11-09-lists-as-a-constraint-domain.md,
+% stage 1): `<>` is the empty list, `<a, b, c>` a list, and `<a, b> . T` the
+% chain a, b then T — the cons pattern in a head. A list is the chain of
+% '<>'(H, T) cells ending in '<>', so '<>'(a, '<>') is the same term as <a>.
+append(<>, L, L).
+append(<H> . T, L, <H> . R) :- append(T, L, R).
 
-member(X, cons(X, T)).
-member(X, cons(H, T)) :- member(X, T).
+member(X, <X> . T).
+member(X, <H> . T) :- member(X, T).
 
-reverse(nil, nil).
-reverse(cons(H, T), R) :- reverse(T, RT), append(RT, cons(H, nil), R).
+reverse(<>, <>).
+reverse(<H> . T, R) :- reverse(T, RT), append(RT, <H>, R).
 
-length(nil, zero).
-length(cons(H, T), s(N)) :- length(T, N).
+length(<>, zero).
+length(<H> . T, s(N)) :- length(T, N).
 
-?- append(cons(1, cons(2, nil)), cons(3, nil), L).
-?- append(X, Y, cons(a, cons(b, nil))).
-?- member(X, cons(a, cons(b, cons(c, nil)))).
-?- member(b, cons(a, cons(b, cons(c, nil)))).
-?- reverse(cons(1, cons(2, cons(3, nil))), R).
-?- length(cons(a, cons(b, nil)), N).
+?- append(<1, 2>, <3>, L).
+?- append(X, Y, <a, b>).
+?- member(X, <a, b, c>).
+?- member(b, <a, b, c>).
+?- reverse(<1, 2, 3>, R).
+?- length(<a, b>, N).
 ?- length(L, s(s(zero))).
+?- { L = <1, 2> . T }.
+?- { X = <a> . <b> . T }.
+?- { X = <1> . X }.
+?- { '<>'(a, '<>') = <a> }.
+?- { X = <<1, 2>, <>, f(<a>)> }.

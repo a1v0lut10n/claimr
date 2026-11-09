@@ -100,6 +100,10 @@ impl VarMap {
     }
 }
 
+/// The reserved label of list cells and of the empty list (CLM-0014):
+/// `'<>'(H, T)` is a cell, the nullary `'<>'` the empty list.
+pub(crate) const LIST_LABEL: &str = "<>";
+
 struct Lowerer<'a> {
     symbols: &'a mut Symbols,
     vars: VarMap,
@@ -115,6 +119,20 @@ impl Lowerer<'_> {
             Expr::Neg(e) => TTerm::Neg(Box::new(self.term(e)?)),
             Expr::Binary { op, left, right } => {
                 TTerm::Arith(*op, Box::new(self.term(left)?), Box::new(self.term(right)?))
+            }
+            // CLM-0014: `<a, b> . T` is the chain '<>'(a, '<>'(b, T)); a list
+            // without a tail ends in the constant '<>'.
+            Expr::List { items, tail } => {
+                let nil = self.symbols.intern(LIST_LABEL);
+                let mut t = match tail {
+                    Some(tail) => self.term(tail)?,
+                    None => TTerm::Const(nil),
+                };
+                for item in items.iter().rev() {
+                    let h = self.term(item)?;
+                    t = TTerm::Compound(nil, vec![h, t]);
+                }
+                t
             }
         })
     }
@@ -161,10 +179,9 @@ impl Program {
         Self::compile_iter(clauses.iter().map(|c| (c, None)))
     }
 
-    /// Compile clauses parsed with [`crate::parse_program_spanned`]. Spans
-    /// are reserved for load-time diagnostics that point into the source;
-    /// currently every construct compiles, so this behaves as
-    /// [`Program::compile`].
+    /// Compile clauses parsed with [`crate::parse_program_spanned`]: a
+    /// load-time diagnostic that points into the source
+    /// ([`EvalError::ReservedName`]) then carries the clause's position.
     pub fn compile_spanned(clauses: &[(Clause, Span)]) -> Result<Program, EvalError> {
         Self::compile_iter(clauses.iter().map(|(c, s)| (c, Some(*s))))
     }
@@ -177,7 +194,21 @@ impl Program {
         let mut initial = Vec::new();
         let mut queries = Vec::new();
 
-        for (clause, _span) in clauses {
+        for (clause, span) in clauses {
+            // CLM-0014: `'<>'` is the list constructor; a program cannot define
+            // a predicate of that name.
+            if let Clause::Fact(head)
+            | Clause::Rule { head, .. }
+            | Clause::ConstraintRule { head, .. }
+            | Clause::Implication { head, .. } = clause
+            {
+                if head.name == LIST_LABEL {
+                    return Err(EvalError::ReservedName {
+                        name: head.name.clone(),
+                        span,
+                    });
+                }
+            }
             let mut lw = Lowerer {
                 symbols: &mut symbols,
                 vars: VarMap::default(),

@@ -1,18 +1,28 @@
-?- append(cons(1, cons(2, nil)), cons(3, nil), L).
-L = cons(1, cons(2, cons(3, nil)))
-?- append(X, Y, cons(a, cons(b, nil))).
-X = nil, Y = cons(a, cons(b, nil))
-X = cons(a, nil), Y = cons(b, nil)
-X = cons(a, cons(b, nil)), Y = nil
-?- member(X, cons(a, cons(b, cons(c, nil)))).
+?- append(<1, 2>, <3>, L).
+L = <1, 2, 3>
+?- append(X, Y, <a, b>).
+X = <>, Y = <a, b>
+X = <a>, Y = <b>
+X = <a, b>, Y = <>
+?- member(X, <a, b, c>).
 X = a
 X = b
 X = c
-?- member(b, cons(a, cons(b, cons(c, nil)))).
+?- member(b, <a, b, c>).
 true
-?- reverse(cons(1, cons(2, cons(3, nil))), R).
-R = cons(3, cons(2, cons(1, nil)))
-?- length(cons(a, cons(b, nil)), N).
+?- reverse(<1, 2, 3>, R).
+R = <3, 2, 1>
+?- length(<a, b>, N).
 N = s(s(zero))
 ?- length(L, s(s(zero))).
-L = cons(_1, cons(_2, nil))
+L = <_1, _2>
+?- { L = <1, 2> . T }.
+L = <1, 2> . T
+?- { X = <a, b> . T }.
+X = <a, b> . T
+?- { X = <1> . X }.
+X = <1> . X
+?- { '<>'(a, '<>') = <a> }.
+true
+?- { X = <<1, 2>, <>, f(<a>)> }.
+X = <<1, 2>, <>, f(<a>)>

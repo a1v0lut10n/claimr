@@ -77,8 +77,8 @@ args           ::= expr { "," expr }
 
 name           ::= identifier | quoted_atom     (* CLM-0011: identity is content *)
 
-expr           ::= expr "+" expr          (* left-assoc, lowest *)
-                 | expr "-" expr          (* left-assoc, lowest *)
+expr           ::= expr "+" expr          (* left-assoc *)
+                 | expr "-" expr          (* left-assoc *)
                  | expr "*" expr          (* left-assoc *)
                  | expr "/" expr          (* left-assoc *)
                  | "-" expr               (* unary minus, binds tightest *)
@@ -87,6 +87,10 @@ expr           ::= expr "+" expr          (* left-assoc, lowest *)
                  | number
                  | atom
                  | variable
+                 | tuple                  (* CLM-0014: a list *)
+                 | tuple "." expr         (* right-assoc, lowest: the chain then expr *)
+
+tuple          ::= "<" [ args ] ">"
 
 identifier     ::= letter { letter | digit | "_" }
 quoted_atom    ::= "'" { any character except "'" and "\\" | "\\" any character } "'"
@@ -105,6 +109,23 @@ parser does not fold constants (`1/3` is a division node); an arithmetic term
 denotes a number at evaluation time and its operands must then be numbers —
 see [`../design/2026-08-17-arithmetic-in-terms.md`](../design/2026-08-17-arithmetic-in-terms.md).
 Linearity is a solver check, not a grammar rule.
+
+**Lists** (CLM-0014, stage 1 of
+[`../design/2026-11-09-lists-as-a-constraint-domain.md`](../design/2026-11-09-lists-as-a-constraint-domain.md))
+are Prolog III tuples: `<>` is the empty list, `<a, b, c>` a list, and
+`<a, b> . T` the chain `a`, `b` then `T` — the cons pattern when written in a
+head (`member(X, <X> . T).`). The concatenation `.` is right-associative and
+binds looser than every arithmetic operator (`<a> . T + 1` is `<a> . (T + 1)`);
+in stage 1 its left operand is a literal tuple. `<a> . <b> . T` is the one
+chain `<a, b> . T`, and `<> . T` is `T`. A list is the chain of binary cells
+labelled `'<>'` ending in the constant `'<>'`, so `'<>'(a, '<>')` is the same
+term as `<a>`; answers print every such chain in the tuple notation
+(`<1, 2, 3>`, `<1, 2> . T`, `<>`), a cyclic chain as an equation
+(`X = <1> . X`). `'<>'` is reserved: a program cannot define a predicate of
+that name. `<` and `>` keep their relational meaning in constraints and `.`
+its terminator meaning after a clause; a term is never followed by either, so
+the two roles never meet. A number literal needs digits on both sides of its
+point, so `<1> . 2` is a concatenation and `1.5` a number.
 
 Semantics of `number`: a literal denotes an **exact rational** — `18.5` is
 37/2, `0.10` is 1/10 — and integers are the denominator-1 case. There is no

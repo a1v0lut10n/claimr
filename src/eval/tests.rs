@@ -46,6 +46,48 @@ fn recursion_over_lists() {
 }
 
 #[test]
+fn lists_print_in_their_notation() {
+    // CLM-0014: `<>` chains print as `<a, b>`, `<a, b> . T`, `<>`; a cycle
+    // prints as an equation; a hand-spelled `'<>'` cell is the same term.
+    let out = answers(
+        "first(X, <X> . T).
+         ?- first(X, <1, 2, 3>).
+         ?- { L = <1, 2> . T }.
+         ?- { X = <a> . <b> . T }.
+         ?- { X = <1> . X }.
+         ?- { X = <> }.
+         ?- { X = '<>'(a, '<>') }.
+         ?- { '<>'(a, '<>') = <a> }.
+         ?- { X = <1> . 2 }.
+         ?- { X = '<>'(a, b, c) }.
+         ?- { X = <a> . T + 1 }.",
+    );
+    assert_eq!(out[0], vec!["X = 1"]);
+    assert_eq!(out[1], vec!["L = <1, 2> . T"]);
+    assert_eq!(out[2], vec!["X = <a, b> . T"]);
+    assert_eq!(out[3], vec!["X = <1> . X"]);
+    assert_eq!(out[4], vec!["X = <>"]);
+    assert_eq!(out[5], vec!["X = <a>"]);
+    assert_eq!(out[6], vec!["true"]);
+    assert_eq!(out[7], vec!["X = <1> . 2"]);
+    assert_eq!(out[8], vec!["X = '<>'(a, b, c)"]);
+    // `.` binds looser than `+`: the tail is the arithmetic term.
+    assert_eq!(out[9], vec!["X = <a> . _1, _1 = T + 1"]);
+}
+
+#[test]
+fn the_list_constructor_cannot_be_defined_as_a_predicate() {
+    let clauses = parse_program_spanned("ok(a).\n'<>'(a, b).\n").expect("parses");
+    let err = Program::compile_spanned(&clauses).expect_err("reserved");
+    assert!(matches!(err, EvalError::ReservedName { ref name, .. } if name == "<>"));
+    let span = err.span().expect("positioned");
+    assert_eq!((span.line, span.column), (2, 1));
+    assert!(err.to_string().starts_with("`'<>'` is reserved"));
+    // Calling it is only an undefined predicate (no clauses): it fails.
+    assert!(answers("?- '<>'(a, b).")[0].is_empty());
+}
+
+#[test]
 fn constraint_goals_in_bodies_and_queries() {
     let out = answers(
         "same(X, X).

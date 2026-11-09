@@ -52,6 +52,17 @@ fn stepping_answers() {
 }
 
 #[test]
+fn lists_echo_in_their_notation() {
+    // CLM-0014: clauses and answers print lists as written.
+    let (out, _, code) = run(&[], "first(X, <X> . T).\n:list\n?- first(F, <1, 2> . R).\n");
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        "first(X, <X> . T).\n?- first(F, <1, 2> . R).\nF = 1.\n"
+    );
+}
+
+#[test]
 fn stepping_past_the_last_alternative_prints_false() {
     // Two clauses, second fails: after `;` the search is exhausted.
     let (out, _, _) = run(&[], "p(a).\np(X) :- q(X).\n?- p(Y).\n;\n");

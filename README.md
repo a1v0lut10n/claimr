@@ -65,6 +65,8 @@ relop           ::= "=" | "!=" | "<" | ">" | "<=" | ">="
 
 expr           ::= expr ("+" | "-") expr | expr ("*" | "/") expr | "-" expr
                  | "(" expr ")" | name | number | atom | variable
+                 | tuple | tuple "." expr
+tuple          ::= "<" [ args ] ">"
 
 name           ::= identifier | quoted_atom
 ```
@@ -72,7 +74,10 @@ name           ::= identifier | quoted_atom
 Arithmetic operators are term constructors, usable anywhere a term goes
 (Prolog III style); `%` starts a comment that runs to the end of the line.
 Quoted atoms (`'situation:frame-in-spec'`, backslash escapes) admit any
-content as an atom — identity is content, quoting is spelling.
+content as an atom — identity is content, quoting is spelling. Lists are
+Prolog III tuples: `<>` is the empty list, `<a, b, c>` a list, and
+`<a, b> . T` the chain `a`, `b` then `T` (the cons pattern in a head:
+`member(X, <X> . T).`); answers print lists the same way.
 
 ## Examples
 

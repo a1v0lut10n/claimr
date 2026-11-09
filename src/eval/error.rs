@@ -19,6 +19,10 @@ pub enum EvalError {
     /// An attribute term (a compound in numeric position) is cyclic; such
     /// terms have no finite key and are not supported.
     CyclicAttributeTerm { term: String },
+    /// A clause defines a predicate whose name is reserved: `'<>'` is the
+    /// list constructor (CLM-0014). `span` is the clause's position when the
+    /// program was parsed with positions.
+    ReservedName { name: String, span: Option<Span> },
 }
 
 impl fmt::Display for EvalError {
@@ -37,16 +41,22 @@ impl fmt::Display for EvalError {
                     "cyclic attribute term `{term}` in numeric position is not supported"
                 )
             }
+            EvalError::ReservedName { name, .. } => write!(
+                f,
+                "`{}` is reserved (the list constructor) and cannot be defined as a predicate",
+                crate::ast::display_name(name)
+            ),
         }
     }
 }
 
 impl EvalError {
     /// The source position this error points at, if known (1-based line and
-    /// column, as in `ParseError`). No current error carries one; the hook
-    /// stays so the CLI prints `file:line:col:` uniformly when one does.
+    /// column, as in `ParseError`); the CLI prints `file:line:col:` when
+    /// there is one.
     pub fn span(&self) -> Option<Span> {
         match self {
+            EvalError::ReservedName { span, .. } => *span,
             EvalError::InitialStoreUnsatisfiable
             | EvalError::NonLinear { .. }
             | EvalError::CyclicAttributeTerm { .. } => None,

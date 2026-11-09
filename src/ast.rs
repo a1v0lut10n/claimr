@@ -45,6 +45,7 @@ pub struct Atom {
 /// Arithmetic operators are term constructors admissible anywhere a term
 /// goes (Prolog III); an arithmetic term denotes a number at evaluation
 /// time. The parser does no constant folding: `1/3` is `Binary { Div, 1, 3 }`.
+/// Lists are terms too, spelled `<a, b> . T`; see [`Expr::List`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     Atom(Box<Atom>),
@@ -59,6 +60,13 @@ pub enum Expr {
         op: ArithOp,
         left: Box<Expr>,
         right: Box<Expr>,
+    },
+    /// A list (CLM-0014): `<>`, `<a, b, c>`, or `<a, b> . T` when `tail` is
+    /// present. It denotes the chain of `'<>'(H, T)` cells ending in `'<>'`
+    /// or in the tail (docs/design/2026-11-09-lists-as-a-constraint-domain.md).
+    List {
+        items: Vec<Expr>,
+        tail: Option<Box<Expr>>,
     },
 }
 
@@ -136,8 +144,10 @@ impl ArithOp {
 }
 
 impl Expr {
+    /// Binding strength: a list with a tail (`.`) is 0, below arithmetic.
     fn precedence(&self) -> u8 {
         match self {
+            Expr::List { tail: Some(_), .. } => 0,
             Expr::Binary { op, .. } => op.precedence(),
             Expr::Neg(_) => 3,
             _ => 4,
@@ -164,6 +174,21 @@ impl Expr {
                 left.fmt_prec(f, prec)?;
                 write!(f, " {op} ")?;
                 right.fmt_prec(f, prec + 1)?;
+            }
+            Expr::List { items, tail } => {
+                f.write_str("<")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{item}")?;
+                }
+                f.write_str(">")?;
+                if let Some(tail) = tail {
+                    // Right-associative and loosest: the tail never needs parentheses.
+                    f.write_str(" . ")?;
+                    tail.fmt_prec(f, 0)?;
+                }
             }
         }
         if parens {

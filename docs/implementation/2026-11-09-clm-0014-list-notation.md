@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: task
-status: in-progress
+status: done
 affects:
   - docs/reference/grammar.md
   - docs/architecture/components/evaluator.md
@@ -39,57 +39,87 @@ the JSON output (a list is the compound it is).
 
 ## Action items
 
-1. **Grammar** (`src/parser/claimr.rustemo`): two `Expr` productions and
-   no new terminal:
+1. **Grammar** (`src/parser/claimr.rustemo`): two `Expr` productions, one
+   `Tuple` rule and no new terminal:
 
-       | '<' items=Args? '>'               {ListExpr}
-       | '<' items=Args '>' '.' tail=Expr {ListTailExpr, right, 0}
+       | tuple=Tuple               {ListExpr}
+       | tuple=Tuple '.' tail=Expr {ListTailExpr, right, 0}
+       Tuple: '<' items=Args? '>';
 
    Priority 0 puts `.` below `+ -` (1), so `<a> . T + 1` is
-   `<a> . (T + 1)`; right associativity gives `<a> . <b> . T`. Checked
-   with the project's generator before starting (rustemo 0.9.1 `rcomp`,
-   default tables): 57 productions, 90 states, zero conflicts. `'.'`
+   `<a> . (T + 1)`; right associativity gives `<a> . <b> . T`. `'.'`
    resolves to the existing `Dot` terminal; an `Expr` is never followed by
-   the clause terminator, so the two roles never meet in one state.
+   the clause terminator, so the two roles never meet in one state
+   (rustemo 0.9.1 `rcomp`, default tables: 58 productions, 89 states).
+   **Done**, with a correction to the record's spelling of the production,
+   see *Deviation* below.
 2. **AST** (`src/ast.rs`): `Expr::List { items: Vec<Expr>, tail:
    Option<Box<Expr>> }`. Display prints `<>`, `<a, b, c>` and
    `<a, b> . T`; the tail form has precedence 0 and is parenthesised as an
    arithmetic operand (`(<a> . T) + 1`), the tail itself prints at
    precedence 0. Query echoes (`Query::text`), `--parse` and the REPL's
-   `:list` follow from this.
+   `:list` follow from this. **Done.**
 3. **Actions** (`src/parser/claimr_actions.rs`): `expr_list_expr`,
-   `expr_list_tail_expr` build the variant.
+   `expr_list_tail_expr`, `tuple_c1`. The tail action normalises:
+   `<> . T` is `T`, and `<a> . <b> . T` is the one chain `<a, b> . T`
+   (the same term, and what the answer printer prints). **Done.**
 4. **Lowering** (`src/eval/compile.rs`): `Expr::List` becomes a chain of
    `TTerm::Compound('<>', [h, t])` ending in `TTerm::Const('<>')` or the
-   lowered tail. `'<>'(a, '<>')` written by hand is therefore the same
-   term as `<a>`. A clause whose head is named `'<>'` is rejected at
-   compile time with a new `EvalError::ReservedName` carrying the clause's
-   span (the record reserves the spelling; this is the first `EvalError`
-   with a position, through the existing `span()` hook).
-5. **Printing** (`src/eval/answer.rs`): the iterative renderer walks a
-   `'<>'/2` spine, printing `<1, 2, 3>` when it ends in `'<>'`,
-   `<1, 2> . T` when it ends in anything else, `<>` for the bare constant.
-   The walk stops at a cyclic node (back-edge target) so `X = <1> . X`
-   prints as that equation, the printer's existing finite form; `'<>'`
-   with another arity is an ordinary compound.
+   lowered tail (`LIST_LABEL`). `'<>'(a, '<>')` written by hand is
+   therefore the same term as `<a>`. A clause whose head is named `'<>'`
+   is rejected at compile time with the new `EvalError::ReservedName`
+   carrying the clause's span: the first `EvalError` with a position,
+   through the existing `span()` hook, so the CLI prints `file:line:col:`.
+   **Done.**
+5. **Printing** (`src/eval/answer.rs`): `Printer::push_list` walks a
+   `'<>'/2` spine and queues `<1, 2, 3>` when it ends in `'<>'`,
+   `<1, 2> . T` when it ends in anything else; the bare constant prints
+   `<>`. The walk takes the first cell unconditionally and stops at any
+   later cyclic cell (back-edge target), which also stops a cycle back to
+   the first cell, so `X = <1> . X` prints as that equation; `'<>'` with
+   another arity is an ordinary compound. (The first version re-entered
+   the first cell and looped; the cyclic case is now a test.) **Done.**
 6. **Example and tests**: `examples/lists.claimr` rewritten in the
-   notation (`append`, `member` with the cons pattern `<X> . _`, `reverse`,
-   `length` with Peano numerals as before) plus queries for a partial list
-   with a variable tail, a cyclic list, and `'<>'(a, '<>') = <a>`; its
-   `.answers` regenerated and checked by hand. Machine tests in
-   `src/eval/tests.rs` for printing (`<1, 2> . T`, `<>`, cyclic, hand-spelled
-   `'<>'` cells) and for `ReservedName`. Parse test for the AST shape and
-   the precedence of `.` against `+`. REPL test for the echo if the
-   existing harness makes it cheap.
+   notation (`append`, `member` with the cons pattern, `reverse`, `length`
+   with Peano numerals as before) plus queries for a partial list, chained
+   tuples, a cyclic list, `'<>'(a, '<>') = <a>` and nested lists; the
+   `.answers` regenerated and checked by hand (same answers as before in
+   the new notation). Machine tests `lists_print_in_their_notation` and
+   `the_list_constructor_cannot_be_defined_as_a_predicate`; parse test
+   `list_notation_parses_to_list_terms` (AST shape, `.` against `+`,
+   Display round trip); REPL test `lists_echo_in_their_notation`.
+   **Done.**
 7. **Docs**: `docs/reference/grammar.md` and the README grammar section
-   gain the two productions and a paragraph on lists; `evaluator.md`
+   gain the productions and a paragraph on lists; `evaluator.md`
    (`compile.rs` lowering, `answer.rs` printing) updated with
-   `last-verified` bumped and the design record in `decisions`.
+   `last-verified` bumped and the design record in `decisions`. **Done.**
+
+## Deviation from the design record
+
+- The record spells the stage 1 production `'<' Args '>' '.' Expr` beside
+  `'<' Args? '>'`. Written that way the generator has a shift/reduce
+  conflict on `>` (reduce `Args?` for the list against shift `>` for the
+  concatenation) that it resolves silently by production priority, so the
+  `.` branch was unreachable: `append(<H> . T, L, R)` failed to parse with
+  no diagnostic. The record's own generator check was for the general
+  `Expr '.' Expr` form, which does not have this state. Factoring the
+  tuple into its own rule puts the choice after `>`, where the two items
+  differ only by whether `.` follows, and `.` is not in the follow set of
+  a term. Lesson for stages 2 and 3: a zero-conflict report from `rcomp`
+  is only meaningful when no production carries a priority; check the
+  `--dot` automaton for the states that matter.
+- The record's examples use the anonymous variable `_` (`member(X, <X> .
+  _)`), which claimr's grammar does not have. The example uses named
+  variables; `_` is a separate small feature worth its own incubation note
+  (one terminal, a fresh variable per occurrence, not printed in answers).
+- The record says a list "with a variable tail" prints `<1, 2> . T`; the
+  printer does so for any non-`'<>'` tail, including a non-list
+  (`<1> . 2`), which is the faithful rendering of that term.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test` clean.
-- [ ] Every existing golden example unchanged except `lists.answers`, whose
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` clean (87 unit tests plus the integration suites).
+- [x] Every existing golden example unchanged except `lists.answers`, whose
       new content is the same answers in the new notation.
-- [ ] `aivolution lint .` clean; the three `affects` docs current.
+- [x] `aivolution lint .` clean; the three `affects` docs current.
