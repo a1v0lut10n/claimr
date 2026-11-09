@@ -152,14 +152,21 @@ struct VarMap {
     index: HashMap<String, u32>,
 }
 
+/// The anonymous variable (CLM-0020): every occurrence is a fresh variable.
+pub(crate) const ANONYMOUS: &str = "_";
+
 impl VarMap {
     fn get(&mut self, name: &str) -> u32 {
-        if let Some(&i) = self.index.get(name) {
-            return i;
+        if name != ANONYMOUS {
+            if let Some(&i) = self.index.get(name) {
+                return i;
+            }
         }
         let i = self.names.len() as u32;
         self.names.push(name.to_string());
-        self.index.insert(name.to_string(), i);
+        if name != ANONYMOUS {
+            self.index.insert(name.to_string(), i);
+        }
         i
     }
 }

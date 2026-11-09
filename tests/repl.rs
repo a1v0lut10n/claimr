@@ -63,6 +63,20 @@ fn lists_echo_in_their_notation() {
 }
 
 #[test]
+fn the_anonymous_variable_echoes_and_is_not_answered() {
+    // CLM-0020.
+    let (out, _, code) = run(
+        &[],
+        "first(X, <X> . _).\n:list\n?- first(F, <1, 2>).\n?- first(_, <1, 2>).\n",
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        "first(X, <X> . _).\n?- first(F, <1, 2>).\nF = 1.\n?- first(_, <1, 2>).\ntrue.\n"
+    );
+}
+
+#[test]
 fn stepping_past_the_last_alternative_prints_false() {
     // Two clauses, second fails: after `;` the search is exhausted.
     let (out, _, _) = run(&[], "p(a).\np(X) :- q(X).\n?- p(Y).\n;\n");

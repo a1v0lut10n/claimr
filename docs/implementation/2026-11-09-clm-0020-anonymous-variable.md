@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: task
-status: in-progress
+status: done
 affects:
   - docs/reference/grammar.md
   - docs/architecture/components/evaluator.md
@@ -23,31 +23,32 @@ become valid as written.
 
 ## Action items
 
-1. **Grammar**: the `Var` terminal's regex gains the alternative `_`
-   (`/[A-Z][A-Za-z0-9_]*|_/`); no production changes, so the AST carries
-   `Expr::Var("_")` and the action is untouched. `_foo` stays an error: it
-   lexes as `_` followed by an identifier the grammar does not expect.
-2. **Compile** (`VarMap::get`): the name `_` allocates a fresh index on
-   every occurrence and is never indexed by name; the clause's variable
-   count includes them.
-3. **Query variables** (`Solutions::new`): `_` entries are dropped from
-   the answer's variable list, so they print no equation and name
-   nothing; the heap cells they bind stay reachable through named
-   variables and print as internal (`_1`).
+1. **Grammar**: `Var: /(?:[A-Z][A-Za-z0-9_]*|_)/`. The alternation must be
+   grouped: the generator anchors the pattern, and an ungrouped `|_` made
+   the second alternative match an underscore anywhere later in the input
+   (every example broke). No production changes; the AST carries
+   `Expr::Var("_")`; `_foo` lexes as `_` then `foo` and is reported as an
+   unexpected identifier at `foo`. **Done.**
+2. **Compile** (`VarMap::get`): `ANONYMOUS` allocates a fresh index on
+   every occurrence and is never indexed by name. **Done.**
+3. **Query variables** (`Solutions::new`): `_` entries are dropped from the
+   answer's variable list. **Done.**
 4. **Highlight**: a lone `_` lexes as `Variable`; coverage example added.
-5. **Examples**: `lists.claimr` and `strings.claimr` take the records'
-   spelling for don't-care positions; queries with `_` added; golden
-   answers regenerated (unchanged where no query changed).
-6. **Tests**: machine tests (distinct per occurrence, hidden in answers,
-   reachable-through-named prints as internal, a constraint on `_` alone
-   projects away, clause echo prints `_`); parse test (`_` is
-   `Expr::Var("_")`, `_foo` fails); REPL `:list` echo.
-7. **Docs**: `grammar.md` (lexical rule and a paragraph), `evaluator.md`
-   (numbering and query variables); README if its grammar block names
-   variables; this plan.
+   **Done.**
+5. **Examples**: `lists.claimr` (`member`, `length`) and `strings.claimr`
+   (`has_prefix`, `scheme`) take the records' spelling; three `_` queries
+   added to the lists example; the strings answers are unchanged, the
+   lists answers gain the three new queries only. **Done.**
+6. **Tests**: `the_anonymous_variable_is_fresh_and_unnamed` (11 queries),
+   `the_anonymous_variable_parses_and_prints_as_written`,
+   `the_anonymous_variable_echoes_and_is_not_answered` (REPL). 138 tests.
+   **Done.**
+7. **Docs**: `grammar.md` (lexical rule and paragraph), `evaluator.md`
+   (numbering, query variables); the README's grammar block has no lexical
+   rules and is unchanged. **Done.**
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test` clean.
-- [ ] `aivolution lint .` clean; the `affects` docs current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` clean (138 tests).
+- [x] `aivolution lint .` clean; the `affects` docs current.

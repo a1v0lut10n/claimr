@@ -50,7 +50,8 @@ answers in solved form. Public surface (re-exported from `claimr`):
   `post_eq_goal` / `post_dif_goal` (numeric or tree by operand) and
   `post_rel` (`< > <= >=`).
 - **`compile.rs`** — `ast::Clause` → clause templates with pre-numbered
-  variables (structure copying at instantiation) indexed by predicate
+  variables (structure copying at instantiation; every occurrence of the
+  anonymous variable `_` gets its own number, CLM-0020) indexed by predicate
   (functor, arity); `{c} => head.` desugars to `head :- {c}.`; constraint
   facts form the **initial store**, validated satisfiable at compile time;
   `?-` clauses become `Query`s in source order. Arithmetic stays in the
@@ -89,7 +90,8 @@ answers in solved form. Public surface (re-exported from `claimr`):
   built from it for unification; each body goal's terms are built from the
   frame when the goal reaches the front of the list, so arithmetic over
   values bound by earlier goals folds instead of defining solver rows.
-  Query goals are built eagerly (their variables are the answer's);
+  Query goals are built eagerly (their variables are the answer's, except
+  `_`, which is not an answer variable and prints nothing of its own);
   **iterative** (explicit goal list and choice-point stack — resolution depth
   never uses the Rust stack). An undefined predicate has no clauses and fails.
   `Solutions::with_interrupt(Arc<AtomicBool>)` installs a flag polled every

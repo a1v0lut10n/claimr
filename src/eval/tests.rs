@@ -366,6 +366,41 @@ fn built_in_names_cannot_be_defined() {
 }
 
 #[test]
+fn the_anonymous_variable_is_fresh_and_unnamed() {
+    // CLM-0020: `_` is a fresh variable at each occurrence and never an
+    // answer variable.
+    let out = answers(
+        "p(a, b).
+         q(X, Y) :- p(X, _), p(_, Y).
+         first(X, <X> . _).
+         ?- p(_, _).
+         ?- p(X, _).
+         ?- p(_, X), p(X, _).
+         ?- q(X, Y).
+         ?- first(X, <1, 2>).
+         ?- { X = f(_) }.
+         ?- { X = f(_, _) }.
+         ?- { _ > 3 }.
+         ?- { X = _ }.
+         ?- { X = <_, _> }, { |X| = 2 }.
+         ?- p(_, _), { Y = 1 }.",
+    );
+    assert_eq!(out[0], vec!["true"]);
+    assert_eq!(out[1], vec!["X = a"]);
+    assert!(out[2].is_empty()); // X = b, then p(b, _) fails
+    assert_eq!(out[3], vec!["X = a, Y = b"]);
+    assert_eq!(out[4], vec!["X = 1"]);
+    assert_eq!(out[5], vec!["X = f(_1)"]);
+    assert_eq!(out[6], vec!["X = f(_1, _2)"]);
+    // A constraint on an anonymous variable alone is satisfiable and
+    // mentions nothing named: it projects away.
+    assert_eq!(out[7], vec!["true"]);
+    assert_eq!(out[8], vec!["true"]);
+    assert_eq!(out[9], vec!["X = <_1, _2>"]);
+    assert_eq!(out[10], vec!["Y = 1"]);
+}
+
+#[test]
 fn the_list_constructor_cannot_be_defined_as_a_predicate() {
     let clauses = parse_program_spanned("ok(a).\n'<>'(a, b).\n").expect("parses");
     let err = Program::compile_spanned(&clauses).expect_err("reserved");

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::answer::{Answer, render_answer, render_terms};
-use super::compile::{Builtin, PredKey, Program, Query, TGoal, build_with, lazy_var};
+use super::compile::{ANONYMOUS, Builtin, PredKey, Program, Query, TGoal, build_with, lazy_var};
 use super::error::EvalError;
 use super::store::{Addr, Cell, Mark, Store, TypeKind};
 use crate::ast::RelOp;
@@ -112,12 +112,14 @@ impl<'p> Solutions<'p> {
         for rg in built.into_iter().rev() {
             goals = cons(Goal::Built(rg), goals);
         }
+        // An anonymous variable is not an answer variable (CLM-0020): what it
+        // binds is visible only through named variables that reach it.
         let query_vars = query
             .var_names
             .iter()
             .cloned()
             .zip(vars.iter().map(|v| v.unwrap_or(usize::MAX)))
-            .filter(|(_, a)| *a != usize::MAX)
+            .filter(|(name, a)| *a != usize::MAX && name != ANONYMOUS)
             .collect();
         let error = store.error.take();
         Solutions {

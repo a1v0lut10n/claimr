@@ -14,7 +14,7 @@ use std::ops::Range;
 pub enum TokenKind {
     /// `% …` to end of line.
     Comment,
-    /// Uppercase-initial: a logic variable (`X`, `Total`).
+    /// Uppercase-initial: a logic variable (`X`, `Total`), or `_`.
     Variable,
     /// Lowercase-initial identifier applied to arguments: `parent(…)`.
     Predicate,
@@ -105,6 +105,15 @@ pub fn line_tokens(line: &str) -> Vec<Token> {
                 range: start..i,
                 kind,
             });
+            continue;
+        }
+        // The anonymous variable `_` (CLM-0020); `_x` is `_` then junk.
+        if c == b'_' {
+            out.push(Token {
+                range: i..i + 1,
+                kind: TokenKind::Variable,
+            });
+            i += 1;
             continue;
         }
         // Identifiers and variables.
@@ -273,6 +282,7 @@ mod tests {
         // The regex terminals, by example.
         assert_eq!(line_tokens("abc")[0].kind, TokenKind::Ident);
         assert_eq!(line_tokens("Abc")[0].kind, TokenKind::Variable);
+        assert_eq!(line_tokens("_")[0].kind, TokenKind::Variable);
         assert_eq!(line_tokens("12.5")[0].kind, TokenKind::Number);
         assert_eq!(line_tokens("\"a\\\"b\"")[0].kind, TokenKind::String);
         assert_eq!(line_tokens("\"a\\\"b\"")[0].range, 0..6);
