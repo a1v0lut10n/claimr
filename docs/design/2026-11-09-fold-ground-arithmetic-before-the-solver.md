@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: design
-status: proposed
+status: accepted
 components: [evaluator, solver]
 aspects: [exact-arithmetic, answer-soundness]
 tags: [arithmetic, solver, performance, integrity-checker]
