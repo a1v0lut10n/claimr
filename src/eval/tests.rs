@@ -401,6 +401,64 @@ fn the_anonymous_variable_is_fresh_and_unnamed() {
 }
 
 #[test]
+fn first_argument_indexing_preserves_clause_order_and_answers() {
+    // CLM-0021: a call with a bound first argument visits only the clauses
+    // that can match, merged with variable-first clauses, in program order.
+    let out = answers(
+        "p(a, 1). p(X, 2). p(b, 3). p(a, 4). p(f(Y), 5). p(1/2, 6). p(f(Y, Z), 7).
+         ?- p(a, N).
+         ?- p(b, N).
+         ?- p(c, N).
+         ?- p(f(q), N).
+         ?- p(f(q, r), N).
+         ?- p(0.5, N).
+         ?- p(2, N).
+         ?- p(W, N).
+         ?- { V = 1/2 }, p(V, N).
+         ?- p(V, N), { V = a }.",
+    );
+    assert_eq!(out[0], vec!["N = 1", "N = 2", "N = 4"]);
+    assert_eq!(out[1], vec!["N = 2", "N = 3"]);
+    assert_eq!(out[2], vec!["N = 2"]);
+    assert_eq!(out[3], vec!["N = 2", "N = 5"]);
+    assert_eq!(out[4], vec!["N = 2", "N = 7"]);
+    // Numbers key exactly: 0.5 is 1/2.
+    assert_eq!(out[5], vec!["N = 2", "N = 6"]);
+    assert_eq!(out[6], vec!["N = 2"]);
+    // An unbound first argument sees every clause, in order.
+    assert_eq!(out[7].len(), 7);
+    assert_eq!(out[7][0], "W = a, N = 1");
+    assert_eq!(out[7][6], "W = f(_1, _2), N = 7");
+    // A determined numeric variable is a `Var` cell: treated as unbound, so
+    // every clause is tried, and the number clause matches. (The constant
+    // and compound heads match too, as attribute terms — the D4 consequence
+    // documented in solver.md, unchanged by the index.)
+    assert_eq!(out[8].len(), 7);
+    assert_eq!(out[8][1], "V = 1/2, N = 2");
+    assert_eq!(out[8][5], "V = 1/2, N = 6");
+    assert_eq!(out[9], vec!["V = a, N = 1", "V = a, N = 2", "V = a, N = 4"]);
+}
+
+#[test]
+fn deterministic_lookups_leave_no_choice_point() {
+    let clauses = parse_program(
+        "k(c1, 1). k(c2, 2). k(c3, 3).
+         ?- k(c2, K).
+         ?- k(C, 2).",
+    )
+    .expect("parses");
+    let program = Program::compile(&clauses).expect("compiles");
+    // One candidate: the answer is found with nothing left to try.
+    let mut s = program.solve(&program.queries()[0]);
+    assert_eq!(s.next().map(|a| a.to_string()), Some("K = 2".to_string()));
+    assert!(!s.may_continue());
+    // Unbound first argument: all three clauses are candidates.
+    let mut s = program.solve(&program.queries()[1]);
+    assert_eq!(s.next().map(|a| a.to_string()), Some("C = c2".to_string()));
+    assert!(s.may_continue());
+}
+
+#[test]
 fn the_list_constructor_cannot_be_defined_as_a_predicate() {
     let clauses = parse_program_spanned("ok(a).\n'<>'(a, b).\n").expect("parses");
     let err = Program::compile_spanned(&clauses).expect_err("reserved");

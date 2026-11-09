@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: task
-status: in-progress
+status: done
 affects:
   - docs/architecture/components/evaluator.md
 components: [evaluator]
@@ -48,32 +48,38 @@ memory and undo work on deterministic lookups.
 ## Action items
 
 1. **Compile** (`src/eval/compile.rs`): `Pred { clauses, all, by_key,
-   var_only }` per predicate; `ArgKey` (`Const`, `Num`, `Struct(f,
-   arity)`) from a head's first argument, `None` for a variable or an
-   arithmetic term; `by_key` lists merge the key's clauses with the
-   variable-first clauses in program order; `Program::candidates(key,
-   first: Option<ArgKey>) -> &[usize]`.
-2. **Machine** (`src/eval/machine.rs`): the call's first argument's key
-   from the heap (an unbound variable, numeric or not, means "all");
-   `try_clauses` walks a candidate slice from a position; `ChoicePoint`
-   stores the slice (`&'p [usize]`) and the next position instead of the
-   key and clause index; a choice point is pushed only when a candidate
-   remains.
-3. **Tests**: clause order preserved under indexing (mixed constant,
-   variable and compound first arguments, answers in program order);
-   numbers as keys (exact: `p(1/2)` matches `p(0.5)`); a call with an
-   unbound first argument sees every clause; a determined numeric variable
-   as first argument is treated as unbound and still matches; choice
-   points not pushed for deterministic lookups (through
-   `Solutions::may_continue`); every golden example unchanged.
-4. **Measurement**: the join above over 1 820, 3 640, 7 280 and 14 560
-   facts, before and after.
-5. **Docs**: `evaluator.md` (`compile.rs` index, `machine.rs` lookup; the
-   *Not yet* list loses first-argument indexing); this plan.
+   var_only }`; `ArgKey`; `arg_key` of a head's first argument (`None` for
+   a variable or an arithmetic term); `Pred::push` keeps the key lists in
+   program order and `Pred::finish` adds the variable-first clauses that
+   preceded a key's first clause; `Program::candidates`. **Done.**
+2. **Machine** (`src/eval/machine.rs`): `first_arg_key` from the heap (an
+   unbound variable, numeric or not, is `None`); `try_clauses` walks a
+   candidate slice; `ChoicePoint { candidates: &'p [usize], next }`; a
+   choice point only when a candidate remains. **Done.**
+3. **Tests**: `first_argument_indexing_preserves_clause_order_and_answers`
+   (ten queries over mixed first arguments, including `p(0.5, N)` matching
+   `p(1/2, 6)` and a determined numeric variable treated as unbound, where
+   D4's attribute-term matches appear exactly as on `main`);
+   `deterministic_lookups_leave_no_choice_point`. 140 tests; every golden
+   file byte-identical. **Done.**
+4. **Measurement** (release build, all answers, answer files byte-identical
+   to `main`'s):
+
+   | Facts per table | `main`  | indexed |
+   |-----------------|---------|---------|
+   | 1 820           | 0.71 s  | 0.03 s  |
+   | 3 640           | 1.83 s  | 0.05 s  |
+   | 7 280           | 7.13 s  | 0.09 s  |
+   | 14 560          | 28.24s | 0.18 s  |
+
+   The join is linear now. **Done.**
+5. **Docs**: `evaluator.md` (`compile.rs` index, `machine.rs` lookup, the
+   *Not yet* list now names indexing on other arguments instead); this
+   plan. **Done.**
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test` clean; every golden file byte-identical.
-- [ ] The join scales linearly.
-- [ ] `aivolution lint .` clean; `evaluator.md` current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` clean (140 tests); every golden file byte-identical.
+- [x] The join scales linearly.
+- [x] `aivolution lint .` clean; `evaluator.md` current.
