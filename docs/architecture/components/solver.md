@@ -5,6 +5,7 @@ decisions:
   - docs/design/2026-08-17-evaluator.md
   - docs/design/2026-11-09-fold-ground-arithmetic-before-the-solver.md
   - docs/design/2026-11-09-lists-as-a-constraint-domain.md
+  - docs/design/2026-11-09-truncate-the-tableau-on-undo.md
   - docs/design/2026-08-17-arithmetic-in-terms.md
   - docs/design/2026-08-17-exact-rational-arithmetic.md
 aspects: [exact-arithmetic, answer-soundness]
@@ -21,8 +22,9 @@ Claimr's constraint store. Two layers:
   (CAV 2006): a tableau of rows over non-basic variables, per-variable
   lower/upper bounds, Bland's rule for termination, `assert_lower/upper`,
   `assert_constraint(expr op 0)`, `define(fresh_var, expr)`, `check`,
-  `mark`/`undo_to` (bounds only), and `is_determined(x)` — exact, by probing
-  `x < value` and `x > value` for feasibility.
+  `mark`/`undo_to` (bounds and the variable and row set, CLM-0018), and
+  `is_determined(x)` — exact, by probing `x < value` and `x > value` for
+  feasibility.
 - **the numeric glue in `src/eval/store.rs`** — how the heap and the solver
   meet: `numvar` (unbound heap variable → solver variable), the attribute
   term registry, numeric disequations, delayed products, list lengths and
@@ -113,17 +115,21 @@ Claimr's constraint store. Two layers:
   program's business, `append/3` here); one still pending at answer time
   is a sound residual, printed `Z = X . Y`, unlike a pending product.
 - **Backtracking.** Bounds are trailed in the simplex; the registry, numeric
-  variable map, disequations, products, lengths, aliases and "fired" set
-  are trailed in the store; rows and solver variables created since a mark
-  **persist** (relaxed bounds make them inert) and `update` walks every
-  row, so their number is a cost, not just memory. Since CLM-0013 that cost
-  arises only for non-ground arithmetic under search, and since CLM-0015
-  and CLM-0016 for lengths and concatenations of open lists under search
-  (measured for lengths: `{ |Keys| < 2 }` over
-  facts with a `<k1, k2> . T` field takes 0.04 s, 0.11 s, 0.33 s, 1.14 s at
-  1 820, 3 640, 7 280 and 14 560 facts, against 0.02 s to 0.12 s for
-  complete lists); truncating the tableau on undo is the deferred
-  structural fix (see the design record).
+  variable map, disequations, products, lengths, concatenations, type
+  relations, `atom_chars`, aliases and "fired" set are trailed in the
+  store. Since CLM-0018 (`2026-11-09-truncate-the-tableau-on-undo.md`)
+  `Simplex::undo_to` also **truncates the tableau**: a mark records the
+  variable count, and on undo every post-mark variable that pivots wrote
+  into a pre-mark row is pivoted back into basic position there, the rows
+  whose basic is post-mark are dropped (they define fresh variables and
+  nothing else), the tables are truncated, and surviving non-basics are
+  moved back inside their restored bounds before `check`. The restored
+  tableau is the pre-mark system in a possibly different basis, which
+  nothing observes. Solver variable indices are therefore **reused**: no
+  code may hold an `SVar` across a mark except through the trailed store,
+  and the printing definitions of dropped variables are removed on undo.
+  Rows no longer accumulate across a search, so a query over F candidates
+  costs O(F) in the solver; the measurements are in the CLM-0018 plan.
 
 ## Answer rendering
 

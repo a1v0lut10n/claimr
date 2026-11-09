@@ -7,8 +7,10 @@
 //! over non-basic variables. Invariants: values satisfy every row, and every
 //! *non-basic* variable satisfies its bounds. `check` repairs basic
 //! violations by Bland-rule pivoting or reports infeasibility. Backtracking
-//! restores bounds only; rows and variables created since a mark persist
-//! (unbounded, they constrain nothing).
+//! restores bounds **and** the variable and row set (CLM-0018,
+//! `docs/design/2026-11-09-truncate-the-tableau-on-undo.md`): variables
+//! created since a mark are pivoted out of the surviving rows and dropped
+//! with their definitions, so their indices are reused.
 
 use std::fmt;
 
@@ -64,9 +66,12 @@ struct BoundUndo {
     upper: Option<Delta>,
 }
 
-/// A point in the solver's bound history.
+/// A point in the solver's history: the bound trail and the variable count.
 #[derive(Debug, Clone, Copy)]
-pub struct Mark(usize);
+pub struct Mark {
+    trail: usize,
+    vars: usize,
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct Simplex {
@@ -165,23 +170,85 @@ impl Simplex {
     // --- marks and undo ----------------------------------------------------
 
     pub fn mark(&self) -> Mark {
-        Mark(self.trail.len())
-    }
-
-    /// Restore all bounds to those at `mark`. Values stay (they satisfy the
-    /// rows; `check` repairs bound violations lazily).
-    pub fn undo_to(&mut self, mark: Mark) {
-        while self.trail.len() > mark.0 {
-            let u = self.trail.pop().unwrap();
-            let st = &mut self.vars[u.var.0];
-            st.lower = u.lower;
-            st.upper = u.upper;
+        Mark {
+            trail: self.trail.len(),
+            vars: self.vars.len(),
         }
     }
 
-    /// True if any bound changed since `mark`.
+    /// Restore the solver to `mark`: bounds of the variables that existed
+    /// then, and the tableau truncated to those variables (see
+    /// [`Simplex::truncate`]). Values stay a solution of the rows.
+    pub fn undo_to(&mut self, mark: Mark) {
+        while self.trail.len() > mark.trail {
+            let Some(u) = self.trail.pop() else { break };
+            if u.var.0 < mark.vars {
+                let st = &mut self.vars[u.var.0];
+                st.lower = u.lower;
+                st.upper = u.upper;
+            }
+        }
+        if self.vars.len() > mark.vars {
+            self.truncate(mark.vars);
+        }
+    }
+
+    /// True if any bound changed, or any variable was created, since `mark`.
     pub fn changed_since(&self, mark: Mark) -> bool {
-        self.trail.len() > mark.0
+        self.trail.len() > mark.trail || self.vars.len() > mark.vars
+    }
+
+    /// Remove every variable `>= n` and every row that defines one.
+    ///
+    /// Rows are an equivalent form of the equations posted so far, and each
+    /// equation posted since the mark defined a then-fresh variable, so the
+    /// equations over the surviving variables are exactly the pre-mark
+    /// system. Pivots since the mark may have written post-mark variables
+    /// into pre-mark rows; pivoting each such variable back into basic
+    /// position (into one of those rows, whose pre-mark basic becomes
+    /// non-basic) leaves every surviving row over surviving variables, and
+    /// the rows whose basic is a post-mark variable are then its definitions
+    /// alone and are dropped. Pivoting does not touch values, so they remain
+    /// a solution of the rows; a surviving variable turned non-basic may sit
+    /// outside its restored bounds, which `update` and `check` repair as
+    /// after any assertion.
+    fn truncate(&mut self, n: usize) {
+        loop {
+            let found = self.rows.iter().enumerate().find_map(|(ri, row)| {
+                if row.basic.0 >= n {
+                    return None;
+                }
+                row.expr.terms.keys().find(|v| v.0 >= n).map(|v| (ri, *v))
+            });
+            let Some((ri, xj)) = found else { break };
+            self.pivot(ri, xj);
+        }
+        self.rows.retain(|r| r.basic.0 < n);
+        self.vars.truncate(n);
+        self.row_of.truncate(n);
+        for slot in self.row_of.iter_mut() {
+            *slot = None;
+        }
+        for i in 0..self.rows.len() {
+            let b = self.rows[i].basic.0;
+            self.row_of[b] = Some(i);
+        }
+        for v in 0..n {
+            if self.row_of[v].is_some() {
+                continue;
+            }
+            let st = &self.vars[v];
+            let target = match (&st.lower, &st.upper) {
+                (Some(l), _) if st.value < *l => Some(l.clone()),
+                (_, Some(u)) if st.value > *u => Some(u.clone()),
+                _ => None,
+            };
+            if let Some(t) = target {
+                self.update(SVar(v), t);
+            }
+        }
+        let feasible = self.check();
+        debug_assert!(feasible, "the pre-mark system was feasible");
     }
 
     fn save(&mut self, v: SVar) {
@@ -611,5 +678,242 @@ mod tests {
         let _ = s.assert_constraint(&tight, RelOp::Le); // either way, must return
         s.undo_to(m);
         assert!(s.check());
+    }
+
+    // --- undo truncation (CLM-0018) ---------------------------------------
+
+    fn d(i: i64) -> Delta {
+        Delta::exact(Number::from_ratio(i, 1).unwrap())
+    }
+
+    /// Values satisfy every row, every basic variable has its row and no
+    /// other, and no row mentions a variable that is not there.
+    fn tableau_is_consistent(s: &Simplex) {
+        assert_eq!(s.row_of.len(), s.vars.len());
+        for (i, row) in s.rows.iter().enumerate() {
+            assert_eq!(
+                s.row_of[row.basic.0],
+                Some(i),
+                "basic {} owns row {i}",
+                row.basic
+            );
+            for v in row.expr.terms.keys() {
+                assert!(
+                    v.0 < s.vars.len(),
+                    "row {i} mentions a dropped variable {v}"
+                );
+                assert!(!s.is_basic(*v), "row {i} mentions a basic variable {v}");
+            }
+            assert_eq!(
+                s.eval(&row.expr),
+                s.vars[row.basic.0].value,
+                "row {i} holds"
+            );
+        }
+        let basics = s.row_of.iter().filter(|r| r.is_some()).count();
+        assert_eq!(basics, s.rows.len());
+    }
+
+    #[test]
+    fn undo_drops_the_variables_and_rows_made_since_the_mark() {
+        let mut s = Simplex::new();
+        let x = s.new_var();
+        let y = s.new_var();
+        // y = 2x, x >= 1: one row, pre-mark.
+        let mut e = lin(&[(y, "1"), (x, "-2")], "0");
+        assert!(s.assert_constraint(&e, RelOp::Eq));
+        assert!(s.assert_lower(x, d(1)));
+        let mark = s.mark();
+        let (nv, nr) = (s.num_vars(), s.rows.len());
+        // Post-mark: z = x + y, z <= 2 forces pivots that write z's row into
+        // the old rows; then w defined over z.
+        let z = s.new_var();
+        e = lin(&[(z, "1"), (x, "-1"), (y, "-1")], "0");
+        assert!(s.assert_constraint(&e, RelOp::Eq));
+        assert!(s.assert_upper(z, d(3)));
+        let w = s.slack(&lin(&[(z, "1"), (x, "1")], "1"));
+        assert!(s.assert_lower(w, d(0)));
+        assert!(s.num_vars() > nv && s.rows.len() > nr);
+        s.undo_to(mark);
+        assert_eq!(s.num_vars(), nv);
+        assert_eq!(s.rows.len(), nr);
+        tableau_is_consistent(&s);
+        // The pre-mark system is intact: y = 2x, x >= 1.
+        assert!(s.fix(x, n("5")));
+        assert_eq!(s.is_determined(y), Some(n("10")));
+        // Indices are reused: the next variable is the old z's index.
+        assert_eq!(s.new_var(), z);
+    }
+
+    /// A small deterministic generator.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+        fn small(&mut self) -> i64 {
+            self.below(9) as i64 - 4
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    enum Op {
+        NewVar,
+        Define(LinExpr),
+        Slack(LinExpr),
+        Lower(SVar, Delta),
+        Upper(SVar, Delta),
+    }
+
+    fn random_expr(rng: &mut Rng, nvars: usize) -> LinExpr {
+        let mut e = LinExpr::constant(Number::from_ratio(rng.small(), 1).unwrap());
+        let terms = 1 + rng.below(3.min(nvars));
+        for _ in 0..terms {
+            let v = SVar(rng.below(nvars));
+            let a = match rng.below(5) {
+                0 => n("-2"),
+                1 => n("-1"),
+                2 => n("1"),
+                3 => n("2"),
+                _ => Number::from_ratio(1, 2).unwrap(),
+            };
+            e.add_term(v, &a);
+        }
+        if e.terms.is_empty() {
+            e.add_term(SVar(0), &n("1"));
+        }
+        e
+    }
+
+    /// A bound as the store makes them: a strict lower bound is `c + δ`, a
+    /// strict upper bound `c − δ` (an upper bound `c + δ` has no source
+    /// constraint and would break `is_determined`'s invariant that a fixed
+    /// value is a plain rational).
+    fn random_bound(rng: &mut Rng, lower: bool) -> Delta {
+        let c = Number::from_ratio(rng.small(), 1).unwrap();
+        match rng.below(3) {
+            0 if lower => Delta::new(c, n("1")),
+            0 => Delta::new(c, n("-1")),
+            _ => Delta::exact(c),
+        }
+    }
+
+    /// Apply `op` to `s`; false if an assertion failed.
+    fn apply(s: &mut Simplex, op: &Op) -> bool {
+        match op {
+            Op::NewVar => {
+                s.new_var();
+                true
+            }
+            Op::Define(e) => {
+                let v = s.new_var();
+                s.define(v, e);
+                true
+            }
+            Op::Slack(e) => {
+                s.slack(e);
+                true
+            }
+            Op::Lower(v, b) => s.assert_lower(*v, b.clone()),
+            Op::Upper(v, b) => s.assert_upper(*v, b.clone()),
+        }
+    }
+
+    fn replay(ops: &[Op]) -> Simplex {
+        let mut s = Simplex::new();
+        for op in ops {
+            assert!(
+                apply(&mut s, op),
+                "a surviving operation must succeed on replay"
+            );
+        }
+        s
+    }
+
+    /// The live solver after undos must be indistinguishable from a fresh
+    /// solver that only ever saw the surviving operations: same variables,
+    /// bounds, determined values, and the same verdict on further assertions.
+    fn agree(live: &mut Simplex, fresh: &mut Simplex, rng: &mut Rng) {
+        assert_eq!(live.num_vars(), fresh.num_vars());
+        tableau_is_consistent(live);
+        for v in 0..live.num_vars() {
+            let v = SVar(v);
+            assert_eq!(live.lower(v), fresh.lower(v), "lower bound of {v}");
+            assert_eq!(live.upper(v), fresh.upper(v), "upper bound of {v}");
+            assert_eq!(
+                live.is_determined(v),
+                fresh.is_determined(v),
+                "determination of {v}"
+            );
+        }
+        for _ in 0..4 {
+            let probe = if rng.below(2) == 0 {
+                Op::Lower(SVar(rng.below(live.num_vars())), random_bound(rng, true))
+            } else {
+                Op::Upper(SVar(rng.below(live.num_vars())), random_bound(rng, false))
+            };
+            let (mut a, mut b) = (live.clone(), fresh.clone());
+            assert_eq!(
+                apply(&mut a, &probe),
+                apply(&mut b, &probe),
+                "verdict on {probe:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn undo_is_equivalent_to_replaying_the_surviving_operations() {
+        for seed in 1..=160u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let mut live = Simplex::new();
+            // One variable always survives, so every draw has a range.
+            live.new_var();
+            let mut ops: Vec<Op> = vec![Op::NewVar];
+            // (mark, number of surviving ops at the mark)
+            let mut marks: Vec<(Mark, usize)> = vec![(live.mark(), 1)];
+            for _ in 0..40 {
+                match rng.below(10) {
+                    0 | 1 => marks.push((live.mark(), ops.len())),
+                    2 if marks.len() > 1 => {
+                        let k = 1 + rng.below(marks.len() - 1);
+                        let (mark, len) = marks[k];
+                        marks.truncate(k);
+                        live.undo_to(mark);
+                        ops.truncate(len);
+                        let mut fresh = replay(&ops);
+                        agree(&mut live, &mut fresh, &mut rng);
+                    }
+                    _ => {
+                        let nv = live.num_vars();
+                        let op = match rng.below(6) {
+                            0 => Op::NewVar,
+                            1 => Op::Define(random_expr(&mut rng, nv)),
+                            2 => Op::Slack(random_expr(&mut rng, nv)),
+                            3 | 4 => Op::Lower(SVar(rng.below(nv)), random_bound(&mut rng, true)),
+                            _ => Op::Upper(SVar(rng.below(nv)), random_bound(&mut rng, false)),
+                        };
+                        if apply(&mut live, &op) {
+                            ops.push(op);
+                        } else {
+                            // As the store does: a failed assertion is undone
+                            // to the innermost mark.
+                            let (mark, len) = *marks.last().unwrap();
+                            live.undo_to(mark);
+                            ops.truncate(len);
+                            let mut fresh = replay(&ops);
+                            agree(&mut live, &mut fresh, &mut rng);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
