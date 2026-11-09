@@ -65,7 +65,7 @@ relop           ::= "=" | "!=" | "<" | ">" | "<=" | ">="
 
 expr           ::= expr ("+" | "-") expr | expr ("*" | "/") expr | "-" expr
                  | "(" expr ")" | name | number | atom | variable
-                 | tuple | tuple "." expr | "|" expr "|"
+                 | tuple | expr "." expr | "|" expr "|"
 tuple          ::= "<" [ args ] ">"
 
 name           ::= identifier | quoted_atom
@@ -81,6 +81,10 @@ Prolog III tuples: `<>` is the empty list, `<a, b, c>` a list, and
 length of `L`, a number in the constraint store: `{ |L| >= 2 }` is an
 ordinary linear constraint, and a length that becomes determined makes its
 list a tuple of fresh variables (`{ |L| = 3 }` answers `L = <_1, _2, _3>`).
+`X . Y` is the concatenation of two lists: with a known left operand it is
+the chain, with an open one a constraint that completes as soon as `|X|` is
+known, so `last(L, X) :- { L = F . <X> }.` and the two-clause `reverse` run
+in both directions.
 
 ## Examples
 

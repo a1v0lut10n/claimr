@@ -88,7 +88,7 @@ expr           ::= expr "+" expr          (* left-assoc *)
                  | atom
                  | variable
                  | tuple                  (* CLM-0014: a list *)
-                 | tuple "." expr         (* right-assoc, lowest: the chain then expr *)
+                 | expr "." expr          (* CLM-0016: concatenation; right-assoc, lowest *)
                  | "|" expr "|"           (* CLM-0015: the length of a list *)
 
 tuple          ::= "<" [ args ] ">"
@@ -116,9 +116,9 @@ Linearity is a solver check, not a grammar rule.
 are Prolog III tuples: `<>` is the empty list, `<a, b, c>` a list, and
 `<a, b> . T` the chain `a`, `b` then `T` — the cons pattern when written in a
 head (`member(X, <X> . T).`). The concatenation `.` is right-associative and
-binds looser than every arithmetic operator (`<a> . T + 1` is `<a> . (T + 1)`);
-in stage 1 its left operand is a literal tuple. `<a> . <b> . T` is the one
-chain `<a, b> . T`, and `<> . T` is `T`. A list is the chain of binary cells
+binds looser than every arithmetic operator (`<a> . T + 1` is `<a> . (T + 1)`,
+`-X . Y` is `(-X) . Y`). `<a> . <b> . T` is the one chain `<a, b> . T`, and
+`<> . T` is `T`. A list is the chain of binary cells
 labelled `'<>'` ending in the constant `'<>'`, so `'<>'(a, '<>')` is the same
 term as `<a>`; answers print every such chain in the tuple notation
 (`<1, 2, 3>`, `<1, 2> . T`, `<>`), a cyclic chain as an equation
@@ -142,6 +142,20 @@ determined length becomes a tuple of fresh variables (`{ |L| = 3 }` answers
 and on anything that is not a list (a number, an atom, another compound),
 so `||L||` fails. The bars nest in the grammar; a bar opens a term and the
 next unmatched bar closes it.
+
+**Concatenation** (CLM-0016, stage 3 of the same record): `X . Y` with any
+left operand denotes the concatenation of two lists. When `X`'s spine is
+complete at the moment the term is built, the result is the chain of `X`'s
+elements followed by `Y`, as for a literal tuple. Otherwise the term denotes a
+list `Z` with the relation `|Z| = |X| + |Y|` in the store at once, and the
+cells are unified as soon as `|X|` is known — from `X`'s spine or from the
+simplex (`{ Z = X . <c>, Z = <a, b, c> }` gives `X = <a, b>`;
+`{ |Z| = 10, <1, 2, 3> . Z = Z . <2, 3, 1> }` is solved, not searched). A
+concatenation is never searched: `append/3` remains the predicate for that. A
+pending concatenation prints as the residual `Z = X . Y`. A non-list operand
+and a cyclic left operand fail. One consequence for diagnostics: since `X .`
+can begin a concatenation, a clause missing its `)` before the terminator
+(`human(X.`) is reported at the token after the `.`, not at the `.`.
 
 Semantics of `number`: a literal denotes an **exact rational** — `18.5` is
 37/2, `0.10` is 1/10 — and integers are the denominator-1 case. There is no

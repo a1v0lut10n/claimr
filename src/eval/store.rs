@@ -104,6 +104,17 @@ pub(crate) struct Length {
     pub pending: bool,
 }
 
+/// A pending concatenation `z = x . y` (CLM-0016): `|z| = |x| + |y|` is in
+/// the simplex from the start; the cells are unified once the spine of `x`
+/// is complete.
+#[derive(Debug, Clone)]
+pub(crate) struct Concat {
+    pub z: Addr,
+    pub x: Addr,
+    pub y: Addr,
+    pub pending: bool,
+}
+
 /// Where a `'<>'` spine ends.
 enum Spine {
     /// A proper list of this many cells.
@@ -121,6 +132,7 @@ enum Waker {
     Dif(DifId),
     Attr(usize),
     Len(usize),
+    Concat(usize),
 }
 
 #[derive(Debug)]
@@ -138,6 +150,7 @@ enum Undo {
     AttrTouched(usize),
     LengthPending(usize),
     LenIndex(Addr),
+    ConcatPending(usize),
 }
 
 /// A point in the store's history to return to.
@@ -150,6 +163,7 @@ pub struct Mark {
     numdifs: usize,
     products: usize,
     lengths: usize,
+    concats: usize,
     simplex: solver::Mark,
 }
 
@@ -178,6 +192,8 @@ pub struct Store {
     /// Unbound list variable → its length entry, so every `|T|` of one
     /// variable is one unknown.
     len_index: HashMap<Addr, usize>,
+    /// Concatenations registered so far (CLM-0016).
+    pub(crate) concats: Vec<Concat>,
     /// Original definition of each slack/defined solver variable, for printing.
     pub(crate) defs: BTreeMap<SVar, LinExpr>,
     /// Solver variables equated by `equate`: child → parent (union-find, no
@@ -262,6 +278,7 @@ impl Store {
             numdifs: self.numdifs.len(),
             products: self.products.len(),
             lengths: self.lengths.len(),
+            concats: self.concats.len(),
             simplex: self.simplex.mark(),
         }
     }
@@ -318,6 +335,11 @@ impl Store {
                 Undo::LenIndex(v) => {
                     self.len_index.remove(&v);
                 }
+                Undo::ConcatPending(id) => {
+                    if id < self.concats.len() {
+                        self.concats[id].pending = true;
+                    }
+                }
             }
         }
         self.heap.truncate(mark.heap);
@@ -326,6 +348,7 @@ impl Store {
         self.numdifs.truncate(mark.numdifs);
         self.products.truncate(mark.products);
         self.lengths.truncate(mark.lengths);
+        self.concats.truncate(mark.concats);
         self.simplex.undo_to(mark.simplex);
         self.woken.clear();
         self.touched.clear();
@@ -412,6 +435,7 @@ impl Store {
             (Waker::Dif(a), Waker::Dif(b)) => a == b,
             (Waker::Attr(a), Waker::Attr(b)) => a == b,
             (Waker::Len(a), Waker::Len(b)) => a == b,
+            (Waker::Concat(a), Waker::Concat(b)) => a == b,
             _ => false,
         });
         if dup {
@@ -604,6 +628,7 @@ impl Store {
                     Waker::Dif(id) => !self.difs[id].pending || self.check_dif(id),
                     Waker::Attr(id) => self.recanonicalize(id),
                     Waker::Len(id) => self.recheck_len(id),
+                    Waker::Concat(id) => self.recheck_concat(id),
                 };
                 if !ok {
                     return false;
@@ -739,6 +764,7 @@ impl Store {
                     Waker::Dif(id) => !self.difs[id].pending || self.check_dif(id),
                     Waker::Attr(id) => self.recanonicalize(id),
                     Waker::Len(id) => self.recheck_len(id),
+                    Waker::Concat(id) => self.recheck_concat(id),
                 };
                 if !ok {
                     return false;
@@ -1148,7 +1174,10 @@ impl Store {
         }
         let Length { list, svar, .. } = self.lengths[id].clone();
         let d = self.deref(list);
-        if self.is_unbound_var(d) {
+        // Still the same unbound variable: only its length can have changed.
+        // (Bound to another variable, `d != list`: that is the spine case
+        // below, `|list| = |d|` through `d`'s entry.)
+        if d == list {
             let Some(c) = self.class_value(svar) else {
                 return true;
             };
@@ -1183,6 +1212,113 @@ impl Store {
         self.lengths[id].pending = false;
         self.trail.push(Undo::LengthPending(id));
         self.assert_lin(e, solver::RelOp::Eq)
+    }
+
+    // --- list concatenation (CLM-0016) ---------------------------------------
+
+    /// The heads along the complete spine of `a` (the caller has walked it).
+    fn spine_heads(&self, a: Addr) -> Vec<Addr> {
+        let mut heads = Vec::new();
+        let mut cur = a;
+        loop {
+            let d = self.deref(cur);
+            match &self.heap[d] {
+                Cell::Struct(f, args) if *f == LIST && args.len() == 2 => {
+                    heads.push(args[0]);
+                    cur = args[1];
+                }
+                _ => return heads,
+            }
+        }
+    }
+
+    /// The chain of `heads` ending in `tail`, sharing the head cells.
+    fn chain(&mut self, heads: &[Addr], tail: Addr) -> Addr {
+        let mut t = tail;
+        for &h in heads.iter().rev() {
+            t = self.new_struct(LIST, vec![h, t]);
+        }
+        t
+    }
+
+    /// `x . y` as a heap address. A complete `x` gives the chain of its heads
+    /// ending in `y` at once (the operation face). An open `x` gives a fresh
+    /// list variable `z` with `|z| = |x| + |y|` posted and the concatenation
+    /// pending until `x`'s spine is complete (the relation face; Prolog III's
+    /// `=.`). A cyclic or non-list `x`, or a non-list `y`, fails.
+    pub fn post_concat(&mut self, x: Addr, y: Addr) -> Option<Addr> {
+        let mark = self.mark();
+        let r = (|| match self.walk_spine(x) {
+            Spine::Nil(_) => {
+                let heads = self.spine_heads(x);
+                Some(self.chain(&heads, y))
+            }
+            Spine::Open(_, t) => {
+                let z = self.new_var();
+                let lx = self.post_len(x)?;
+                let ly = self.post_len(y)?;
+                let lz = self.post_len(z)?;
+                let mut e = self.unknown_of(lz)?;
+                e.sub(&self.unknown_of(lx)?);
+                e.sub(&self.unknown_of(ly)?);
+                if !self.assert_lin(e, solver::RelOp::Eq) {
+                    return None;
+                }
+                let id = self.concats.len();
+                self.concats.push(Concat {
+                    z,
+                    x,
+                    y,
+                    pending: true,
+                });
+                self.suspend(Waker::Concat(id), t);
+                if self.settle() { Some(z) } else { None }
+            }
+            Spine::Bad => None,
+        })();
+        if r.is_none() {
+            self.undo_to(&mark);
+        }
+        r
+    }
+
+    /// The open tail of a pending concatenation's left operand was bound:
+    /// complete the concatenation if the spine now ends, else wait on the
+    /// new tail.
+    fn recheck_concat(&mut self, id: usize) -> bool {
+        if id >= self.concats.len() || !self.concats[id].pending {
+            return true;
+        }
+        let Concat { z, x, y, .. } = self.concats[id].clone();
+        match self.walk_spine(x) {
+            Spine::Nil(_) => {
+                self.concats[id].pending = false;
+                self.trail.push(Undo::ConcatPending(id));
+                let heads = self.spine_heads(x);
+                let c = self.chain(&heads, y);
+                self.unify(z, c)
+            }
+            Spine::Open(_, t) => {
+                self.suspend(Waker::Concat(id), t);
+                true
+            }
+            Spine::Bad => false,
+        }
+    }
+
+    /// The length unknown of an unbound list variable, if it has one.
+    pub(crate) fn length_svar(&self, a: Addr) -> Option<SVar> {
+        let d = self.deref(a);
+        self.len_index.get(&d).map(|id| self.lengths[*id].svar)
+    }
+
+    /// Pending concatenations, for printing: `(z, x, y)`.
+    pub fn pending_concats(&self) -> Vec<(Addr, Addr, Addr)> {
+        self.concats
+            .iter()
+            .filter(|c| c.pending)
+            .map(|c| (c.z, c.x, c.y))
+            .collect()
     }
 
     // --- attribute terms ---------------------------------------------------

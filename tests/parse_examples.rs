@@ -131,6 +131,34 @@ fn length_bars_parse_as_a_numeric_term() {
 }
 
 #[test]
+fn concatenation_is_right_associative_and_loosest() {
+    // CLM-0016: `X . Y . W` is `X . (Y . W)`; `.` binds looser than `+`;
+    // a literal tuple on the left is still a tailed list.
+    let clauses = parse_program("p(X . Y . W, X . Y + 1, (X . Y) . W, <a> . X . Y, -X . Y).\n")
+        .expect("parses");
+    let Clause::Fact(p) = &clauses[0] else {
+        panic!("a fact")
+    };
+    let var = |v: &str| Expr::Var(v.to_string());
+    let cat = |l: Expr, r: Expr| Expr::Concat(Box::new(l), Box::new(r));
+    assert_eq!(p.args[0], cat(var("X"), cat(var("Y"), var("W"))));
+    assert!(matches!(&p.args[1], Expr::Concat(_, r) if matches!(**r, Expr::Binary { .. })));
+    assert_eq!(p.args[2], cat(cat(var("X"), var("Y")), var("W")));
+    assert_eq!(
+        p.args[3],
+        Expr::List {
+            items: vec![Expr::Ident("a".into())],
+            tail: Some(Box::new(cat(var("X"), var("Y"))))
+        }
+    );
+    assert!(matches!(&p.args[4], Expr::Concat(l, _) if matches!(**l, Expr::Neg(_))));
+    assert_eq!(
+        clauses[0].to_string(),
+        "p(X . Y . W, X . Y + 1, (X . Y) . W, <a> . X . Y, -X . Y)."
+    );
+}
+
+#[test]
 fn every_example_file_parses() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
     let mut seen = 0;
@@ -150,10 +178,10 @@ fn every_example_file_parses() {
 fn errors_are_positioned() {
     let cases: &[(&str, usize, usize)] = &[
         ("human(socrates)\nmortal(X) :- human(X).\n", 2, 1), // missing '.' — next token starts line 2
-        ("mortal(X) :- human(X.\n", 1, 21),                  // ')' expected, got '.'
-        ("{ age(X) 18 }.\n", 1, 10),                         // relop expected, got number
-        ("?- .\n", 1, 4),                                    // empty query body
-        ("Human(socrates).\n", 1, 1),                        // uppercase-initial atom name
+        ("mortal(X) :- human(X.\n", 2, 1), // ')' expected; `X .` may start a concatenation (CLM-0016), so the error is at the next token
+        ("{ age(X) 18 }.\n", 1, 10),       // relop expected, got number
+        ("?- .\n", 1, 4),                  // empty query body
+        ("Human(socrates).\n", 1, 1),      // uppercase-initial atom name
     ];
     for (src, line, col) in cases {
         let err = parse_program(src).unwrap_err();

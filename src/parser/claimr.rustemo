@@ -88,9 +88,11 @@ Args: exprs=Expr+[Comma];
 // grammar one.
 // CLM-0014: Prolog III lists (docs/design/2026-11-09-lists-as-a-constraint-
 // domain.md, stage 1). `<>` is the empty list, `<a, b, c>` a list, and
-// `<a, b> . T` the chain a, b then T — in stage 1 the left operand of `.` is
-// a literal tuple. CLM-0015 (stage 2): `|L|` is the length of the list L, a
-// numeric term; the bar opens and closes, and nests (`||L||` is legal). `<` `>` keep their relational meaning in Constraint and
+// `<a, b> . T` the chain a, b then T. CLM-0015 (stage 2): `|L|` is the
+// length of the list L, a numeric term; the bar opens and closes, and nests
+// (`||L||` is legal). CLM-0016 (stage 3): `X . Y` is the concatenation of
+// two lists, right-associative and looser than arithmetic; with a literal
+// tuple on the left it is the chain of stage 1. `<` `>` keep their relational meaning in Constraint and
 // `.` its terminator meaning after a clause: an Expr never meets either in
 // the same LR state (zero conflicts, checked with rcomp).
 Expr: left=Expr '+' right=Expr  {Add, left, 1}
@@ -104,14 +106,12 @@ Expr: left=Expr '+' right=Expr  {Add, left, 1}
     | number=Number             {NumberExpr}
     | name=Name                 {IdentExpr}
     | tuple=Tuple                       {ListExpr}
-    | tuple=Tuple '.' tail=Expr         {ListTailExpr, right, 0}
+    | left=Expr '.' right=Expr          {ConcatExpr, right, 0}
     | '|' inner=Expr '|'                {LenExpr}
     ;
 
-// A literal tuple. It is its own rule so that the choice between a list and
-// a concatenation is made after `>`: with `'<' Args '>' '.' Expr` spelled out
-// in Expr, the reduce of `Args?` on `>` and the shift of `>` conflict, and
-// the generator would resolve it by priority rather than report it.
+// A literal tuple (its own rule since CLM-0014; kept so the actions see the
+// tuple as a unit).
 Tuple: '<' items=Args? '>';
 
 // ---------------------------------------------------------------------------

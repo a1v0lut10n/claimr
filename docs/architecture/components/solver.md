@@ -25,8 +25,9 @@ Claimr's constraint store. Two layers:
   `x < value` and `x > value` for feasibility.
 - **the numeric glue in `src/eval/store.rs`** — how the heap and the solver
   meet: `numvar` (unbound heap variable → solver variable), the attribute
-  term registry, numeric disequations, delayed products, list lengths,
-  alias classes, and the "determined" event that fires suspended wakers.
+  term registry, numeric disequations, delayed products, list lengths and
+  concatenations, alias classes, and the "determined" event that fires
+  suspended wakers.
 
 ## Semantics as implemented (stage 3 — CLM-0006)
 
@@ -95,15 +96,30 @@ Claimr's constraint store. Two layers:
   `|T| = k + |U|` through `U`'s entry; the entry is then closed. The
   determination of `|T|` while `T` is unbound requires a non-negative
   integer `n` (else failure) and binds `T` to `<_1, …, _n>`, Prolog III's
-  solved form for a list of known length. Entries and the index are
-  trailed like products and the attribute index.
+  solved form for a list of known length. A list variable bound to
+  another variable asserts `|T| = |U|` through `U`'s entry. Entries and the
+  index are trailed like products and the attribute index.
+- **List concatenation** (CLM-0016, stage 3 of the same record). `X . Y`
+  is posted by `post_concat`. A complete `X` gives the chain of its heads
+  ending in `Y` at once, no constraint (the operation face). An open `X`
+  gives a fresh list variable `Z`, posts `|Z| = |X| + |Y|` through the
+  length entries (so a non-list `Y` fails here) and registers a pending
+  **concatenation entry** suspended on `X`'s open tail. When that tail is
+  bound the spine is re-walked: complete → `Z` is unified with the chain
+  of `X`'s heads ending in `Y` and the entry closes; still open → the entry
+  waits on the new tail; cyclic or non-list → failure. A length determined
+  by the simplex reaches here through the stage 2 expansion, which binds
+  the tail. Concatenations are never searched (Prolog III's `enum` is a
+  program's business, `append/3` here); one still pending at answer time
+  is a sound residual, printed `Z = X . Y`, unlike a pending product.
 - **Backtracking.** Bounds are trailed in the simplex; the registry, numeric
   variable map, disequations, products, lengths, aliases and "fired" set
   are trailed in the store; rows and solver variables created since a mark
   **persist** (relaxed bounds make them inert) and `update` walks every
   row, so their number is a cost, not just memory. Since CLM-0013 that cost
   arises only for non-ground arithmetic under search, and since CLM-0015
-  for lengths of open lists under search (measured: `{ |Keys| < 2 }` over
+  and CLM-0016 for lengths and concatenations of open lists under search
+  (measured for lengths: `{ |Keys| < 2 }` over
   facts with a `<k1, k2> . T` field takes 0.04 s, 0.11 s, 0.33 s, 1.14 s at
   1 820, 3 640, 7 280 and 14 560 facts, against 0.02 s to 0.12 s for
   complete lists); truncating the tableau on undo is the deferred

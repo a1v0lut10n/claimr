@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: task
-status: in-progress
+status: done
 affects:
   - docs/reference/grammar.md
   - docs/reference/json-output.md
@@ -44,53 +44,76 @@ Out: searching a concatenation (Prolog III's `enum`); strings and
 ## Action items
 
 1. **Grammar**: `| left=Expr '.' right=Expr {ConcatExpr, right, 0}`
-   replaces `tuple=Tuple '.' tail=Expr`. Automaton check (rustemo 0.9.1,
-   59 productions, 92 states): after `Expr . Expr` the parser shifts on
-   `.` (right associative) and on every arithmetic operator (`.` is
-   loosest); a tuple and a sum reduce before `.`; unary minus binds
-   tighter (`-X . Y` is `(-X) . Y`). The terminator never meets the
-   operator: an `Expr` is still never followed by the clause's `.`.
+   replaces `tuple=Tuple '.' tail=Expr`; `Tuple` stays its own rule so the
+   action sees the tuple as a unit. Automaton (rustemo 0.9.1, 59
+   productions, 92 states): after `Expr . Expr` the parser shifts on `.`
+   and on every arithmetic operator; a tuple and a sum reduce before `.`;
+   `-X . Y` is `(-X) . Y`. **Done.**
 2. **AST and actions**: `Expr::Concat(Box<Expr>, Box<Expr>)`, Display
-   `X . Y` at precedence 0, left operand parenthesised when it is itself
-   a concatenation or a tailed list. The action keeps the stage 1
-   normalisations when the left operand is a literal tuple: `<a> . T` is
-   `List { items, tail }`, `<a> . <b> . T` one chain, `<> . T` is `T`.
+   `X . Y` at precedence 0 with the left operand parenthesised when it is
+   itself a `.` form. `expr_concat_expr` keeps the stage 1 normalisations
+   for a literal left tuple. **Done.**
 3. **Compile**: `TTerm::Concat`; `build_with` lowers it with
-   `Store::post_concat(x, y)`, which returns the address of `Z`.
-4. **Store**: `post_concat` walks `X`'s spine. Complete after `k` cells:
-   build the chain of those `k` heads ending in `Y` and return it, no
-   constraint (the operation face; this is also the head pattern
-   `reverse(<E> . X, Y . <E>)` when `Y` is known). Cycle or non-list:
-   fail. Open after `k` cells in `T`: `Z` is a fresh variable; post
-   `|Z| = |X| + |Y|` through `post_len` on all three (so a non-list `Y`
-   fails here and a length that becomes determined expands its list, per
-   stage 2); register `Concat { z, x, y, pending }` suspended on `T`
-   through a new `Waker::Concat`. When `T` is bound: re-walk `X`; complete
-   → unify `Z` with the chain of `X`'s heads ending in `Y` and close the
-   entry; still open in `U` → re-suspend on `U`; bad → fail. Determination
-   of `|X|` by the simplex reaches here through stage 2's expansion of
-   `T`, which binds it. `finalize` leaves pending concatenations alone
-   (unlike products, they are a sound residual). Entries and flags are
-   trailed; `Mark` carries the count.
-5. **Answers**: a pending concatenation whose terms mention a variable
-   reachable from the query prints as the residual `Z = X . Y` in the
-   constraint list (`Z`, `X`, `Y` rendered as terms, so `<a> . T` shows as
-   such). The length relation `|Z| = |X| + |Y|` it implies is dropped from
-   the printed numeric system when it matches exactly; otherwise it
-   stays, which is only redundancy.
-6. **Example and tests**: `examples/concat.claimr` with golden answers:
-   `last/2`, `has_prefix/2`, the two-clause `reverse/2` both ways (the
-   reversed direction terminates because the length bound prunes the
-   search), the periodic sequence, a pending concatenation in an answer,
-   non-list and cycle failures. Machine tests for the same and for undo
-   across backtracking; parse test for associativity and precedence and
-   the display; JSON test for a residual concatenation.
+   `Store::post_concat(x, y)`. **Done.**
+4. **Store**: `Concat { z, x, y, pending }` entries in `concats`,
+   `Waker::Concat`, `Undo::ConcatPending`, the count in `Mark`.
+   `post_concat`: complete `X` → `chain(spine_heads(X), Y)`; open in `T`
+   → fresh `Z`, `|Z| = |X| + |Y|` through `post_len` on all three and
+   `assert_lin`, entry suspended on `T`, `settle`; bad → fail.
+   `recheck_concat`: complete → close and `unify(Z, chain)`; open in `U` →
+   re-suspend; bad → fail. `pending_concats()` for the printer. **Done.**
+5. **Answers**: pass 7 of `render_answer` prints each pending concatenation
+   that mentions a reachable variable as `Z = X . Y` among the
+   constraints; `render_numeric` drops an equality that is exactly the
+   implied `|Z| = |X| + |Y|` over three unbound list variables
+   (`Store::length_svar`); with a complete operand the relation carries a
+   constant and stays, which is only redundancy. **Done.**
+6. **Example and tests**: `examples/concat.claimr` with golden answers
+   (`last`, `has_prefix`, two-clause `reverse` both ways, palindromes with
+   the length first, the periodic sequence, pending residuals, failures).
+   Machine tests `list_concatenation_is_a_constraint` (19 queries),
+   `list_concatenation_bounds_the_search`,
+   `a_list_variable_aliased_to_another_shares_its_length` (regression,
+   below); parse test `concatenation_is_right_associative_and_loosest`;
+   JSON test `pending_concatenations_are_constraint_strings`. **Done.**
 7. **Docs**: `grammar.md`, README grammar section, `evaluator.md`,
-   `solver.md` (concatenation entries beside lengths), `json-output.md`;
-   plan to what was built.
+   `solver.md` (*List concatenation* bullet, the alias rule under *List
+   lengths*), `json-output.md`; plan to what was built. **Done.**
+
+## Found on the way
+
+- **A stage 2 soundness bug.** `recheck_len` treated a length entry whose
+  list variable had been bound to *another unbound variable* as "still
+  unbound", so `|W| = |Y|` was never posted. It surfaced as the reversed
+  `reverse(X, <1, 2, 3>)` not terminating after its answer: the pruning
+  bound `|Y| = -1` never reached the simplex, and the derivation went on
+  with one more pending concatenation per level. The fix distinguishes
+  "still the same unbound variable" (`deref(list) == list`, only the
+  length can have changed) from "aliased" (the spine case, `|list| = |d|`
+  through `d`'s entry). The regression test covers both orientations of
+  the binding. This was reachable in CLM-0015 alone (`{ |L| = N, L = M,
+  |M| = 2 }` answered without binding `L`) and is fixed here.
+- **Diagnostics position.** Since `X .` can begin a concatenation, a
+  clause missing its `)` before the terminator (`human(X.`) is reported
+  at the token after the `.`; two position tests updated, the EBNF view
+  says so. This is the one place where the terminator and the operator
+  being one token shows.
+- **Stack margin of deep literals.** The 10 000-deep term in
+  `deep_derivations_do_not_touch_the_rust_stack` overflowed its 64 MiB
+  thread after the new lowering arm: lowering costs about 6 KB of stack
+  per nesting level in debug builds, most of it iterator-adapter frames in
+  `Lowerer::atom`. Replacing that `collect` with a loop brought the phase
+  back under 64 MiB (it needs between 32 and 64 MiB at that depth, as on
+  `main`). Lowering and Display still recurse per level; an iterative
+  lowering is a follow-up if deeper literals matter.
+- **Generator order.** `palindrome(P), { |P| = 3 }` enumerates palindromes
+  forever before the constraint is reached, as any Prolog would; with the
+  constraint first the query has one answer. The example is written that
+  way; it is the ordinary discipline, not a defect.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test` clean; all previous golden files byte-identical.
-- [ ] `aivolution lint .` clean; the five `affects` docs current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` clean (126 tests); every previous golden file
+      byte-identical.
+- [x] `aivolution lint .` clean; the five `affects` docs current.

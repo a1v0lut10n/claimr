@@ -80,6 +80,19 @@ fn length_residuals_are_constraint_strings() {
 }
 
 #[test]
+fn pending_concatenations_are_constraint_strings() {
+    // CLM-0016: a pending concatenation is one more constraint string.
+    let path = write_temp("concat", "?- { Z = X . Y, X = <a> . T }.\n");
+    let (stdout, stderr, code) = run(&["--json", path.to_str().unwrap()]);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(
+        stdout.trim_end(),
+        r#"{"query":"?- { Z = X . Y, X = <a> . T }.","outcome":"solutions","answers":[{"equations":["X = <a> . T"],"disequations":[],"constraints":["|T| = -|Y| + |Z| - 1","Z = <a> . T . Y"]}]}"#
+    );
+}
+
+#[test]
 fn diagnostics_are_structured_and_exit_codes_hold() {
     // Parse error: structured on stderr, exit 1, stdout silent.
     let path = write_temp("broken", "broken(\n");
