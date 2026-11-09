@@ -59,13 +59,17 @@ relational operators, but a relational operator occurs only in
 `Constraint`, never inside `Expr`. Verified 2026-11-09 with the project's
 generator (rustemo 0.9.1, `rcomp`, default LALR-Pager tables) on the
 current grammar, all with zero conflicts: a `'<' Args? '>'` tuple
-production; `'|' Expr '|'` on top of it; `Expr '++' Expr` on top of both
-(58 productions, 91 states); and, for comparison, Edinburgh `[a, b]` /
-`[H | T]` with the same length and concatenation forms. Prolog III's
-concrete `.` for concatenation also compiles without conflict (rustemo's
-lexer is LR-state-aware), but reads badly beside the clause terminator.
-GLR remains available (`2026-08-17-rustemo-parser-generator-over-nom.md`)
-and is not needed.
+production; `'|' Expr '|'` on top of it; `Expr '.' Expr` on top of both
+(58 productions, 91 states), where `'.'` resolves to the existing `Dot`
+terminal, so the clause terminator and the concatenation operator are one
+token in two grammatical roles that the LR state tells apart (a terminator
+is expected only after a complete clause, never inside a term); `++` in
+place of `.` as a control; and, for comparison, Edinburgh `[a, b]` /
+`[H | T]` with the same length and concatenation forms. GLR remains
+available (`2026-08-17-rustemo-parser-generator-over-nom.md`) and is not
+needed. `.` is kept as the operator: it is Prolog III's own (the paper's
+`•`), and the dot is the standard notation for concatenation in formal
+language theory.
 
 **Edinburgh brackets were weighed and not chosen.** The constraint domain
 works identically under either spelling, since both sit on cons cells.
@@ -88,7 +92,7 @@ undone by the next.
   keep their ordinary meaning, and `'<>'(a, '<>')` is the same term as
   `<a>`; the angle-bracket form is the canonical spelling.
 - Lists are rational trees like every other term. A cyclic chain
-  (`X = <1> ++ X`) is a legal term with no finite length; `|X|` on it
+  (`X = <1> . X`) is a legal term with no finite length; `|X|` on it
   fails (see stage 2). Prolog III lists always have finitely many
   daughters, and this is the corresponding rule.
 - Improper lists are not modelled with an irrational `α`. An unknown tail
@@ -98,22 +102,22 @@ undone by the next.
 
 ### Stage 1 — notation
 
-- `<>`, `<a, b, c>` denote lists; `<a, b> ++ T` denotes the chain
+- `<>`, `<a, b, c>` denote lists; `<a, b> . T` denotes the chain
   `a`, `b` then `T` (the operation face of Prolog III's `•`, admissible in
-  heads as the cons pattern: `member(X, <X> ++ _).`). `++` is right
+  heads as the cons pattern: `member(X, <X> . _).`). `.` is right
   associative and binds looser than arithmetic. In stage 1 the grammar
-  admits `++` only with a literal tuple on its left (one production,
-  `'<' Args '>' '++' Expr`); the general form arrives in stage 3.
+  admits `.` only with a literal tuple on its left (one production,
+  `'<' Args '>' '.' Expr`); the general form arrives in stage 3.
 - Printing: the answer printer, `--parse` and the REPL print a `'<>'`
-  chain as `<1, 2, 3>`, a chain with a variable tail as `<1, 2> ++ T`,
+  chain as `<1, 2, 3>`, a chain with a variable tail as `<1, 2> . T`,
   the empty list as `<>`, and cyclic chains as equations, the printer's
   existing finite form for rational trees (`src/eval/answer.rs`).
 - Grammar path per `grammar-authority`: `src/parser/claimr.rustemo` gains
-  the `++` terminal and the two `Expr` productions (the `<` `>` terminals
-  exist); `claimr_actions.rs` builds the chains; `examples/lists.claimr`
-  is rewritten in the notation and keeps its golden answers;
-  `docs/reference/grammar.md` follows; `src/highlight.rs` gains the
-  terminal (its coverage test enforces this).
+  the two `Expr` productions and no new terminal (`<`, `>` and `.` exist);
+  `claimr_actions.rs` builds the chains; `examples/lists.claimr` is
+  rewritten in the notation and keeps its golden answers;
+  `docs/reference/grammar.md` follows; `src/highlight.rs` is unchanged,
+  since its line-based lexer names tokens, not roles.
 - No evaluator or solver change. `append`, `member`, `reverse` remain
   library predicates.
 
@@ -139,8 +143,8 @@ undone by the next.
 
 ### Stage 3 — concatenation
 
-- `X ++ Y` with a non-literal left operand is lowered at instantiation to a
-  fresh list variable `Z` and a pending constraint `Z =. X ++ Y`, which
+- `X . Y` with a non-literal left operand is lowered at instantiation to a
+  fresh list variable `Z` and a pending constraint `Z =. X . Y`, which
   immediately posts `|Z| = |X| + |Y|` to the store and waits.
 - The constraint completes, by elementwise unification of `Z`'s first
   `|X|` cells with `X` and the rest with `Y`, as soon as `|X|` is
@@ -148,8 +152,8 @@ undone by the next.
   (Prolog III's "defined only if the lists a1, …, ak–1 are all true
   lists"). It wakes through `settle()`, the mechanism delayed products use.
   A pending concatenation at answer time is printed as a residual
-  constraint, `Z = X ++ Y`.
-- `Z =. X ++ Y` where `|X|` is unknown is **not** searched: Prolog III
+  constraint, `Z = X . Y`.
+- `Z =. X . Y` where `|X|` is unknown is **not** searched: Prolog III
   would use `enum` on a length, and so would a claimr program (`append/3`
   stays as the nondeterministic predicate for that). This is the paper's
   design and it keeps answers sound.
@@ -159,7 +163,7 @@ undone by the next.
 ## Consequences
 
 - Stage 1 gives the sugar on its own: `aliases(p1, <'alpha', 'beta'>)`
-  replaces one fact per value, `member(X, <X> ++ _)` is the cons pattern,
+  replaces one fact per value, `member(X, <X> . _)` is the cons pattern,
   and nothing below the parser changes.
 - Stage 2 connects sequences to the numeric store: `{ |Keys| >= 2 }` as an
   integrity rule, lengths in arithmetic, the periodic-sequence query's
@@ -178,9 +182,12 @@ undone by the next.
   1 (a list is the compound it is). Stages 2 and 3 add residual-constraint
   kinds (`|L|` terms, pending concatenations) and need a contract version
   note.
-- `'<>'`, `|…|` and `++` are reserved spellings; a program cannot define
-  its own `'<>'/2`. The grammar's `<` `>` keep their relational meaning in
-  `Constraint` and gain the tuple meaning only in `Expr`; the generator
-  check above shows the two never meet.
+- `'<>'` and `|…|` are reserved spellings; a program cannot define its
+  own `'<>'/2`. The grammar's `<` `>` keep their relational meaning in
+  `Constraint` and gain the tuple meaning only in `Expr`, and `.` keeps
+  its terminator meaning after a clause and gains concatenation only
+  inside a term; the generator check above shows neither pair ever meets.
+  A number literal still needs digits on both sides of its point, so
+  `<1> . 2` lexes as a concatenation and `1.5` as a number.
 - Each stage is one task with its own ticket and implementation plan;
   stage 1 can start at once.

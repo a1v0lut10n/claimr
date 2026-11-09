@@ -99,9 +99,9 @@ and printing cases for little gain.
   length is a number in the store:
 
   ```
-  has_prefix(Id, Prefix) :- atom_chars(Id, Cs), { Cs = Prefix ++ _ }.
+  has_prefix(Id, Prefix) :- atom_chars(Id, Cs), { Cs = Prefix . _ }.
   id_length(Id, N)       :- atom_chars(Id, Cs), { N = |Cs| }.
-  scheme(Id, Scheme)     :- atom_chars(Id, Cs), append(Scheme, <':'> ++ _, Cs).
+  scheme(Id, Scheme)     :- atom_chars(Id, Cs), append(Scheme, <':'> . _, Cs).
 
   ?- has_prefix('doc:h3fa21c9d', "doc:").
   ?- scheme('doc:h3fa21c9d', S).
