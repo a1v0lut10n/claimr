@@ -26,12 +26,104 @@ pub struct Answer {
     pub disequations: Vec<String>,
     /// Numeric constraints: bounds, linear equations, numeric disequations.
     pub constraints: Vec<String>,
+    /// The proof tree (CLM-0023), present when the solutions were asked for
+    /// explanations (`Solutions::with_explanations`): the query's goals as
+    /// roots. Not part of the answer's `Display`.
+    pub explanation: Option<Vec<ProofNode>>,
+}
+
+/// One node of an answer's proof tree (CLM-0023,
+/// docs/design/2026-11-09-explanations-of-answers.md): a goal of the
+/// derivation as it stands at the answer, and what resolved it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProofNode {
+    /// The goal instance, rendered with the answer's bindings and names; for
+    /// a committed or failed condition, the construct as written.
+    pub goal: String,
+    pub by: Resolution,
+    /// The cited clause's position (1-based), when a clause is cited and the
+    /// program was compiled with positions.
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+    /// The cited clause as written (facts and rules).
+    pub clause: Option<String>,
+    pub subgoals: Vec<ProofNode>,
+}
+
+/// A proof tree of any depth drops in constant stack (as terms do, CLM-0019):
+/// the subgoals are moved into a worklist and dropped in a loop.
+impl Drop for ProofNode {
+    fn drop(&mut self) {
+        let mut work = std::mem::take(&mut self.subgoals);
+        while let Some(mut n) = work.pop() {
+            work.append(&mut n.subgoals);
+        }
+    }
+}
+
+/// What resolved a goal (CLM-0023).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resolution {
+    /// A clause with no body.
+    Fact,
+    /// A clause with a body: its goals are the subgoals.
+    Rule,
+    /// A constraint goal, as the instance posted; cites the clause it is in.
+    Constraint,
+    /// A built-in predicate.
+    Builtin,
+    /// An if-then-else whose condition succeeded: the condition's proofs
+    /// are the subgoals; the then branch follows as siblings.
+    Committed,
+    /// A condition (of an if-then-else or a negation) that had no solution.
+    NoSolution,
+}
+
+impl Resolution {
+    /// The JSON spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Resolution::Fact => "fact",
+            Resolution::Rule => "rule",
+            Resolution::Constraint => "constraint",
+            Resolution::Builtin => "builtin",
+            Resolution::Committed => "committed",
+            Resolution::NoSolution => "no-solution",
+        }
+    }
 }
 
 impl Answer {
     /// True if the answer carries nothing (`true`).
     pub fn is_true(&self) -> bool {
         self.equations.is_empty() && self.disequations.is_empty() && self.constraints.is_empty()
+    }
+
+    /// The explanation as lines for a human (CLM-0023): one node per line,
+    /// indented two spaces per level, in derivation order — the goal, what
+    /// resolved it, the cited position, and a rule's text. Empty when the
+    /// answer carries no explanation. Iterative: a derivation can be deep.
+    pub fn explanation_lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let Some(roots) = &self.explanation else {
+            return out;
+        };
+        let mut work: Vec<(&ProofNode, usize)> = roots.iter().rev().map(|n| (n, 1)).collect();
+        while let Some((node, depth)) = work.pop() {
+            let mut line = format!("{}{}  {}", "  ".repeat(depth), node.goal, node.by.as_str());
+            if let (Some(l), Some(c)) = (node.line, node.column) {
+                line.push_str(&format!(" {l}:{c}"));
+            }
+            if node.by == Resolution::Rule {
+                if let Some(text) = &node.clause {
+                    line.push_str("  ");
+                    line.push_str(text);
+                }
+            }
+            out.push(line);
+            work.extend(node.subgoals.iter().rev().map(|n| (n, depth + 1)));
+        }
+        out
     }
 
     /// All lines of the answer, in print order.
@@ -263,11 +355,15 @@ impl<'a> Printer<'a> {
 }
 
 /// Build the answer for the query variables from the current store.
+/// Render an answer, and (CLM-0023) the terms at `extra` — an explanation's
+/// goal instances — with the same printer, so internal names agree between
+/// the answer and its explanation.
 pub(crate) fn render_answer(
     symbols: &Symbols,
     store: &Store,
     query_vars: &[(String, Addr)],
-) -> Answer {
+    extra: &[Addr],
+) -> (Answer, Vec<String>) {
     let mut p = Printer::new(symbols, store);
     let mut equations = Vec::new();
 
@@ -293,6 +389,9 @@ pub(crate) fn render_answer(
     for (a, b, _) in &difs {
         p.find_cycles(*a);
         p.find_cycles(*b);
+    }
+    for &a in extra {
+        p.find_cycles(a);
     }
 
     // Pass 2: name every query variable before rendering anything, so that
@@ -362,6 +461,15 @@ pub(crate) fn render_answer(
         equations.push(format!("{name} = {rendered}"));
     }
 
+    // CLM-0023: the explanation's goal instances, after the answer's names
+    // are fixed; a cyclic node first seen here gets its equation too.
+    let extra_rendered: Vec<String> = extra.iter().map(|a| p.render(*a)).collect();
+    while let Some(node) = p.pending_nodes.pop() {
+        let name = p.names[&node].clone();
+        let rendered = p.render(node);
+        equations.push(format!("{name} = {rendered}"));
+    }
+
     // Pass 6: the numeric store, projected onto what the query can see and
     // simplified (design D7, stage 4).
     let mut constraints = render_numeric(&mut p, store, &reachable);
@@ -408,11 +516,15 @@ pub(crate) fn render_answer(
         constraints.push(format!("atom_chars({ra}, {rl})"));
     }
 
-    Answer {
-        equations,
-        disequations,
-        constraints,
-    }
+    (
+        Answer {
+            equations,
+            disequations,
+            constraints,
+            explanation: None,
+        },
+        extra_rendered,
+    )
 }
 
 /// The public numeric variables (alias-class roots) with their names: numeric

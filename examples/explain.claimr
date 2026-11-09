@@ -1,0 +1,30 @@
+% Explanations (CLM-0023, docs/design/2026-11-09-explanations-of-answers.md):
+% under --explain (the sibling explain.args file passes it to the golden run)
+% each answer is followed by its proof tree — every goal of the derivation as
+% it stands at the answer, with the clause that resolved it (position and
+% text), the constraint instances posted, the built-ins, and the conditions
+% committed to or found without a solution. Facts of an integrity check:
+k(c17, 5). k(c18, 2).
+n(c17, 3). n(c18, 4).
+violation(C) :- k(C, K), n(C, N), { K > N }.
+
+curated(k1, cv1). harvested(k2, hv2).
+value(K, V) :- (curated(K, X) -> { V = X } ; harvested(K, V)).
+
+model_file(m1). model_file(m2).
+claim(m1, residual_error, low).
+missing_residual_error(F) :- model_file(F), \+ claim(F, residual_error, _).
+
+colour(red). colour(blue).
+feature(X) :- colour(X) ; { X = none }.
+
+shape(f(Y)) :- any(Y).
+any(_).
+
+?- violation(C).
+?- value(k1, V).
+?- value(k2, V).
+?- missing_residual_error(F).
+?- feature(X).
+?- shape(S).
+?- atom_chars(A, "ab"), { L = |"abc"| }.

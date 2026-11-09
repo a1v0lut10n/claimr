@@ -8,6 +8,7 @@ decisions:
   - docs/design/2026-11-09-lists-as-a-constraint-domain.md
   - docs/design/2026-11-09-strings-as-character-lists-and-type-relations.md
   - docs/design/2026-11-09-negation-disjunction-and-if-then-else.md
+  - docs/design/2026-11-09-explanations-of-answers.md
 aspects: [answer-soundness, exact-arithmetic]
 ---
 
@@ -17,7 +18,9 @@ aspects: [answer-soundness, exact-arithmetic]
 program, resolves queries by SLD resolution over rational trees, and renders
 answers in solved form. Public surface (re-exported from `claimr`):
 `Program::compile` / `Program::compile_spanned`, `Program::queries`,
-`Program::solve` → `Solutions` (a lazy iterator of `Answer`s), `EvalError`.
+`Program::solve` → `Solutions` (a lazy iterator of `Answer`s;
+`with_explanations()` makes each answer carry its proof tree, CLM-0023),
+`Answer`, `ProofNode`, `Resolution`, `EvalError`.
 
 ## Current state (evaluator stages 2–4 — CLM-0005, CLM-0006, CLM-0007)
 
@@ -92,6 +95,8 @@ answers in solved form. Public surface (re-exported from `claimr`):
   clause outside the whole construct — and stores them with the construct's
   and the clause's text in a `CondCheck`, for the machine's groundness rule
   and its diagnostic. Only bodies with a construct pay for the clause text.
+  Every clause keeps its source position and its text as written
+  (CLM-0023), for explanations to cite.
 - **`machine.rs`** — the SLD machine: goals left to right, clauses in program
   order, chronological backtracking through choice points and the trail. A
   call whose first argument is bound visits only the clauses the index
@@ -129,6 +134,21 @@ answers in solved form. Public surface (re-exported from `claimr`):
   at an answer), truncates the choice-point stack to the recorded height,
   and continues with the then branch — or, for a negation, fails. The
   store, the solver and the answer printer are untouched by the constructs.
+  **Explanations** (CLM-0023, design record
+  `2026-11-09-explanations-of-answers.md`): on request
+  (`Solutions::with_explanations`, the CLI's `--explain`, the REPL's
+  `:explain`) the machine keeps a proof arena — one record per successful
+  step: the clause that resolved a call (with the call's address), a
+  constraint goal's two sides and operator, a built-in's call, a committed
+  condition, a condition found without a solution — each under the record
+  of the clause whose body it belongs to; every pending goal carries that
+  parent. A choice point remembers the arena's length and backtracking
+  truncates to it, as the trail does for bindings; a commit keeps the
+  condition's records; an else branch or a negation's continuation records
+  its `no-solution` leaf when taken. Off, nothing is recorded. At an
+  answer the arena's goal instances are rendered by the answer's own
+  printer (so `_N` names agree) and the tree is assembled bottom-up without
+  recursion.
   `Solutions::with_interrupt(Arc<AtomicBool>)` installs a flag polled every
   256 steps (the REPL's Ctrl-C); `Solutions::interrupted()` reports a stop
   through it; `Solutions::may_continue()` tells a caller whether asking for
@@ -171,10 +191,16 @@ answers in solved form. Public surface (re-exported from `claimr`):
   see prints as `Z = X . Y` among the constraints (CLM-0016), and the
   length relation it implies is dropped when it appears as such. Pending
   built-ins print in goal form after them: `atom(X)`, `list(X)`,
-  `atom_chars(A, L)` (CLM-0017).
+  `atom_chars(A, L)` (CLM-0017). An `Answer` may carry an `explanation`
+  (CLM-0023): `ProofNode`s with the goal instance, the `Resolution`
+  (`Fact`, `Rule`, `Constraint`, `Builtin`, `Committed`, `NoSolution`), the
+  cited clause's position and text, and subgoals; `explanation_lines()`
+  renders it as the indented tree the CLI prints, iteratively.
 
 The CLI (`cli` component) loads a file and runs its queries in order,
-`--limit N` capping answers per query; a runtime error stops it with exit 1.
+`--limit N` capping answers per query, `--explain` printing each answer's
+proof tree under it (and adding the `explanation` field under `--json`); a
+runtime error stops it with exit 1.
 The REPL (`src/repl.rs`, design record `2026-08-18-repl-interaction-model.md`)
 recompiles the session program on every change and per query (programs are
 small; an incremental compile is a later optimisation).

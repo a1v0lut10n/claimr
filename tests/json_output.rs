@@ -162,3 +162,36 @@ fn a_non_ground_condition_is_a_query_error_document() {
         "{stdout}"
     );
 }
+
+/// CLM-0023: `--explain` adds an `explanation` field to each answer object;
+/// without it the document is unchanged.
+#[test]
+fn explain_adds_the_explanation_field_only_when_asked() {
+    let src = "k(c17, 5).\nviolation(C) :- k(C, K), { K > 3 }.\n?- violation(C).\n";
+    let path = write_temp("explain", src);
+    let (stdout, _, code) = run(&["--json", "--explain", path.to_str().unwrap()]);
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        stdout,
+        "{\"query\":\"?- violation(C).\",\"outcome\":\"solutions\",\"answers\":[{\"equations\":[\"C = c17\"],\"disequations\":[],\"constraints\":[],\"explanation\":[{\"goal\":\"violation(c17)\",\"by\":\"rule\",\"line\":2,\"column\":1,\"clause\":\"violation(C) :- k(C, K), { K > 3 }.\",\"subgoals\":[{\"goal\":\"k(c17, 5)\",\"by\":\"fact\",\"line\":1,\"column\":1,\"clause\":\"k(c17, 5).\",\"subgoals\":[]},{\"goal\":\"{ 5 > 3 }\",\"by\":\"constraint\",\"line\":2,\"column\":1,\"subgoals\":[]}]}]}]}\n"
+    );
+    let (stdout, _, code) = run(&["--json", path.to_str().unwrap()]);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(0));
+    assert!(!stdout.contains("explanation"), "{stdout}");
+    // A deep derivation serialises without recursion.
+    let mut deep = String::new();
+    for i in 0..5000 {
+        deep.push_str(&format!("next(a{i}, a{}).\n", i + 1));
+    }
+    deep.push_str("reach(X, X).\nreach(X, Z) :- next(X, Y), reach(Y, Z).\n?- reach(a0, a5000).\n");
+    let path = write_temp("explain-deep", &deep);
+    let (stdout, _, code) = run(&["--json", "--explain", path.to_str().unwrap()]);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(0));
+    assert!(
+        stdout.contains("\"goal\":\"reach(a5000, a5000)\",\"by\":\"fact\""),
+        "deepest leaf present"
+    );
+    assert_eq!(stdout.matches("\"by\":\"rule\"").count(), 5000);
+}

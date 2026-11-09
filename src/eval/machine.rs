@@ -15,12 +15,18 @@
 //! reaches the front of the list. By then the preceding goals have bound what
 //! they bind, so arithmetic over values known at that point folds to numbers
 //! instead of defining solver rows (CLM-0013).
+//!
+//! On request (CLM-0023, `Solutions::with_explanations`) the machine records
+//! a proof arena: one record per successful step, each under the record of
+//! the clause whose body it belongs to; choice points remember the arena's
+//! length and backtracking truncates it. The answer's explanation is the
+//! arena rendered as a tree.
 
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::answer::{Answer, render_answer, render_terms};
+use super::answer::{Answer, ProofNode, Resolution, render_answer, render_terms};
 use super::compile::{
     ANONYMOUS, ArgKey, Builtin, CondCheck, PredKey, Program, Query, TGoal, build_with,
 };
@@ -40,6 +46,10 @@ enum RtGoal {
 /// A clause's variables, allocated once at clause entry.
 type Frame = Rc<[Addr]>;
 
+/// The proof record a goal's own record goes under (CLM-0023): `None` for a
+/// query goal (a root) and whenever explanations are off.
+type Under = Option<usize>;
+
 /// A goal in the list: a body goal still to be built from its clause's
 /// frame when it is reached (query goals too, since CLM-0022: the query's
 /// variables are its frame), or a commit.
@@ -48,16 +58,14 @@ enum Goal<'p> {
     Pending {
         frame: Frame,
         goal: &'p TGoal,
+        under: Under,
     },
     /// CLM-0022: the condition of an if-then-else or a negation has just
     /// succeeded. Reaching it finalizes the store as for an answer (a
     /// condition's solution is one the answer stage would accept), drops
     /// the choice points above `height` — the condition's alternatives and
     /// the else branch — and continues with `then`.
-    Commit {
-        height: usize,
-        then: Then<'p>,
-    },
+    Commit { height: usize, then: Then<'p> },
 }
 
 /// What follows a committed condition (CLM-0022).
@@ -66,6 +74,7 @@ enum Then<'p> {
     Goals {
         frame: Frame,
         goals: &'p [TGoal],
+        under: Under,
     },
     /// Negation: the condition succeeded, so `\+` fails.
     Fail,
@@ -84,14 +93,15 @@ fn cons<'p>(goal: Goal<'p>, next: Goals<'p>) -> Goals<'p> {
     Some(Rc::new(GoalNode { goal, next }))
 }
 
-/// Body goals in front of `rest`, pending on `frame`.
-fn prepend<'p>(goals: &'p [TGoal], frame: &Frame, rest: Goals<'p>) -> Goals<'p> {
+/// Body goals in front of `rest`, pending on `frame`, recorded under `under`.
+fn prepend<'p>(goals: &'p [TGoal], frame: &Frame, under: Under, rest: Goals<'p>) -> Goals<'p> {
     let mut out = rest;
     for g in goals.iter().rev() {
         out = cons(
             Goal::Pending {
                 frame: frame.clone(),
                 goal: g,
+                under,
             },
             out,
         );
@@ -102,6 +112,9 @@ fn prepend<'p>(goals: &'p [TGoal], frame: &Frame, rest: Goals<'p>) -> Goals<'p> 
 struct ChoicePoint<'p> {
     retry: Retry<'p>,
     mark: Mark,
+    /// The proof arena's length when the choice point was made (CLM-0023):
+    /// backtracking to it discards the records made since.
+    proof_len: usize,
 }
 
 /// What a choice point resumes with.
@@ -116,10 +129,48 @@ enum Retry<'p> {
         /// program order, and the next one to try.
         candidates: &'p [usize],
         next: usize,
+        under: Under,
     },
     /// CLM-0022: a goal list — the second alternative of a disjunction, the
-    /// else branch of an if-then-else, the continuation of a negation.
-    Goals(Goals<'p>),
+    /// else branch of an if-then-else, the continuation of a negation. The
+    /// note, if any, is the `NoSolution` leaf to record when it is taken
+    /// (CLM-0023): the condition as written, under its clause's record.
+    Goals {
+        goals: Goals<'p>,
+        note: Option<(Under, &'p str)>,
+    },
+}
+
+/// One record of the proof arena (CLM-0023).
+struct ProofRec<'p> {
+    parent: Under,
+    kind: ProofKind<'p>,
+}
+
+enum ProofKind<'p> {
+    /// A call resolved by clause `idx` of `key`.
+    Clause {
+        key: PredKey,
+        idx: usize,
+        call: Addr,
+    },
+    /// A constraint goal, as posted.
+    Constraint {
+        a: Addr,
+        op: &'static str,
+        b: Addr,
+    },
+    Builtin {
+        call: Addr,
+    },
+    /// An if-then-else whose condition succeeded; its proofs go under it.
+    Committed {
+        text: &'p str,
+    },
+    /// A condition that had no solution (an else branch or a negation taken).
+    NoSolution {
+        text: &'p str,
+    },
 }
 
 /// The solutions of one query, produced lazily; each `next()` resumes the
@@ -139,6 +190,8 @@ pub struct Solutions<'p> {
     interrupt: Option<Arc<AtomicBool>>,
     interrupted: bool,
     steps: u64,
+    /// The proof arena (CLM-0023), present when explanations were asked for.
+    proof: Option<Vec<ProofRec<'p>>>,
 }
 
 impl<'p> Solutions<'p> {
@@ -155,7 +208,7 @@ impl<'p> Solutions<'p> {
         let frame: Frame = (0..query.var_names.len())
             .map(|_| store.new_var())
             .collect();
-        let goals = prepend(&query.goals, &frame, None);
+        let goals = prepend(&query.goals, &frame, None, None);
         // An anonymous variable is not an answer variable (CLM-0020): what it
         // binds is visible only through named variables that reach it.
         let query_vars = query
@@ -177,6 +230,7 @@ impl<'p> Solutions<'p> {
             interrupt: None,
             interrupted: false,
             steps: 0,
+            proof: None,
         }
     }
 
@@ -189,6 +243,14 @@ impl<'p> Solutions<'p> {
     /// (no further answers, no error) and [`Solutions::interrupted`] is true.
     pub fn with_interrupt(mut self, flag: Arc<AtomicBool>) -> Self {
         self.interrupt = Some(flag);
+        self
+    }
+
+    /// Record each answer's proof tree (CLM-0023): `Answer::explanation` is
+    /// then present. Off by default, since the records of a derivation stay
+    /// alive until backtracking discards them.
+    pub fn with_explanations(mut self) -> Self {
+        self.proof = Some(Vec::new());
         self
     }
 
@@ -217,6 +279,27 @@ impl<'p> Solutions<'p> {
         false
     }
 
+    fn proof_len(&self) -> usize {
+        self.proof.as_ref().map_or(0, Vec::len)
+    }
+
+    /// Append a proof record under `parent` (CLM-0023); its id, or `None`
+    /// when explanations are off.
+    fn record(&mut self, parent: Under, kind: ProofKind<'p>) -> Under {
+        let arena = self.proof.as_mut()?;
+        arena.push(ProofRec { parent, kind });
+        Some(arena.len() - 1)
+    }
+
+    fn push_choice_point(&mut self, retry: Retry<'p>, mark: Mark) {
+        let proof_len = self.proof_len();
+        self.choice_points.push(ChoicePoint {
+            retry,
+            mark,
+            proof_len,
+        });
+    }
+
     /// Try clauses `from..` of `key` against `call`; on success install the
     /// clause body, pending on the clause's frame, in front of `rest` (and a
     /// choice point if clauses remain).
@@ -227,6 +310,7 @@ impl<'p> Solutions<'p> {
         from: usize,
         call: Addr,
         rest: Goals<'p>,
+        under: Under,
     ) -> bool {
         let program: &'p Program = self.program;
         let clauses = program.clauses(&key);
@@ -247,18 +331,27 @@ impl<'p> Solutions<'p> {
                 continue;
             }
             if j + 1 < candidates.len() {
-                self.choice_points.push(ChoicePoint {
-                    retry: Retry::Clauses {
+                self.push_choice_point(
+                    Retry::Clauses {
                         rest: rest.clone(),
                         call,
                         key,
                         candidates,
                         next: j + 1,
+                        under,
                     },
                     mark,
-                });
+                );
             }
-            self.goals = prepend(&clause.body, &frame, rest);
+            let node = self.record(
+                under,
+                ProofKind::Clause {
+                    key,
+                    idx: candidates[j],
+                    call,
+                },
+            );
+            self.goals = prepend(&clause.body, &frame, node, rest);
             return true;
         }
         false
@@ -269,6 +362,9 @@ impl<'p> Solutions<'p> {
     fn backtrack(&mut self) -> bool {
         while let Some(cp) = self.choice_points.pop() {
             self.store.undo_to(&cp.mark);
+            if let Some(arena) = self.proof.as_mut() {
+                arena.truncate(cp.proof_len);
+            }
             match cp.retry {
                 Retry::Clauses {
                     rest,
@@ -276,15 +372,19 @@ impl<'p> Solutions<'p> {
                     key,
                     candidates,
                     next,
+                    under,
                 } => {
-                    if self.try_clauses(key, candidates, next, call, rest) {
+                    if self.try_clauses(key, candidates, next, call, rest, under) {
                         return true;
                     }
                     if self.store.error.is_some() {
                         return false;
                     }
                 }
-                Retry::Goals(goals) => {
+                Retry::Goals { goals, note } => {
+                    if let Some((under, text)) = note {
+                        self.record(under, ProofKind::NoSolution { text });
+                    }
                     self.goals = goals;
                     return true;
                 }
@@ -313,15 +413,24 @@ impl<'p> Solutions<'p> {
 
     /// CLM-0022: open a construct — push its alternative (if any) and run its
     /// first part, with a commit after a condition.
-    fn open_construct(&mut self, frame: &Frame, goal: &'p TGoal, rest: Goals<'p>) -> bool {
+    fn open_construct(
+        &mut self,
+        frame: &Frame,
+        goal: &'p TGoal,
+        rest: Goals<'p>,
+        under: Under,
+    ) -> bool {
         match goal {
             TGoal::Or(a, b) => {
                 let mark = self.store.mark();
-                self.choice_points.push(ChoicePoint {
-                    retry: Retry::Goals(prepend(b, frame, rest.clone())),
+                self.push_choice_point(
+                    Retry::Goals {
+                        goals: prepend(b, frame, under, rest.clone()),
+                        note: None,
+                    },
                     mark,
-                });
-                self.goals = prepend(a, frame, rest);
+                );
+                self.goals = prepend(a, frame, under, rest);
             }
             TGoal::IfThenElse {
                 cond,
@@ -335,19 +444,31 @@ impl<'p> Solutions<'p> {
                 let height = self.choice_points.len();
                 if let Some(e) = els {
                     let mark = self.store.mark();
-                    self.choice_points.push(ChoicePoint {
-                        retry: Retry::Goals(prepend(e, frame, rest.clone())),
+                    self.push_choice_point(
+                        Retry::Goals {
+                            goals: prepend(e, frame, under, rest.clone()),
+                            note: Some((under, check.construct.as_str())),
+                        },
                         mark,
-                    });
+                    );
                 }
+                // The condition's proofs go under the committed node; the
+                // then branch's follow as siblings of the construct.
+                let node = self.record(
+                    under,
+                    ProofKind::Committed {
+                        text: check.construct.as_str(),
+                    },
+                );
                 let commit = Goal::Commit {
                     height,
                     then: Then::Goals {
                         frame: frame.clone(),
                         goals: then,
+                        under,
                     },
                 };
-                self.goals = prepend(cond, frame, cons(commit, rest));
+                self.goals = prepend(cond, frame, node, cons(commit, rest));
             }
             TGoal::Not { cond, check } => {
                 if !self.check_condition(frame, check) {
@@ -355,15 +476,20 @@ impl<'p> Solutions<'p> {
                 }
                 let height = self.choice_points.len();
                 let mark = self.store.mark();
-                self.choice_points.push(ChoicePoint {
-                    retry: Retry::Goals(rest.clone()),
+                self.push_choice_point(
+                    Retry::Goals {
+                        goals: rest.clone(),
+                        note: Some((under, check.construct.as_str())),
+                    },
                     mark,
-                });
+                );
                 let commit = Goal::Commit {
                     height,
                     then: Then::Fail,
                 };
-                self.goals = prepend(cond, frame, cons(commit, rest));
+                // A succeeding condition fails the negation, so its records
+                // never survive; they go under the clause's record meanwhile.
+                self.goals = prepend(cond, frame, under, cons(commit, rest));
             }
             TGoal::Call(_) | TGoal::Eq(..) | TGoal::Dif(..) | TGoal::Rel(..) => {
                 unreachable!("not a control construct")
@@ -392,7 +518,7 @@ impl<'p> Solutions<'p> {
             };
             let rest = node.next.clone();
             // A pending body goal is built now, from its clause's frame.
-            let goal = match &node.goal {
+            let (goal, under) = match &node.goal {
                 Goal::Commit { height, then } => {
                     if !self.store.finalize() {
                         // Not a solution after all: the condition's next
@@ -412,25 +538,30 @@ impl<'p> Solutions<'p> {
                                 return false;
                             }
                         }
-                        Then::Goals { frame, goals } => self.goals = prepend(goals, frame, rest),
+                        Then::Goals {
+                            frame,
+                            goals,
+                            under,
+                        } => self.goals = prepend(goals, frame, *under, rest),
                     }
                     continue;
                 }
                 Goal::Pending {
                     frame,
                     goal: goal @ (TGoal::Or(..) | TGoal::IfThenElse { .. } | TGoal::Not { .. }),
+                    under,
                 } => {
-                    if !self.open_construct(frame, goal, rest) {
+                    if !self.open_construct(frame, goal, rest, *under) {
                         return false;
                     }
                     continue;
                 }
-                Goal::Pending { frame, goal } => {
+                Goal::Pending { frame, goal, under } => {
                     let frame = frame.clone();
                     let built =
                         instantiate_goal(&mut self.store, goal, &mut |_, i| frame[i as usize]);
                     match built {
-                        Some(g) => g,
+                        Some(g) => (g, *under),
                         None => {
                             if self.store.error.is_some() || !self.backtrack() {
                                 return false;
@@ -446,32 +577,60 @@ impl<'p> Solutions<'p> {
                     match self.program.builtins.get(&key).copied() {
                         Some(b) => {
                             self.goals = rest;
-                            self.run_builtin(b, call)
+                            let ok = self.run_builtin(b, call);
+                            if ok {
+                                self.record(under, ProofKind::Builtin { call });
+                            }
+                            ok
                         }
                         None => {
                             let first = first_arg_key(&self.store, call);
                             let candidates = self.program.candidates(&key, first.as_ref());
-                            self.try_clauses(key, candidates, 0, call, rest)
+                            self.try_clauses(key, candidates, 0, call, rest, under)
                         }
                     }
                 }
                 RtGoal::Eq(a, b) => {
                     self.goals = rest;
-                    self.store.post_eq_goal(a, b)
+                    self.constraint(under, a, "=", b, |s| s.post_eq_goal(a, b))
                 }
                 RtGoal::Dif(a, b) => {
                     self.goals = rest;
-                    self.store.post_dif_goal(a, b)
+                    self.constraint(under, a, "!=", b, |s| s.post_dif_goal(a, b))
                 }
                 RtGoal::Rel(op, a, b) => {
                     self.goals = rest;
-                    self.store.post_rel(op, a, b)
+                    let text = match op {
+                        RelOp::Eq => "=",
+                        RelOp::Neq => "!=",
+                        RelOp::Lt => "<",
+                        RelOp::Gt => ">",
+                        RelOp::Le => "<=",
+                        RelOp::Ge => ">=",
+                    };
+                    self.constraint(under, a, text, b, |s| s.post_rel(op, a, b))
                 }
             };
             if !ok && (self.store.error.is_some() || !self.backtrack()) {
                 return false;
             }
         }
+    }
+
+    /// Post a constraint goal and, if it holds, record it (CLM-0023).
+    fn constraint(
+        &mut self,
+        under: Under,
+        a: Addr,
+        op: &'static str,
+        b: Addr,
+        post: impl FnOnce(&mut Store) -> bool,
+    ) -> bool {
+        let ok = post(&mut self.store);
+        if ok {
+            self.record(under, ProofKind::Constraint { a, op, b });
+        }
+        ok
     }
 
     /// A built-in predicate (CLM-0017): posts its constraint, deterministic.
@@ -488,8 +647,106 @@ impl<'p> Solutions<'p> {
         }
     }
 
+    /// The answer, with its explanation when recording (CLM-0023): the
+    /// arena's goal instances are rendered by the answer's own printer, then
+    /// the tree is built bottom-up (children have higher ids than their
+    /// parent, so a reverse pass sees every child before its parent).
     fn answer(&self) -> Answer {
-        render_answer(&self.store.symbols, &self.store, &self.query_vars)
+        let Some(arena) = &self.proof else {
+            return render_answer(&self.store.symbols, &self.store, &self.query_vars, &[]).0;
+        };
+        let mut addrs = Vec::new();
+        for rec in arena {
+            match rec.kind {
+                ProofKind::Clause { call, .. } | ProofKind::Builtin { call } => addrs.push(call),
+                ProofKind::Constraint { a, b, .. } => {
+                    addrs.push(a);
+                    addrs.push(b);
+                }
+                ProofKind::Committed { .. } | ProofKind::NoSolution { .. } => {}
+            }
+        }
+        let (mut answer, rendered) =
+            render_answer(&self.store.symbols, &self.store, &self.query_vars, &addrs);
+        let mut rendered = rendered.into_iter();
+        // The clause each record cites: its own for a clause, the enclosing
+        // clause's for a constraint goal.
+        let cited = |i: usize| -> Option<(Option<crate::Span>, &str)> {
+            let ProofKind::Clause { key, idx, .. } = &arena[i].kind else {
+                return None;
+            };
+            let c = &self.program.clauses(key)[*idx];
+            Some((c.span, c.text.as_str()))
+        };
+        let mut nodes: Vec<ProofNode> = Vec::with_capacity(arena.len());
+        for (i, rec) in arena.iter().enumerate() {
+            let (goal, by, cite, clause) = match &rec.kind {
+                ProofKind::Clause { key, idx, .. } => {
+                    let c = &self.program.clauses(key)[*idx];
+                    let by = if c.body.is_empty() {
+                        Resolution::Fact
+                    } else {
+                        Resolution::Rule
+                    };
+                    (
+                        rendered.next().unwrap_or_default(),
+                        by,
+                        c.span,
+                        Some(c.text.clone()),
+                    )
+                }
+                ProofKind::Constraint { op, .. } => {
+                    let a = rendered.next().unwrap_or_default();
+                    let b = rendered.next().unwrap_or_default();
+                    let cite = rec.parent.and_then(cited).and_then(|(s, _)| s);
+                    (
+                        format!("{{ {a} {op} {b} }}"),
+                        Resolution::Constraint,
+                        cite,
+                        None,
+                    )
+                }
+                ProofKind::Builtin { .. } => (
+                    rendered.next().unwrap_or_default(),
+                    Resolution::Builtin,
+                    None,
+                    None,
+                ),
+                ProofKind::Committed { text } => {
+                    (text.to_string(), Resolution::Committed, None, None)
+                }
+                ProofKind::NoSolution { text } => {
+                    (text.to_string(), Resolution::NoSolution, None, None)
+                }
+            };
+            let _ = i;
+            nodes.push(ProofNode {
+                goal,
+                by,
+                line: cite.map(|s| s.line),
+                column: cite.map(|s| s.column),
+                clause,
+                subgoals: Vec::new(),
+            });
+        }
+        // Attach children to parents, last to first, so each node is complete
+        // before it is moved into its parent.
+        let mut roots = Vec::new();
+        let mut slots: Vec<Option<ProofNode>> = nodes.into_iter().map(Some).collect();
+        for i in (0..arena.len()).rev() {
+            let node = slots[i].take().expect("each node moves once");
+            match arena[i].parent {
+                Some(p) => slots[p]
+                    .as_mut()
+                    .expect("parents precede children")
+                    .subgoals
+                    .insert(0, node),
+                None => roots.push(node),
+            }
+        }
+        roots.reverse();
+        answer.explanation = Some(roots);
+        answer
     }
 
     /// Take the store's runtime error, rendering a non-linear residue with

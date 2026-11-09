@@ -6,6 +6,7 @@ decisions:
   - docs/design/2026-08-17-evaluator.md
   - docs/design/2026-08-17-exact-rational-arithmetic.md
   - docs/design/2026-11-09-negation-disjunction-and-if-then-else.md
+  - docs/design/2026-11-09-explanations-of-answers.md
 ---
 
 # answer-soundness
@@ -71,3 +72,14 @@ realise the store.
    `a_condition_is_finalized_before_the_commit`,
    `the_groundness_rule_exempts_the_constructs_own_variables`, and the
    golden run `examples/control.claimr`.
+6. **An explanation cites only the answer's own derivation.** The proof
+   tree an answer carries under `--explain` (CLM-0023) names, for every
+   goal, the clause that resolved it and the constraint instances posted,
+   and nothing from a derivation that was backtracked over, a condition's
+   discarded alternatives, or an else branch not taken; the cited
+   constraints are the posted ones, which entail the printed, projected
+   ones. Recording changes no decision the machine takes. *Test:*
+   `cited_clauses_reproduce_the_answer` (the cited clauses alone, as a
+   program, give the same answer), `explanations_discard_abandoned_derivations`,
+   `explanation_names_agree_with_the_answer`, and the golden run
+   `examples/explain.claimr` under `--explain`.

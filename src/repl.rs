@@ -32,6 +32,8 @@ pub struct Repl {
     loaded: Vec<PathBuf>,
     program: Program,
     all_mode: bool,
+    /// CLM-0023: print each answer's proof tree.
+    explain: bool,
     limit: Option<usize>,
     interrupt: Arc<AtomicBool>,
     input: Input,
@@ -62,6 +64,7 @@ After an answer: `;` then Enter for the next, Enter or `.` to stop.
   :clear       empty the session
   :limit N     cap answers per query in :all mode (0 = unlimited)
   :all         toggle between stepping answers and printing them all
+  :explain     toggle the proof tree under each answer (CLM-0023)
   :help        this text
   :quit        leave (also `exit.`, `halt.`, Ctrl-D, or Ctrl-C twice at an empty prompt)
 Ctrl-C interrupts a running query.";
@@ -89,6 +92,7 @@ impl Repl {
             loaded: Vec::new(),
             program: Program::compile(&[]).expect("empty program compiles"),
             all_mode: false,
+            explain: false,
             limit,
             interrupt,
             input,
@@ -302,6 +306,17 @@ impl Repl {
                     }
                 );
             }
+            "explain" => {
+                self.explain = !self.explain;
+                println!(
+                    "{}",
+                    if self.explain {
+                        "explaining answers"
+                    } else {
+                        "not explaining answers"
+                    }
+                );
+            }
             _ => eprintln!("unknown command `:{name}` — :help for the list"),
         }
         true
@@ -341,13 +356,20 @@ impl Repl {
         let q = program.queries().last().expect("the query").clone();
         self.interrupt.store(false, Ordering::Relaxed);
         let mut sols = program.solve(&q).with_interrupt(self.interrupt.clone());
+        if self.explain {
+            sols = sols.with_explanations();
+        }
         let mut count = 0usize;
         loop {
             match sols.next() {
                 Some(a) => {
                     count += 1;
+                    let tree = a.explanation_lines();
                     if all {
                         println!("{a}");
+                        for line in &tree {
+                            println!("{line}");
+                        }
                         if self.limit.is_some_and(|l| count >= l) {
                             break;
                         }
@@ -355,13 +377,23 @@ impl Repl {
                     }
                     if !sols.may_continue() {
                         println!("{a}.");
+                        for line in &tree {
+                            println!("{line}");
+                        }
                         break;
                     }
                     // More answers may follow: wait for `;` (next) or Enter (stop).
                     // On a terminal the user's keystrokes are echoed, so the line
                     // ends up reading `W = socrates ;` by itself; on a pipe we
-                    // print the markers.
+                    // print the markers. With a proof tree (CLM-0023) the tree
+                    // follows the answer and the marker takes its own line.
                     print!("{a}");
+                    if !tree.is_empty() {
+                        println!();
+                        for line in &tree {
+                            println!("{line}");
+                        }
+                    }
                     if self.interactive && !self.hinted {
                         print!(
                             "   (more may follow: type ; then Enter for the next, Enter alone to stop)"

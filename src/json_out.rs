@@ -19,7 +19,7 @@
 //!   `{"error": {"file": "…", "line": N?, "column": N?,
 //!   "message": "…"}}` — line/column only when known.
 
-use claimr::Answer;
+use claimr::{Answer, ProofNode};
 
 /// JSON string escaping per RFC 8259: `"`, `\`, and control
 /// characters; the common controls get their short forms.
@@ -45,12 +45,82 @@ fn string_array(items: &[String]) -> String {
 }
 
 fn answer_object(answer: &Answer) -> String {
-    format!(
-        "{{\"equations\":{},\"disequations\":{},\"constraints\":{}}}",
+    let mut out = format!(
+        "{{\"equations\":{},\"disequations\":{},\"constraints\":{}",
         string_array(&answer.equations),
         string_array(&answer.disequations),
         string_array(&answer.constraints),
-    )
+    );
+    // CLM-0023: present only when explanations were asked for, so a
+    // document produced without `--explain` is unchanged.
+    if let Some(roots) = &answer.explanation {
+        out.push_str(",\"explanation\":");
+        out.push_str(&proof_array(roots));
+    }
+    out.push('}');
+    out
+}
+
+/// A proof tree as nested objects: `{"goal": …, "by": …, "line"?, "column"?,
+/// "clause"?, "subgoals": […]}`. Iterative — a derivation can be deep.
+fn proof_array(roots: &[ProofNode]) -> String {
+    // A frame per open node: the node and its children rendered so far.
+    struct Open<'a> {
+        node: &'a ProofNode,
+        next_child: usize,
+        children: Vec<String>,
+    }
+    let mut rendered_roots: Vec<String> = Vec::new();
+    let mut stack: Vec<Open<'_>> = Vec::new();
+    let mut pending_roots = roots.iter();
+    loop {
+        // Descend into the next child of the innermost open node, or open
+        // the next root.
+        let next = match stack.last_mut() {
+            Some(open) => {
+                let child = open.node.subgoals.get(open.next_child);
+                open.next_child += 1;
+                child
+            }
+            None => pending_roots.next(),
+        };
+        match next {
+            Some(node) => stack.push(Open {
+                node,
+                next_child: 0,
+                children: Vec::new(),
+            }),
+            None => {
+                let Some(done) = stack.pop() else {
+                    break;
+                };
+                let text = proof_object(done.node, &done.children);
+                match stack.last_mut() {
+                    Some(parent) => parent.children.push(text),
+                    None => rendered_roots.push(text),
+                }
+            }
+        }
+    }
+    format!("[{}]", rendered_roots.join(","))
+}
+
+fn proof_object(node: &ProofNode, children: &[String]) -> String {
+    let mut fields = vec![
+        format!("\"goal\":\"{}\"", escape(&node.goal)),
+        format!("\"by\":\"{}\"", node.by.as_str()),
+    ];
+    if let Some(line) = node.line {
+        fields.push(format!("\"line\":{line}"));
+    }
+    if let Some(column) = node.column {
+        fields.push(format!("\"column\":{column}"));
+    }
+    if let Some(clause) = &node.clause {
+        fields.push(format!("\"clause\":\"{}\"", escape(clause)));
+    }
+    fields.push(format!("\"subgoals\":[{}]", children.join(",")));
+    format!("{{{}}}", fields.join(","))
 }
 
 /// The per-query document: `outcome` is `"solutions"` when any answer
@@ -115,6 +185,7 @@ mod tests {
             equations: vec![],
             disequations: vec![],
             constraints: vec![],
+            explanation: None,
         };
         assert_eq!(
             query_document("?- ok(s1).", &[truth]),
@@ -128,10 +199,46 @@ mod tests {
             equations: vec!["X = 3".to_string()],
             disequations: vec!["X != Y".to_string()],
             constraints: vec!["age(alice) = 30".to_string()],
+            explanation: None,
         };
         assert_eq!(
             query_document("?- q(X).", &[bound]),
             r#"{"query":"?- q(X).","outcome":"solutions","answers":[{"equations":["X = 3"],"disequations":["X != Y"],"constraints":["age(alice) = 30"]}]}"#
+        );
+        // CLM-0023: the explanation, when present, nests under `subgoals`.
+        let explained = Answer {
+            equations: vec!["C = c17".to_string()],
+            disequations: vec![],
+            constraints: vec![],
+            explanation: Some(vec![ProofNode {
+                goal: "violation(c17)".to_string(),
+                by: claimr::Resolution::Rule,
+                line: Some(2),
+                column: Some(1),
+                clause: "violation(C) :- k(C, K), { K > 3 }.".to_string().into(),
+                subgoals: vec![
+                    ProofNode {
+                        goal: "k(c17, 5)".to_string(),
+                        by: claimr::Resolution::Fact,
+                        line: Some(1),
+                        column: Some(1),
+                        clause: Some("k(c17, 5).".to_string()),
+                        subgoals: vec![],
+                    },
+                    ProofNode {
+                        goal: "{ 5 > 3 }".to_string(),
+                        by: claimr::Resolution::Constraint,
+                        line: Some(2),
+                        column: Some(1),
+                        clause: None,
+                        subgoals: vec![],
+                    },
+                ],
+            }]),
+        };
+        assert_eq!(
+            query_document("?- violation(C).", &[explained]),
+            r#"{"query":"?- violation(C).","outcome":"solutions","answers":[{"equations":["C = c17"],"disequations":[],"constraints":[],"explanation":[{"goal":"violation(c17)","by":"rule","line":2,"column":1,"clause":"violation(C) :- k(C, K), { K > 3 }.","subgoals":[{"goal":"k(c17, 5)","by":"fact","line":1,"column":1,"clause":"k(c17, 5).","subgoals":[]},{"goal":"{ 5 > 3 }","by":"constraint","line":2,"column":1,"subgoals":[]}]}]}]}"#
         );
         assert_eq!(
             query_error_document("?- q(X).", "boom"),

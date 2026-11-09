@@ -1,0 +1,40 @@
+?- violation(C).
+C = c17
+  violation(c17)  rule 9:1  violation(C) :- k(C, K), n(C, N), { K > N }.
+    k(c17, 5)  fact 7:1
+    n(c17, 3)  fact 8:1
+    { 5 > 3 }  constraint 9:1
+?- value(k1, V).
+V = cv1
+  value(k1, cv1)  rule 12:1  value(K, V) :- curated(K, X) -> { V = X } ; harvested(K, V).
+    curated(K, X) -> { V = X } ; harvested(K, V)  committed
+      curated(k1, cv1)  fact 11:1
+    { cv1 = cv1 }  constraint 12:1
+?- value(k2, V).
+V = hv2
+  value(k2, hv2)  rule 12:1  value(K, V) :- curated(K, X) -> { V = X } ; harvested(K, V).
+    curated(K, X) -> { V = X } ; harvested(K, V)  no-solution
+    harvested(k2, hv2)  fact 11:19
+?- missing_residual_error(F).
+F = m2
+  missing_residual_error(m2)  rule 16:1  missing_residual_error(F) :- model_file(F), \+ claim(F, residual_error, _).
+    model_file(m2)  fact 14:17
+    \+ claim(F, residual_error, _)  no-solution
+?- feature(X).
+X = red
+  feature(red)  rule 19:1  feature(X) :- colour(X) ; { X = none }.
+    colour(red)  fact 18:1
+X = blue
+  feature(blue)  rule 19:1  feature(X) :- colour(X) ; { X = none }.
+    colour(blue)  fact 18:14
+X = none
+  feature(none)  rule 19:1  feature(X) :- colour(X) ; { X = none }.
+    { none = none }  constraint 19:1
+?- shape(S).
+S = f(_1)
+  shape(f(_1))  rule 21:1  shape(f(Y)) :- any(Y).
+    any(_1)  fact 22:1
+?- atom_chars(A, <a, b>), { L = |<a, b, c>| }.
+A = ab, L = 3
+  atom_chars(ab, <a, b>)  builtin
+  { 3 = 3 }  constraint
