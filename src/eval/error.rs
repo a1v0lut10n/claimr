@@ -30,6 +30,9 @@ pub enum EvalError {
         arity: usize,
         span: Option<Span>,
     },
+    /// An internal invariant of the evaluator failed; reported rather than
+    /// panicked so the CLI and REPL stay up. Never expected.
+    InternalInvariant { what: String },
 }
 
 impl fmt::Display for EvalError {
@@ -58,6 +61,9 @@ impl fmt::Display for EvalError {
                 "`{}/{arity}` is a built-in predicate and cannot be defined",
                 crate::ast::display_name(name)
             ),
+            EvalError::InternalInvariant { what } => {
+                write!(f, "internal error: {what} (please report)")
+            }
         }
     }
 }
@@ -71,7 +77,8 @@ impl EvalError {
             EvalError::ReservedName { span, .. } | EvalError::ReservedBuiltin { span, .. } => *span,
             EvalError::InitialStoreUnsatisfiable
             | EvalError::NonLinear { .. }
-            | EvalError::CyclicAttributeTerm { .. } => None,
+            | EvalError::CyclicAttributeTerm { .. }
+            | EvalError::InternalInvariant { .. } => None,
         }
     }
 }

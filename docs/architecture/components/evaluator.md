@@ -72,9 +72,13 @@ answers in solved form. Public surface (re-exported from `claimr`):
   (see [`solver.md`](solver.md), *List lengths*). `X . Y` (CLM-0016) is
   `TTerm::Concat`, lowered by `Store::post_concat`: the chain when `X`'s
   spine is complete, else a fresh list variable with a pending
-  concatenation (*List concatenation* there). Lowering recurses once per
-  nesting level; its per-level stack cost in debug builds is what bounds
-  the depth of literal terms, not the machine.
+  concatenation (*List concatenation* there). Lowering and instantiation
+  walk terms with an explicit stack (CLM-0019), as do the clause printer
+  and the drop of both term types, so the depth of a literal — a nested
+  term, or a long list, which lowers to a chain as deep as it is long —
+  costs no Rust stack: a 100 000-deep term and a 200 000-element list run
+  on a 1 MiB thread. The one remaining recursion on the AST side is the
+  derived `Debug` that `--parse` prints.
 - **`machine.rs`** — the SLD machine: goals left to right, clauses in program
   order, chronological backtracking through choice points and the trail.
   A call whose key is a **built-in** (`Program.builtins`: `atom_chars/2`,

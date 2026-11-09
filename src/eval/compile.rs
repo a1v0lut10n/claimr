@@ -38,6 +38,41 @@ pub(crate) enum TTerm {
     Concat(Box<TTerm>, Box<TTerm>),
 }
 
+/// A term template's children, moved out so the template can be dropped in
+/// a loop (CLM-0019): a chain as deep as a long list is long would
+/// otherwise recurse once per cell in the drop glue.
+impl Drop for TTerm {
+    fn drop(&mut self) {
+        let mut work: Vec<TTerm> = Vec::new();
+        self.take_children(&mut work);
+        while let Some(mut t) = work.pop() {
+            t.take_children(&mut work);
+        }
+    }
+}
+
+impl TTerm {
+    fn take_children(&mut self, out: &mut Vec<TTerm>) {
+        match self {
+            TTerm::Var(_) | TTerm::Number(_) | TTerm::Const(_) => {}
+            TTerm::Compound(_, args) => out.append(args),
+            TTerm::Neg(x) | TTerm::Len(x) => out.push(std::mem::replace(x, TTerm::Var(0))),
+            TTerm::Arith(_, l, r) | TTerm::Concat(l, r) => {
+                out.push(std::mem::replace(l, TTerm::Var(0)));
+                out.push(std::mem::replace(r, TTerm::Var(0)));
+            }
+        }
+    }
+}
+
+/// The lowering's result stack ran dry: a walk entered and built a node
+/// out of step. Never happens for a well-formed tree.
+fn unbalanced() -> EvalError {
+    EvalError::InternalInvariant {
+        what: "term lowering walk out of step".to_string(),
+    }
+}
+
 /// A body goal template.
 #[derive(Debug, Clone)]
 pub(crate) enum TGoal {
@@ -134,41 +169,94 @@ struct Lowerer<'a> {
     vars: VarMap,
 }
 
+/// A step of an explicit post-order walk (CLM-0019): `Enter` schedules a
+/// node's children, `Build` makes the node from their results.
+enum Walk<'a, N> {
+    Enter(&'a N),
+    Build(&'a N),
+}
+
+/// The last `k` results, in order.
+fn take_last<T>(out: &mut Vec<T>, k: usize) -> Vec<T> {
+    out.split_off(out.len() - k)
+}
+
+fn take_two<T>(out: &mut Vec<T>) -> Option<(T, T)> {
+    let r = out.pop()?;
+    let l = out.pop()?;
+    Some((l, r))
+}
+
 impl Lowerer<'_> {
-    fn term(&mut self, e: &Expr) -> Result<TTerm, EvalError> {
-        Ok(match e {
-            Expr::Var(v) => TTerm::Var(self.vars.get(v)),
-            Expr::Number(n) => TTerm::Number(n.clone()),
-            Expr::Ident(i) => TTerm::Const(self.symbols.intern(i)),
-            Expr::Atom(a) => self.atom(a)?,
-            Expr::Neg(e) => TTerm::Neg(Box::new(self.term(e)?)),
-            Expr::Binary { op, left, right } => {
-                TTerm::Arith(*op, Box::new(self.term(left)?), Box::new(self.term(right)?))
-            }
-            Expr::Len(e) => TTerm::Len(Box::new(self.term(e)?)),
-            Expr::Concat(l, r) => TTerm::Concat(Box::new(self.term(l)?), Box::new(self.term(r)?)),
-            // CLM-0014: `<a, b> . T` is the chain '<>'(a, '<>'(b, T)); a list
-            // without a tail ends in the constant '<>'.
-            Expr::List { items, tail } => {
-                let nil = self.symbols.intern(LIST_LABEL);
-                let mut t = match tail {
-                    Some(tail) => self.term(tail)?,
-                    None => TTerm::Const(nil),
-                };
-                for item in items.iter().rev() {
-                    let h = self.term(item)?;
-                    t = TTerm::Compound(nil, vec![h, t]);
+    /// Lower a term template. Iterative (CLM-0019): an explicit stack walks
+    /// the expression post-order, so the depth of a literal — a nested term
+    /// or a long list, which lowers to a chain as deep as it is long — costs
+    /// no Rust stack.
+    fn term(&mut self, root: &Expr) -> Result<TTerm, EvalError> {
+        let mut work = vec![Walk::Enter(root)];
+        let mut out: Vec<TTerm> = Vec::new();
+        while let Some(step) = work.pop() {
+            match step {
+                Walk::Enter(e) => {
+                    work.push(Walk::Build(e));
+                    // Children are entered in reverse so that they are built
+                    // left to right, in source order.
+                    match e {
+                        Expr::Var(_) | Expr::Number(_) | Expr::Ident(_) => {}
+                        Expr::Atom(a) => work.extend(a.args.iter().rev().map(Walk::Enter)),
+                        Expr::Neg(x) | Expr::Len(x) => work.push(Walk::Enter(x)),
+                        Expr::Binary { left, right, .. } | Expr::Concat(left, right) => {
+                            work.push(Walk::Enter(right));
+                            work.push(Walk::Enter(left));
+                        }
+                        Expr::List { items, tail } => {
+                            work.extend(tail.iter().map(|t| Walk::Enter(t.as_ref())));
+                            work.extend(items.iter().rev().map(Walk::Enter));
+                        }
+                    }
                 }
-                t
+                Walk::Build(e) => {
+                    let built = match e {
+                        Expr::Var(v) => TTerm::Var(self.vars.get(v)),
+                        Expr::Number(n) => TTerm::Number(n.clone()),
+                        Expr::Ident(i) => TTerm::Const(self.symbols.intern(i)),
+                        Expr::Atom(a) => {
+                            let args = take_last(&mut out, a.args.len());
+                            TTerm::Compound(self.symbols.intern(&a.name), args)
+                        }
+                        Expr::Neg(_) => TTerm::Neg(Box::new(out.pop().ok_or_else(unbalanced)?)),
+                        Expr::Len(_) => TTerm::Len(Box::new(out.pop().ok_or_else(unbalanced)?)),
+                        Expr::Binary { op, .. } => {
+                            let (l, r) = take_two(&mut out).ok_or_else(unbalanced)?;
+                            TTerm::Arith(*op, Box::new(l), Box::new(r))
+                        }
+                        Expr::Concat(..) => {
+                            let (l, r) = take_two(&mut out).ok_or_else(unbalanced)?;
+                            TTerm::Concat(Box::new(l), Box::new(r))
+                        }
+                        // CLM-0014: `<a, b> . T` is the chain '<>'(a, '<>'(b, T));
+                        // a list without a tail ends in the constant '<>'.
+                        Expr::List { items, tail } => {
+                            let nil = self.symbols.intern(LIST_LABEL);
+                            let mut t = match tail {
+                                Some(_) => out.pop().ok_or_else(unbalanced)?,
+                                None => TTerm::Const(nil),
+                            };
+                            for h in take_last(&mut out, items.len()).into_iter().rev() {
+                                t = TTerm::Compound(nil, vec![h, t]);
+                            }
+                            t
+                        }
+                    };
+                    out.push(built);
+                }
             }
-        })
+        }
+        out.pop().ok_or_else(unbalanced)
     }
 
     fn atom(&mut self, a: &ast::Atom) -> Result<TTerm, EvalError> {
         let f = self.symbols.intern(&a.name);
-        // A plain loop, not `collect`: lowering recurses once per nesting
-        // level, and the iterator adapters' frames dominated the per-level
-        // stack cost of deep terms in debug builds.
         let mut args = Vec::with_capacity(a.args.len());
         for e in &a.args {
             args.push(self.term(e)?);
@@ -384,42 +472,55 @@ fn push_clause(preds: &mut HashMap<PredKey, Vec<TClause>>, clause: TClause) {
 /// address of clause variable `i`. Arithmetic nodes over numbers fold to
 /// numbers; others become fresh numeric variables with their defining
 /// constraint posted immediately; `None` if that makes the store
-/// unsatisfiable (or raises a store error).
+/// unsatisfiable (or raises a store error). Iterative (CLM-0019): an
+/// explicit post-order walk, so constraints are posted in the same order
+/// as before — children left to right, then the parent — at any depth.
 pub(crate) fn build_with(
     store: &mut Store,
-    t: &TTerm,
+    root: &TTerm,
     var: &mut dyn FnMut(&mut Store, u32) -> Addr,
 ) -> Option<Addr> {
-    Some(match t {
-        TTerm::Var(i) => var(store, *i),
-        TTerm::Number(n) => store.new_num(n.clone()),
-        TTerm::Const(c) => store.new_const(*c),
-        TTerm::Compound(f, args) => {
-            let mut addrs = Vec::with_capacity(args.len());
-            for a in args {
-                addrs.push(build_with(store, a, var)?);
+    let mut work = vec![Walk::Enter(root)];
+    let mut out: Vec<Addr> = Vec::new();
+    while let Some(step) = work.pop() {
+        match step {
+            Walk::Enter(t) => {
+                work.push(Walk::Build(t));
+                match t {
+                    TTerm::Var(_) | TTerm::Number(_) | TTerm::Const(_) => {}
+                    TTerm::Compound(_, args) => work.extend(args.iter().rev().map(Walk::Enter)),
+                    TTerm::Neg(x) | TTerm::Len(x) => work.push(Walk::Enter(x)),
+                    TTerm::Arith(_, l, r) | TTerm::Concat(l, r) => {
+                        work.push(Walk::Enter(r));
+                        work.push(Walk::Enter(l));
+                    }
+                }
             }
-            store.new_struct(*f, addrs)
+            Walk::Build(t) => {
+                let built = match t {
+                    TTerm::Var(i) => var(store, *i),
+                    TTerm::Number(n) => store.new_num(n.clone()),
+                    TTerm::Const(c) => store.new_const(*c),
+                    TTerm::Compound(f, args) => {
+                        let addrs = take_last(&mut out, args.len());
+                        store.new_struct(*f, addrs)
+                    }
+                    TTerm::Neg(_) => store.post_neg(out.pop()?)?,
+                    TTerm::Len(_) => store.post_len(out.pop()?)?,
+                    TTerm::Arith(op, ..) => {
+                        let (a, b) = take_two(&mut out)?;
+                        store.post_arith(*op, a, b)?
+                    }
+                    TTerm::Concat(..) => {
+                        let (x, y) = take_two(&mut out)?;
+                        store.post_concat(x, y)?
+                    }
+                };
+                out.push(built);
+            }
         }
-        TTerm::Neg(e) => {
-            let a = build_with(store, e, var)?;
-            store.post_neg(a)?
-        }
-        TTerm::Arith(op, l, r) => {
-            let a = build_with(store, l, var)?;
-            let b = build_with(store, r, var)?;
-            store.post_arith(*op, a, b)?
-        }
-        TTerm::Len(e) => {
-            let a = build_with(store, e, var)?;
-            store.post_len(a)?
-        }
-        TTerm::Concat(l, r) => {
-            let x = build_with(store, l, var)?;
-            let y = build_with(store, r, var)?;
-            store.post_concat(x, y)?
-        }
-    })
+    }
+    out.pop()
 }
 
 /// The heap address of clause variable `i` in a lazily allocated frame: a
