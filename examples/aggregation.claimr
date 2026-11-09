@@ -1,0 +1,41 @@
+% Aggregation (CLM-0025,
+% docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md): the
+% list comprehension `<T | Body>` is the list of the instances of T for each
+% solution of Body, in solution order; its length `|<T | Body>|` is a count;
+% `sum(L, S)` is the built-in sum relation, exact over rationals and linear.
+% A comprehension's variables shared with the clause outside it must be
+% bound when it is reached, and every instance it collects must be ground.
+cohort(c1). cohort(c2).
+member_of(m1, c1). member_of(m2, c1).
+member_of(m3, c2). member_of(m4, c2). member_of(m5, c2).
+cohort_too_small(C) :- cohort(C), { |<M | member_of(M, C)>| < 3 }.
+
+source(s1, x). source(s2, x). source(s1, y).
+sources(X, N) :- { N = |<S | source(S, X)>| }.
+single_sourced(X) :- source(_, X), { |<S | source(S, X)>| = 1 }.
+
+precedent(p1, k). precedent(p2, k). precedent(p3, k). precedent(p4, j).
+well_supported(K) :- { |<P | precedent(P, K)>| >= 3 }.
+
+amount(a, 1/3). amount(b, 1/3). amount(c, 1/3).
+total(T) :- sum(<A | amount(_, A)>, T).
+average(Avg) :- { L = <A | amount(_, A)> }, sum(L, T), { Avg = T / |L| }.
+
+p(1). p(2). p(3).
+
+?- cohort_too_small(C).
+?- sources(x, N).
+?- single_sourced(X).
+?- well_supported(k).
+?- well_supported(j).
+?- total(T).
+?- average(A).
+?- { L = <X | p(X)> }.
+?- { Pairs = <<X, Y> | p(X), p(Y), { X < Y }> }.
+?- { L = <X | p(X), { X > 7 }> }.
+?- { Below = <<X, |<Y | p(Y), { Y < X }>|> | p(X)> }.
+?- sum(<1, X, 3>, 10).
+?- sum(<>, S).
+?- { L = <1> . T }, sum(L, S).
+?- \+ { |<X | p(X)>| > 5 }.
+?- cohort(C), ({ |<M | member_of(M, C)>| > 2 } -> { Size = large } ; { Size = small }).

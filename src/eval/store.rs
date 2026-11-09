@@ -17,6 +17,7 @@ use crate::ast::ArithOp;
 use crate::number::Number;
 use crate::solver::{self, LinExpr, SVar, Simplex};
 
+use super::compile::TTerm;
 use super::error::EvalError;
 use super::symbol::{LIST, Symbol, Symbols};
 
@@ -141,6 +142,16 @@ pub(crate) struct Chars {
     pub pending: bool,
 }
 
+/// A pending sum `sum(l, s)` (CLM-0025): decided as the linear equation over
+/// the elements once the spine of `l` is complete; meanwhile suspended on
+/// the open tail.
+#[derive(Debug, Clone)]
+pub(crate) struct Sum {
+    pub l: Addr,
+    pub s: Addr,
+    pub pending: bool,
+}
+
 /// Where a `'<>'` spine ends.
 enum Spine {
     /// A proper list of this many cells.
@@ -161,6 +172,7 @@ enum Waker {
     Concat(usize),
     Type(usize),
     Chars(usize),
+    Sum(usize),
 }
 
 #[derive(Debug)]
@@ -183,6 +195,7 @@ enum Undo {
     ConcatPending(usize),
     TypePending(usize),
     CharsPending(usize),
+    SumPending(usize),
 }
 
 /// A point in the store's history to return to.
@@ -198,6 +211,7 @@ pub struct Mark {
     concats: usize,
     types: usize,
     chars: usize,
+    sums: usize,
     simplex: solver::Mark,
 }
 
@@ -235,6 +249,8 @@ pub struct Store {
     pub(crate) types: Vec<TypeCon>,
     /// `atom_chars` constraints registered so far (CLM-0017).
     pub(crate) chars: Vec<Chars>,
+    /// Sums registered so far (CLM-0025).
+    pub(crate) sums: Vec<Sum>,
     /// Original definition of each slack/defined solver variable, for printing.
     pub(crate) defs: BTreeMap<SVar, LinExpr>,
     /// Solver variables equated by `equate`: child → parent (union-find, no
@@ -360,6 +376,7 @@ impl Store {
             concats: self.concats.len(),
             types: self.types.len(),
             chars: self.chars.len(),
+            sums: self.sums.len(),
             simplex: self.simplex.mark(),
         }
     }
@@ -438,6 +455,11 @@ impl Store {
                         self.chars[id].pending = true;
                     }
                 }
+                Undo::SumPending(id) => {
+                    if id < self.sums.len() {
+                        self.sums[id].pending = true;
+                    }
+                }
             }
         }
         self.heap.truncate(mark.heap);
@@ -451,6 +473,7 @@ impl Store {
         self.concats.truncate(mark.concats);
         self.types.truncate(mark.types);
         self.chars.truncate(mark.chars);
+        self.sums.truncate(mark.sums);
         self.simplex.undo_to(mark.simplex);
         // Definitions of solver variables the simplex dropped (their indices
         // will be reused).
@@ -555,6 +578,7 @@ impl Store {
             (Waker::Concat(a), Waker::Concat(b)) => a == b,
             (Waker::Type(a), Waker::Type(b)) => a == b,
             (Waker::Chars(a), Waker::Chars(b)) => a == b,
+            (Waker::Sum(a), Waker::Sum(b)) => a == b,
             _ => false,
         });
         if dup {
@@ -750,6 +774,7 @@ impl Store {
                     Waker::Concat(id) => self.recheck_concat(id),
                     Waker::Type(id) => self.recheck_type(id),
                     Waker::Chars(id) => self.recheck_chars(id),
+                    Waker::Sum(id) => self.recheck_sum(id),
                 };
                 if !ok {
                     return false;
@@ -891,6 +916,7 @@ impl Store {
                     Waker::Concat(id) => self.recheck_concat(id),
                     Waker::Type(id) => self.recheck_type(id),
                     Waker::Chars(id) => self.recheck_chars(id),
+                    Waker::Sum(id) => self.recheck_sum(id),
                 };
                 if !ok {
                     return false;
@@ -1676,6 +1702,128 @@ impl Store {
             .filter(|c| c.pending)
             .map(|c| (c.a, c.l))
             .collect()
+    }
+
+    // --- sums (CLM-0025) -----------------------------------------------------
+
+    /// `sum(l, s)`: `s` is the sum of the elements of the list `l`. A
+    /// complete spine posts the linear equation `s = e1 + … + en` through the
+    /// solver's view of each element (a number, a numeric variable, or an
+    /// attribute term, as in every numeric position; a variable held to be
+    /// an atom or a list fails); an open spine registers a pending entry
+    /// suspended on the tail; a cycle or a non-list fails.
+    pub fn post_sum(&mut self, l: Addr, s: Addr) -> bool {
+        let mark = self.mark();
+        let ok = self.sum_step(l, s, None) && self.settle();
+        if !ok {
+            self.undo_to(&mark);
+        }
+        ok
+    }
+
+    /// Decide or (re)register the sum; `existing` is the entry being
+    /// re-checked, if any.
+    fn sum_step(&mut self, l: Addr, s: Addr, existing: Option<usize>) -> bool {
+        match self.walk_spine(l) {
+            Spine::Nil(_) => {
+                let heads = self.spine_heads(l);
+                let Some(mut e) = self.unknown_of(s) else {
+                    return false;
+                };
+                for h in heads {
+                    let Some(eh) = self.unknown_of(h) else {
+                        return false;
+                    };
+                    e.sub(&eh);
+                }
+                if let Some(id) = existing {
+                    self.sums[id].pending = false;
+                    self.trail.push(Undo::SumPending(id));
+                }
+                self.assert_lin(e, solver::RelOp::Eq)
+            }
+            Spine::Open(_, v) => {
+                let id = match existing {
+                    Some(id) => id,
+                    None => {
+                        let id = self.sums.len();
+                        self.sums.push(Sum {
+                            l,
+                            s,
+                            pending: true,
+                        });
+                        id
+                    }
+                };
+                self.suspend(Waker::Sum(id), v);
+                true
+            }
+            Spine::Bad => false,
+        }
+    }
+
+    /// A pending sum's list tail was bound: decide, or wait on the new tail.
+    fn recheck_sum(&mut self, id: usize) -> bool {
+        if id >= self.sums.len() || !self.sums[id].pending {
+            return true;
+        }
+        let Sum { l, s, .. } = self.sums[id].clone();
+        self.sum_step(l, s, Some(id))
+    }
+
+    /// Pending sums, for printing: `(l, s)`.
+    pub fn pending_sums(&self) -> Vec<(Addr, Addr)> {
+        self.sums
+            .iter()
+            .filter(|c| c.pending)
+            .map(|c| (c.l, c.s))
+            .collect()
+    }
+
+    /// CLM-0025: a closed copy of the ground term at `a` — constants,
+    /// numbers (a determined numeric variable as its value) and compounds —
+    /// which survives the undo of the solution it was taken from. `None` on
+    /// an unbound or undetermined variable, or a cycle. Iterative.
+    pub(crate) fn snapshot(&mut self, a: Addr) -> Option<TTerm> {
+        enum Step {
+            Enter(Addr),
+            Build(Addr),
+        }
+        let mut on_path: HashSet<Addr> = HashSet::new();
+        let mut work = vec![Step::Enter(a)];
+        let mut out: Vec<TTerm> = Vec::new();
+        while let Some(step) = work.pop() {
+            match step {
+                Step::Enter(x) => {
+                    let d = self.deref(x);
+                    match self.heap[d].clone() {
+                        Cell::Var(_) => {
+                            let sv = *self.numvar.get(&d)?;
+                            let c = self.simplex.is_determined(sv)?;
+                            out.push(TTerm::Number(c));
+                        }
+                        Cell::Const(c) => out.push(TTerm::Const(c)),
+                        Cell::Num(n) => out.push(TTerm::Number(n)),
+                        Cell::Struct(_, args) => {
+                            if !on_path.insert(d) {
+                                return None;
+                            }
+                            work.push(Step::Build(d));
+                            work.extend(args.iter().rev().map(|a| Step::Enter(*a)));
+                        }
+                    }
+                }
+                Step::Build(d) => {
+                    on_path.remove(&d);
+                    let Cell::Struct(f, args) = self.heap[d].clone() else {
+                        return None;
+                    };
+                    let kids = out.split_off(out.len() - args.len());
+                    out.push(TTerm::Compound(f, kids));
+                }
+            }
+        }
+        out.pop()
     }
 
     // --- attribute terms ---------------------------------------------------

@@ -37,8 +37,9 @@ change here is a consumer break and must be deliberate.
     disequations (`age(alice) = 30`). Since CLM-0015 a constraint may
     mention the length of a list variable, `|T| >= 1`, since CLM-0016 a
     pending list concatenation, `Z = X . Y`, and since CLM-0017 a pending
-    built-in in goal form, `atom(X)`, `list(X)`, `atom_chars(A, L)`; the
-    shape of the document is unchanged, the vocabulary of the strings grew.
+    built-in in goal form, `atom(X)`, `list(X)`, `atom_chars(A, L)`, and
+    since CLM-0025 a pending sum, `sum(L, S)`; the shape of the document is
+    unchanged, the vocabulary of the strings grew.
   A proof that binds nothing (the human mode's `true`) is one answer
   whose three lists are all empty.
 
@@ -66,7 +67,9 @@ nodes, one per query goal, each
   `subgoals`), `constraint` (a `{ … }` goal, as the instance posted),
   `builtin`, `committed` (an if-then-else whose condition succeeded; the
   condition's proofs are the `subgoals`, the then branch follows as
-  siblings), `no-solution` (a condition, or a negated goal, that had none);
+  siblings), `no-solution` (a condition, or a negated goal, that had none),
+  `collected` (a list comprehension, CLM-0025, as written with the list it
+  produced: `<X | p(X)> = <1, 2>`; the solutions' own proofs are not kept);
 - `line`, `column`, `clause` — the cited clause's position (1-based) and
   text as written, present for facts and rules, position only for a
   constraint (the clause it is in); absent when nothing is cited.

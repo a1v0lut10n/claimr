@@ -103,6 +103,15 @@ Claimr's constraint store. Two layers:
   `post_arith`/`post_neg` compute the exact rational and bind a `Num` cell —
   no solver variable, no row. Ground division by zero fails there. Only
   terms with an unbound or attribute operand are lowered.
+- **Sums** (CLM-0025, `sum(L, S)`): `post_sum` walks the spine as
+  `post_len` does; a complete list posts the linear equation
+  `S − e1 − … − en = 0` through `unknown_of` on each element (a number, a
+  numeric variable, or an attribute term; a variable held by a type
+  relation fails), so the equation is exact and solvable in either
+  direction; an open spine registers a pending `Sum` entry suspended on the
+  tail (`Waker::Sum`, `recheck_sum`), undone with the trail; a pending one
+  prints in goal form. The design record is
+  `2026-11-09-aggregation-list-comprehensions-and-sum.md`.
 - **List lengths** (CLM-0015,
   `2026-11-09-lists-as-a-constraint-domain.md`, stage 2). `|L|` is posted
   by `post_len`, which follows the `'<>'` spine of `L`: a complete list

@@ -195,3 +195,27 @@ fn explain_adds_the_explanation_field_only_when_asked() {
     );
     assert_eq!(stdout.matches("\"by\":\"rule\"").count(), 5000);
 }
+
+/// CLM-0025: a pending sum is a goal-form constraint string; a
+/// comprehension explains as a `collected` node.
+#[test]
+fn sums_and_comprehensions_in_the_json_vocabulary() {
+    let path = write_temp(
+        "aggregation",
+        "p(1). p(2).\n?- { L = <1> . T }, sum(L, S).\n?- { N = |<X | p(X)>| }.\n",
+    );
+    let (stdout, _, code) = run(&["--json", "--explain", path.to_str().unwrap()]);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(0));
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(
+        lines[0].contains(r#""constraints":["sum(<1> . T, S)"]"#),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[1].contains(r#"{"goal":"<X | p(X)> = <1, 2>","by":"collected","subgoals":[]}"#),
+        "{}",
+        lines[1]
+    );
+}

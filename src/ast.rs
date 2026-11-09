@@ -108,6 +108,15 @@ pub enum Expr {
     /// length is `|X| + |Y|` and which is completed once `|X|` is known. A
     /// literal tuple on the left is [`Expr::List`] instead.
     Concat(Box<Expr>, Box<Expr>),
+    /// A list comprehension (CLM-0025,
+    /// docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md):
+    /// `<T | Body>`, the list of the instances of `template` for each
+    /// solution of `body`, in solution order. Admitted wherever a term is in
+    /// a body; a compile error in a head.
+    Comprehension {
+        template: Box<Expr>,
+        body: Vec<Goal>,
+    },
 }
 
 /// Binary arithmetic operators.
@@ -190,6 +199,7 @@ impl Expr {
         match self {
             Expr::List { tail: Some(_), .. } | Expr::Concat(..) => 0,
             Expr::Binary { op, .. } => op.precedence(),
+            Expr::Comprehension { .. } => 4,
             Expr::Neg(_) => 3,
             _ => 4,
         }
@@ -212,6 +222,11 @@ impl Expr {
                 if let Some(t) = tail.take() {
                     out.push(*t);
                 }
+            }
+            // The body's goals drop on their own (each term in them is
+            // iterative itself); only the template joins the worklist.
+            Expr::Comprehension { template, .. } => {
+                out.push(std::mem::replace(template, Expr::Ident(String::new())))
             }
         }
     }
@@ -236,6 +251,8 @@ enum Piece<'a> {
     Expr(&'a Expr, u8),
     Atom(&'a Atom),
     Text(&'static str),
+    /// A body rendered on its own (a comprehension's, CLM-0025).
+    Owned(String),
 }
 
 /// Render terms with an explicit stack, so the depth of a literal costs no
@@ -245,6 +262,7 @@ fn render(f: &mut fmt::Formatter<'_>, root: Piece<'_>) -> fmt::Result {
     while let Some(piece) = work.pop() {
         match piece {
             Piece::Text(t) => f.write_str(t)?,
+            Piece::Owned(t) => f.write_str(&t)?,
             Piece::Atom(a) => {
                 write!(f, "{}(", display_name(&a.name))?;
                 work.push(Piece::Text(")"));
@@ -292,6 +310,13 @@ fn render(f: &mut fmt::Formatter<'_>, root: Piece<'_>) -> fmt::Result {
                         work.push(Piece::Expr(r, 0));
                         work.push(Piece::Text(" . "));
                         work.push(Piece::Expr(l, 1));
+                    }
+                    Expr::Comprehension { template, body } => {
+                        f.write_str("<")?;
+                        work.push(Piece::Text(">"));
+                        work.push(Piece::Owned(BodyDisplay(body).to_string()));
+                        work.push(Piece::Text(" | "));
+                        work.push(Piece::Expr(template, 0));
                     }
                     Expr::List { items, tail } => {
                         f.write_str("<")?;
@@ -394,6 +419,15 @@ impl fmt::Display for Goal {
                 }
             }
         }
+    }
+}
+
+/// A body as a value to format (a comprehension's, CLM-0025).
+struct BodyDisplay<'a>(&'a [Goal]);
+
+impl fmt::Display for BodyDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt_body(f, self.0)
     }
 }
 

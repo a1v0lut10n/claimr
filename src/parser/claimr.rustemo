@@ -112,9 +112,14 @@ Args: exprs=Expr+[Comma];
 // tuple on the left it is the chain of stage 1. CLM-0017 (docs/design/
 // 2026-11-09-strings-as-character-lists-and-type-relations.md): a string
 // literal "abc" denotes the list of one-character atoms <a, b, c>; it is not
-// a term kind of its own. `<` `>` keep their relational meaning in Constraint and
-// `.` its terminator meaning after a clause: an Expr never meets either in
-// the same LR state (zero conflicts, checked with rcomp).
+// a term kind of its own. CLM-0025 (docs/design/2026-11-09-aggregation-
+// list-comprehensions-and-sum.md): `<T | Body>` is a list comprehension,
+// the list of the instances of T for each solution of Body; Expr and Body
+// are mutually recursive through it, and the bar after a complete
+// template inside an unclosed `<` can only open the body. `<` `>` keep
+// their relational meaning in Constraint and `.` its terminator meaning
+// after a clause: an Expr never meets either in the same LR state (zero
+// conflicts, checked with rcomp).
 Expr: left=Expr '+' right=Expr  {Add, left, 1}
     | left=Expr '-' right=Expr  {Sub, left, 1}
     | left=Expr '*' right=Expr  {Mul, left, 2}
@@ -129,6 +134,7 @@ Expr: left=Expr '+' right=Expr  {Add, left, 1}
     | left=Expr '.' right=Expr          {ConcatExpr, right, 0}
     | '|' inner=Expr '|'                {LenExpr}
     | string=StringLit                  {StringExpr}
+    | '<' template=Expr '|' body=Body '>' {ComprehensionExpr}
     ;
 
 // A literal tuple (its own rule since CLM-0014; kept so the actions see the

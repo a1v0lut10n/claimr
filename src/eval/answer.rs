@@ -77,6 +77,10 @@ pub enum Resolution {
     Committed,
     /// A condition (of an if-then-else or a negation) that had no solution.
     NoSolution,
+    /// A list comprehension (CLM-0025): the goal is the comprehension as
+    /// written with the list it produced; the solutions' own proofs are
+    /// discarded with their derivations.
+    Collected,
 }
 
 impl Resolution {
@@ -89,6 +93,7 @@ impl Resolution {
             Resolution::Builtin => "builtin",
             Resolution::Committed => "committed",
             Resolution::NoSolution => "no-solution",
+            Resolution::Collected => "collected",
         }
     }
 }
@@ -514,6 +519,19 @@ pub(crate) fn render_answer(
         p.find_cycles(l);
         let (ra, rl) = (p.render(a), p.render(l));
         constraints.push(format!("atom_chars({ra}, {rl})"));
+    }
+    // CLM-0025: pending sums, in goal form.
+    for (l, s) in store.pending_sums() {
+        if !reachable_vars(store, [l, s])
+            .iter()
+            .any(|v| reachable.contains(v))
+        {
+            continue;
+        }
+        p.find_cycles(l);
+        p.find_cycles(s);
+        let (rl, rs) = (p.render(l), p.render(s));
+        constraints.push(format!("sum({rl}, {rs})"));
     }
 
     (

@@ -9,6 +9,7 @@ decisions:
   - docs/design/2026-11-09-strings-as-character-lists-and-type-relations.md
   - docs/design/2026-11-09-negation-disjunction-and-if-then-else.md
   - docs/design/2026-11-09-explanations-of-answers.md
+  - docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md
 aspects: [answer-soundness, exact-arithmetic]
 ---
 
@@ -96,7 +97,14 @@ answers in solved form. Public surface (re-exported from `claimr`):
   and the clause's text in a `CondCheck`, for the machine's groundness rule
   and its diagnostic. Only bodies with a construct pay for the clause text.
   Every clause keeps its source position and its text as written
-  (CLM-0023), for explanations to cite.
+  (CLM-0023), for explanations to cite. A **list comprehension**
+  `<T | Body>` (CLM-0025) is lowered to a `TGoal::Collect` emitted before
+  the goal it sits in, binding a fresh clause variable that replaces it in
+  the goal; a comprehension in a template is collected at the end of the
+  enclosing body, once per solution; the external-variable analysis treats
+  the template's and the body's variables as the construct's, with the
+  rest of the enclosing goal as outside; a comprehension in a head or a
+  constraint fact is `EvalError::ComprehensionInHead`, positioned.
 - **`machine.rs`** — the SLD machine: goals left to right, clauses in program
   order, chronological backtracking through choice points and the trail. A
   call whose first argument is bound visits only the clauses the index
@@ -134,6 +142,17 @@ answers in solved form. Public surface (re-exported from `claimr`):
   at an answer), truncates the choice-point stack to the recorded height,
   and continues with the then branch — or, for a negation, fails. The
   store, the solver and the answer printer are untouched by the constructs.
+  **Collections** (CLM-0025): opening a `Collect` applies the groundness
+  rule, pushes a `Retry::Finish` choice point holding the accumulator and
+  runs the body followed by `Goal::CollectOne`; reaching that goal
+  finalizes the store exactly, copies the template's instance out of the
+  solution as a closed term (`Store::snapshot`: constants, numbers, a
+  determined numeric variable as its value, compounds; an unbound variable
+  or a cycle stops the query with `EvalError::NonGroundSolution`) and
+  fails, so the search moves to the next solution; exhausting the body
+  lands on the finishing choice point, which rebuilds the list from the
+  copies on the restored heap, unifies it with the comprehension's variable
+  and continues. The built-in `sum/2` posts `Store::post_sum`.
   **Explanations** (CLM-0023, design record
   `2026-11-09-explanations-of-answers.md`): on request
   (`Solutions::with_explanations`, the CLI's `--explain`, the REPL's
@@ -191,9 +210,11 @@ answers in solved form. Public surface (re-exported from `claimr`):
   see prints as `Z = X . Y` among the constraints (CLM-0016), and the
   length relation it implies is dropped when it appears as such. Pending
   built-ins print in goal form after them: `atom(X)`, `list(X)`,
-  `atom_chars(A, L)` (CLM-0017). An `Answer` may carry an `explanation`
+  `atom_chars(A, L)` (CLM-0017), and a pending sum as `sum(L, S)`
+  (CLM-0025). An `Answer` may carry an `explanation`
   (CLM-0023): `ProofNode`s with the goal instance, the `Resolution`
-  (`Fact`, `Rule`, `Constraint`, `Builtin`, `Committed`, `NoSolution`), the
+  (`Fact`, `Rule`, `Constraint`, `Builtin`, `Committed`, `NoSolution`,
+  `Collected` — a comprehension with the list it produced), the
   cited clause's position and text, and subgoals; `explanation_lines()`
   renders it as the indented tree the CLI prints, iteratively.
 

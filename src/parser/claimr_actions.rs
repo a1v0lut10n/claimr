@@ -337,6 +337,15 @@ pub fn expr_string_expr(_ctx: &Ctx, string: StringLit) -> Expr {
         tail: None,
     }
 }
+/// CLM-0025: `<T | Body>` — the list of the instances of `T` for each
+/// solution of `Body` (docs/design/2026-11-09-aggregation-list-
+/// comprehensions-and-sum.md).
+pub fn expr_comprehension_expr(_ctx: &Ctx, template: Expr, body: Body) -> Expr {
+    ast::Expr::Comprehension {
+        template: Box::new(template),
+        body,
+    }
+}
 /// CLM-0015: `|L|` — the length of the list `L`, a numeric term.
 pub fn expr_len_expr(_ctx: &Ctx, inner: Expr) -> Expr {
     ast::Expr::Len(Box::new(inner))

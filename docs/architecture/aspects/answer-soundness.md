@@ -7,6 +7,7 @@ decisions:
   - docs/design/2026-08-17-exact-rational-arithmetic.md
   - docs/design/2026-11-09-negation-disjunction-and-if-then-else.md
   - docs/design/2026-11-09-explanations-of-answers.md
+  - docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md
 ---
 
 # answer-soundness
@@ -57,16 +58,20 @@ realise the store.
    (incl. the disequation case `A != 3`), `redundant_constraints_are_dropped`,
    `projection_budget_fallback_stays_correct`, `answers_are_deterministic`,
    and the golden runs.
-5. **A condition is decided only on ground external variables.** An
+5. **A sub-search is decided only on ground external variables.** An
    if-then-else or negation (CLM-0022) is decided — its condition run to a
    first solution, which is finalized exactly as an answer would be, or to
-   failure — only when every variable the condition shares with the clause
-   outside the construct is ground at that moment; the decision is then
-   the same in every completion of the derivation, so committing or
-   negating never produces an answer the program does not entail, under
-   any nesting. A construct reached with a non-ground external variable
-   stops the query with `EvalError::NonGroundCondition`: nothing is decided
-   in either direction. *Test:*
+   failure — and a list comprehension (CLM-0025) is collected — every
+   solution of its body finalized exactly, every instance of its template
+   ground, so that nothing is collected the store does not determine —
+   only when every variable the construct shares with the clause outside
+   it is ground at that moment; the outcome is then the same in every
+   completion of the derivation, so committing, negating or collecting
+   never produces an answer the program does not entail, under any
+   nesting. A construct reached with a non-ground external variable stops
+   the query with `EvalError::NonGroundCondition`, a non-ground instance
+   with `EvalError::NonGroundSolution`: nothing is decided in either
+   direction. *Test:* `comprehensions_apply_the_groundness_rules`,
    `a_non_ground_external_variable_is_an_error_not_a_decision` (the
    classic wrong positive `s :- \+ r(X)` is an error, not `true`),
    `a_condition_is_finalized_before_the_commit`,

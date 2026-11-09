@@ -98,6 +98,7 @@ expr           ::= expr "+" expr          (* left-assoc *)
                  | string                 (* CLM-0017: a list of characters *)
 
 tuple          ::= "<" [ args ] ">"
+                 | "<" expr "|" body ">"   (* CLM-0025: a list comprehension *)
 
 identifier     ::= letter { letter | digit | "_" }
 quoted_atom    ::= "'" { any character except "'" and "\\" | "\\" any character } "'"
@@ -210,6 +211,27 @@ spelling `value(K, X) :- (curated(K, X) -> true() ; harvested(K, X)).` has
 `X` external and errors when called with `X` unbound, as it must, since it
 would answer `value(k, v2)` yet give only the first curated value for
 `value(k, X)`.
+
+**List comprehensions** (CLM-0025,
+[`../design/2026-11-09-aggregation-list-comprehensions-and-sum.md`](../design/2026-11-09-aggregation-list-comprehensions-and-sum.md)):
+`<T | Body>` is an expression denoting the list of the instances of the
+template `T` for each solution of `Body`, in solution order, `<>` when there
+is none. `Body` is a body (atoms, constraint blocks, the constructs above);
+`T` is a term, so a pair is `<<X, Y> | p(X, Y)>`. The comprehension is
+admitted wherever a term is in a body — a goal's argument, a constraint
+block — and is evaluated when its goal is reached; in a clause head or a
+constraint fact it is a compile error, since a head is a pattern, not a
+goal that runs. Its length is a count: `|<X | p(X)>|`. The groundness rule
+of the control constructs applies to it: a variable of `T` or `Body` that
+also occurs in the clause outside the comprehension (the rest of its own
+goal included) must be bound when it is reached, so `{ N = |<X | p(X, N)>| }`
+stops the query. Every solution is checked exactly, as an answer would be,
+and every instance collected must be ground; an instance carrying an
+unbound or undetermined variable stops the query (`<X | { X > 1 }>`), since
+it has no single value to collect. A comprehension inside a template is
+collected once per solution of the outer body
+(`<<X, |<Y | p(Y), { Y < X }>|> | p(X)>`). The built-in `sum(L, S)` sums a
+list's elements as a linear relation, see [`builtins.md`](builtins.md).
 
 **Strings** (CLM-0017,
 [`../design/2026-11-09-strings-as-character-lists-and-type-relations.md`](../design/2026-11-09-strings-as-character-lists-and-type-relations.md))
