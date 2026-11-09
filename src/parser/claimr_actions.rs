@@ -228,6 +228,41 @@ pub fn expr_neg(_ctx: &Ctx, operand: Expr) -> Expr {
 pub fn expr_paren(_ctx: &Ctx, inner: Expr) -> Expr {
     inner
 }
+/// CLM-0014: `<>` and `<a, b, c>` — a list with no tail (it ends in `<>`).
+pub fn expr_list_expr(_ctx: &Ctx, tuple: Tuple) -> Expr {
+    ast::Expr::List {
+        items: tuple,
+        tail: None,
+    }
+}
+/// CLM-0014: `<a, b> . T` — the items followed by the tail `T`. The empty
+/// chain `<> . T` is `T` itself, and `<a> . <b> . T` is the one chain
+/// `<a, b> . T` (the same term; the answer printer would print it so).
+pub fn expr_list_tail_expr(_ctx: &Ctx, mut tuple: Tuple, tail: Expr) -> Expr {
+    if tuple.is_empty() {
+        return tail;
+    }
+    match tail {
+        ast::Expr::List { items, tail } => {
+            tuple.extend(items);
+            ast::Expr::List {
+                items: tuple,
+                tail,
+            }
+        }
+        tail => {
+            ast::Expr::List {
+                items: tuple,
+                tail: Some(Box::new(tail)),
+            }
+        }
+    }
+}
+/// The items of a literal tuple `<a, b, c>` (`<>` has none).
+pub type Tuple = Vec<ast::Expr>;
+pub fn tuple_c1(_ctx: &Ctx, items: ArgsOpt) -> Tuple {
+    items.unwrap_or_default()
+}
 pub type QuotedIdent = String;
 /// CLM-0011: strip the outer quotes and resolve backslash escapes —
 /// `\'` is a quote, `\\` a backslash, any other `\c` is `c`. The

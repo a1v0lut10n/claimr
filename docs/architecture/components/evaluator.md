@@ -5,6 +5,7 @@ decisions:
   - docs/design/2026-08-17-evaluator.md
   - docs/design/2026-08-17-arithmetic-in-terms.md
   - docs/design/2026-11-09-fold-ground-arithmetic-before-the-solver.md
+  - docs/design/2026-11-09-lists-as-a-constraint-domain.md
 aspects: [answer-soundness, exact-arithmetic]
 ---
 
@@ -48,7 +49,11 @@ answers in solved form. Public surface (re-exported from `claimr`):
   posts its defining constraint immediately (part of the clause's
   constraint system, as in Prolog III's abstract machine) and fails the
   step if that is unsatisfiable. `Number` literals unify structurally
-  (exact equality).
+  (exact equality). Lists (CLM-0014) lower to chains of `'<>'(H, T)` cells
+  ending in the constant `'<>'` or in the written tail, so `<a, b> . T` and
+  a hand-spelled `'<>'(a, '<>'(b, T))` are one term; a clause head named
+  `'<>'` is rejected (`EvalError::ReservedName`, the one compile error that
+  carries a source position).
 - **`machine.rs`** — the SLD machine: goals left to right, clauses in program
   order, chronological backtracking through choice points and the trail.
   **Body goals are instantiated lazily** (CLM-0013): at clause entry the
@@ -92,7 +97,9 @@ answers in solved form. Public surface (re-exported from `claimr`):
   `X + Y <= 10`; lower bounds first), numeric disequations (`X != 3`), all
   in a deterministic order; `true` when nothing remains. Public numeric
   variables are the numeric variables reachable from the query and the
-  attribute terms the query created *or looked up*. Iterative printer.
+  attribute terms the query created *or looked up*. Iterative printer; a
+  `'<>'/2` spine prints in list notation (`<1, 2, 3>`, `<1, 2> . T`, `<>`),
+  stopping at a cyclic cell so a cyclic list is an equation (`X = <1> . X`).
 
 The CLI (`cli` component) loads a file and runs its queries in order,
 `--limit N` capping answers per query; a runtime error stops it with exit 1.

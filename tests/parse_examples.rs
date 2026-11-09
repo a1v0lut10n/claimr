@@ -65,6 +65,55 @@ fn numbers_example_parses_exactly() {
 }
 
 #[test]
+fn list_notation_parses_to_list_terms() {
+    // CLM-0014: `<>`, `<a, b>`, `<a> . T`; `.` is right-associative and
+    // binds looser than arithmetic; `<> . T` is `T`.
+    let clauses = parse_program(
+        "p(<>, <a, 1>, <X> . T, <a> . <b> . T, <a> . T + 1, (<a> . T) + 1, <> . T).
+",
+    )
+    .expect("parses");
+    let Clause::Fact(p) = &clauses[0] else {
+        panic!("a fact")
+    };
+    let list = |items: Vec<Expr>, tail: Option<Expr>| Expr::List {
+        items,
+        tail: tail.map(Box::new),
+    };
+    let var = |v: &str| Expr::Var(v.to_string());
+    assert_eq!(p.args[0], list(vec![], None));
+    assert_eq!(
+        p.args[1],
+        list(
+            vec![
+                Expr::Ident("a".into()),
+                Expr::Number(Number::from_ratio(1, 1).unwrap())
+            ],
+            None
+        )
+    );
+    assert_eq!(p.args[2], list(vec![var("X")], Some(var("T"))));
+    // `<a> . <b> . T` is the one chain `<a, b> . T`.
+    assert_eq!(
+        p.args[3],
+        list(
+            vec![Expr::Ident("a".into()), Expr::Ident("b".into())],
+            Some(var("T"))
+        )
+    );
+    assert!(
+        matches!(&p.args[4], Expr::List { tail: Some(t), .. } if matches!(**t, Expr::Binary { .. }))
+    );
+    assert!(matches!(&p.args[5], Expr::Binary { left, .. } if matches!(**left, Expr::List { .. })));
+    assert_eq!(p.args[6], var("T"));
+    // Display round-trips the notation, parenthesising a list under arithmetic.
+    assert_eq!(
+        clauses[0].to_string(),
+        "p(<>, <a, 1>, <X> . T, <a, b> . T, <a> . T + 1, (<a> . T) + 1, T)."
+    );
+}
+
+#[test]
 fn every_example_file_parses() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
     let mut seen = 0;
