@@ -69,9 +69,10 @@ structures stay leaves (rule 4, unchanged).
   record's sentence that the integrity-checker shape succeeds "in either
   goal order" holds for `person(alice, A), { A = age(alice) }` and for
   `{ A = 30 }, { A = age(alice) }`, not for the block-first order, which
-  its own rules make tree equality. A program wanting the attribute term
-  there writes `{ A = age(alice) }` after `A` is a number, or
-  `{ age(alice) = A }` with `A` numeric.
+  its own rules make tree equality. A program wanting the block first says
+  that `A` is a number: `number(A), { A = age(alice) }, person(alice, A)`
+  answers `A = 30, age(alice) = 30`. Accepted as the phrasing; the record
+  stands as written.
 
 ## Verification
 
