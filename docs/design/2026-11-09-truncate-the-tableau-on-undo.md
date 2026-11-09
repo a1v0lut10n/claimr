@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: design
-status: proposed
+status: accepted
 components: [solver]
 aspects: [exact-arithmetic, answer-soundness]
 tags: [solver, simplex, backtracking, performance]
