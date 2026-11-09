@@ -1,24 +1,123 @@
-# Built-ins on atoms and type tests
+---
+date: 2026-11-09
+type: design
+status: proposed
+components: [grammar, parser, evaluator, highlight]
+aspects: [grammar-authority, answer-soundness]
+tags: [strings, atoms, type-tests, built-ins, prolog-iii]
+---
 
-Captured 2026-11-08. Data loaded from outside (identifiers like `'doc:h3fa21c9d'`,
-`'cl-2a04…'`) often needs tests on the text of an atom:
+# Strings as character lists, and type relations as constraints
 
-- does an id have a given prefix;
-- what is the scheme part before `:`;
-- are two atoms equal ignoring case.
+## Context
 
-Type tests matter too: is this term a number, an atom, or still a variable? The grammar
-defines no named built-in predicates, so today all of this has to be decided before the
-data reaches claimr, and fed in as facts.
+Data loaded from outside carries identifiers such as `'doc:h3fa21c9d'`
+and `'cl-2a04…'` (quoted atoms, `2026-09-10-quoted-atoms.md`), and
+integrity rules need to look inside them: does an id have a given prefix,
+what is the scheme before the `:`, how long is it. Rules also need to ask
+what kind of thing a term is: a number, an atom, a list. The grammar
+defines no built-in predicates, so today all of this is decided before the
+data reaches claimr and fed in as facts.
 
-The idea is a small, documented set of built-ins, each deterministic and sound:
+The incubation entry this record graduates from proposed ISO-style atom
+built-ins (`atom_prefix/2`, `atom_concat/3`, `atom_length/2`) and type
+tests (`number/1`, `atom/1`, `var/1`), and flagged `var/1` under
+constraints as "the delicate one".
 
-- `atom_prefix(A, P)` and `atom_concat(A, B, C)` (for ground arguments);
-- `atom_length(A, N)` (with `N` exact);
-- `number(X)`, `atom(X)` and `var(X)`.
+**Prolog III** takes a different line on both counts (Colmerauer, CACM
+33(7), 1990):
 
-The type tests are the delicate ones under constraints. `var(X)` on a variable that is
-constrained but unbound needs a definition: unbound, or "not determined"?
+- There is no string type. "The constant `"c1...cm"` designates the true
+  list whose immediate daughters make up the sequence of characters
+  `'c1' ... 'cm'`", so `"c1...cm" = <'c1', ..., 'cm'>`, and string
+  concatenation is list concatenation. The context-free recognizer in the
+  paper runs `Sform("aaabb")` with the same `•` as any list, and a mixed
+  list prints as `<'M', 'a', 'x', 9/5, meters, 1'>`: characters, not a
+  string.
+- Type tests are constraints: "The relations `id`, `char`, `bool`, `num`,
+  `irint`, `list` and `leaf` are used to specify that the tree a1 is an
+  identifier, a character, a Boolean value, a real number, an integer or
+  irrational number, a list, a label not of the form `<>α`." They delay
+  like any other constraint. There is no `var`.
 
-Strings as a separate type are probably not needed. Quoted atoms already carry arbitrary
-text (`docs/design/2026-09-10-quoted-atoms.md`).
+Characters in Prolog III are a leaf type written `'c'`, which is claimr's
+quoted-atom spelling; a new leaf type would also need its own unification
+and printing cases for little gain.
+
+## Decision
+
+1. **A string literal denotes a list of one-character atoms.**
+   `"abc"` parses to `[a, b, c]`; `""` to `[]`. The literal uses the same
+   backslash escapes as quoted atoms (`\"`, `\\`, any other `\c` is `c`).
+   Characters are ordinary atoms, so `'a'` and `a` are the same character
+   and `"doc:x"` is `[d, o, c, ':', x]`. No new term kind, no new leaf
+   type. Depends on `2026-11-09-list-notation.md`.
+2. **Printing is list form, as in Prolog III.** `[a, b]` and `"ab"` are
+   the same term, so the printer never guesses a string reading; a list of
+   one-character atoms prints as `[a, b]`.
+3. **One bridge between an atom and its characters: `atom_chars(A, L)`.**
+   It behaves as a delayed constraint, not a test: when `A` is a bound
+   atom it unifies `L` with the character list; when `L` is a ground list
+   of one-character atoms it unifies `A` with the atom they spell; when
+   neither holds it suspends on the existing suspension machinery (as
+   `dif` and delayed products do) and, if still pending at answer time, is
+   reported as a residual constraint. It never flounders silently and
+   never errors, which keeps `answer-soundness`. Any other shape of `L`
+   (a non-atom element, an atom longer than one character) fails.
+4. **Type relations, with Prolog III's semantics and Prolog-family
+   names: `number(X)`, `atom(X)`, `list(X)`.** Each is a goal that posts a
+   constraint:
+   - `number(X)`: `X` is a number. Bound to a number, succeeds; bound to
+     anything else, fails; unbound, `X` becomes a numeric variable in the
+     store (the typing `post_arith` already applies to operands), and the
+     constraint is implied by the answer's numeric part.
+   - `atom(X)`: `X` is an atom (a nullary name, quoted or plain). Unbound,
+     a delayed type constraint on `X` that fails any later binding to a
+     number, compound or list, and prints as `atom(X)` if still pending.
+   - `list(X)`: `X` is `[]` or a cons cell, the shallow label test
+     Prolog III's `list` relation makes. Same delaying behaviour.
+   These are the only built-in predicates introduced; they are reserved
+   names in the evaluator, not grammar changes, since `Goal` already
+   parses `number(X)`.
+5. **No `var/1`, following Prolog III.** The question "is this variable
+   still unbound" has no sound answer when the variable may be constrained,
+   and the type relations plus `dif` cover the uses that motivated it.
+6. **No `atom_prefix`, `atom_concat`, `atom_length`.** They are `append`
+   and `length` over character lists (see Consequences). Case-insensitive
+   comparison is left out: Prolog III has nothing for it, and a
+   character-mapping built-in can be its own small record when a rule
+   needs one.
+
+## Consequences
+
+- The integrity-rule idioms become ordinary list programming over the
+  characters of an id:
+
+  ```
+  has_prefix(Id, Prefix) :- atom_chars(Id, Cs), append(Prefix, _, Cs).
+  scheme(Id, Scheme)     :- atom_chars(Id, Cs), append(Scheme, [':' | _], Cs).
+  id_length(Id, N)       :- atom_chars(Id, Cs), length(Cs, N).
+
+  ?- has_prefix('doc:h3fa21c9d', "doc:").
+  ?- scheme('doc:h3fa21c9d', S).
+  ```
+
+  Text operations are O(n) list walks rather than O(1) atom operations,
+  which is fine for identifiers; `length/2` here is the library predicate
+  from `examples/lists.claimr` with numbers instead of `s/1` counting.
+- Grammar path per `grammar-authority`: one `String` terminal with the
+  quoted-atom escape regex over `"`, one `Expr` alternative, an action
+  that builds the cons list, an example under `examples/`, the EBNF view,
+  and `src/highlight.rs` (coverage test).
+- The evaluator gains its first reserved predicate names: `atom_chars/2`,
+  `number/1`, `atom/1`, `list/1`. A user clause whose head uses one of
+  them is a compile error (`EvalError`), reported with its span, so that
+  the reservation is never silent. `docs/reference/` gains a built-ins
+  page listing exactly these four.
+- Answers may now carry two new kinds of residual constraint,
+  `atom_chars(A, L)` and `atom(X)` (and `list(X)`), printed in goal form
+  after the numeric constraints. The JSON output needs a contract version
+  note for the new residual kinds.
+- `number/1` on an unbound variable has an observable effect on printing
+  only through the numeric store, as today for a variable that appears in
+  an arithmetic term.
