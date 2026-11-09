@@ -1,7 +1,7 @@
 ---
 date: 2026-11-09
 type: design
-status: proposed
+status: accepted
 components: [evaluator, solver]
 aspects: [answer-soundness, exact-arithmetic]
 tags: [numbers, numeric-variables, attribute-terms, equality, unification, d4, d5, prolog-iii]
