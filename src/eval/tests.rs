@@ -1480,3 +1480,24 @@ fn a_deep_derivation_explains_on_a_small_stack() {
         assert_eq!(lines[1000].trim_start(), "reach(a500, a500)  fact 501:1");
     });
 }
+
+#[test]
+fn a_long_numeric_derivation_is_linear() {
+    // CLM-0024: each step of the countdown leaves a determined numeric
+    // variable and a settled disequation behind; the determination pass
+    // after every post must not walk them again. Before the change 2 000
+    // steps took 55 s in this profile; the budget below is a generous
+    // multiple of the linear cost.
+    let start = std::time::Instant::now();
+    let out = answers(
+        "down(0).
+         down(N) :- { N > 0, M = N - 1, M != -1 }, down(M).
+         ?- down(2000).",
+    );
+    assert_eq!(out[0], vec!["true"]);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(20),
+        "took {:?}",
+        start.elapsed()
+    );
+}

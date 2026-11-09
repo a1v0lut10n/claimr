@@ -11,7 +11,7 @@
 //! [`Mark`] exactly — chronological backtracking and trial unification rely
 //! on that.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::ast::ArithOp;
 use crate::number::Number;
@@ -174,6 +174,8 @@ enum Undo {
     NumDifPending(usize),
     ProductPending(usize),
     Fired(Addr),
+    /// CLM-0024: a numeric variable left the candidate set by being bound.
+    Undetermined(Addr),
     Alias(SVar),
     AttrTouched(usize),
     LengthPending(usize),
@@ -248,6 +250,14 @@ pub struct Store {
     pub(crate) attr_touched: HashSet<usize>,
     /// Heap variables whose "determined" event has fired.
     fired: HashSet<Addr>,
+    /// CLM-0024: the determination pass's candidates, kept incrementally —
+    /// numeric heap variables that are unbound and not yet fired, the
+    /// pending numeric disequations and the pending products — so that the
+    /// pass after every post walks only what is still open, not every entry
+    /// ever registered (which made a long numeric derivation quadratic).
+    undetermined: BTreeSet<Addr>,
+    pending_numdifs: BTreeSet<usize>,
+    pending_products: BTreeSet<usize>,
     /// Numeric heap variables touched during the current trial unification.
     touched: Vec<Addr>,
     /// A sticky runtime error (cyclic attribute term).
@@ -370,6 +380,7 @@ impl Store {
                 }
                 Undo::NumVar(a) => {
                     self.numvar.remove(&a);
+                    self.undetermined.remove(&a);
                 }
                 Undo::AttrIndex(key) => {
                     self.attr_index.remove(&key);
@@ -382,15 +393,21 @@ impl Store {
                 Undo::NumDifPending(id) => {
                     if id < self.numdifs.len() {
                         self.numdifs[id].pending = true;
+                        self.pending_numdifs.insert(id);
                     }
                 }
                 Undo::ProductPending(id) => {
                     if id < self.products.len() {
                         self.products[id].pending = true;
+                        self.pending_products.insert(id);
                     }
                 }
                 Undo::Fired(a) => {
                     self.fired.remove(&a);
+                    self.undetermined.insert(a);
+                }
+                Undo::Undetermined(a) => {
+                    self.undetermined.insert(a);
                 }
                 Undo::Alias(sv) => {
                     self.aliases.remove(&sv);
@@ -427,7 +444,9 @@ impl Store {
         self.difs.truncate(mark.difs);
         self.attrs.truncate(mark.attrs);
         self.numdifs.truncate(mark.numdifs);
+        self.pending_numdifs.split_off(&mark.numdifs);
         self.products.truncate(mark.products);
+        self.pending_products.split_off(&mark.products);
         self.lengths.truncate(mark.lengths);
         self.concats.truncate(mark.concats);
         self.types.truncate(mark.types);
@@ -490,6 +509,7 @@ impl Store {
                 }
                 self.touched.push(v);
                 self.set(v, Cell::Var(t));
+                self.leave_undetermined(v);
                 self.fire(v);
                 match self.numvar.get(&d).copied() {
                     Some(other) => self.equate(sv, other),
@@ -502,6 +522,7 @@ impl Store {
             Cell::Const(_) | Cell::Struct(..) => {
                 self.touched.push(v);
                 self.set(v, Cell::Var(t));
+                self.leave_undetermined(v);
                 self.fire(v);
                 match self.attribute(d) {
                     Some(other) => self.equate(sv, other),
@@ -513,7 +534,16 @@ impl Store {
 
     fn set_numvar(&mut self, v: Addr, sv: SVar) {
         self.numvar.insert(v, sv);
+        self.undetermined.insert(v);
         self.trail.push(Undo::NumVar(v));
+    }
+
+    /// CLM-0024: `v`, a numeric variable, is being bound and leaves the
+    /// determination candidates (trailed).
+    fn leave_undetermined(&mut self, v: Addr) {
+        if self.undetermined.remove(&v) {
+            self.trail.push(Undo::Undetermined(v));
+        }
     }
 
     fn suspend(&mut self, w: Waker, v: Addr) {
@@ -740,14 +770,14 @@ impl Store {
     fn numeric_consequences(&mut self, exact: bool) -> bool {
         loop {
             let mut progress = false;
-            // Determined heap variables.
-            let mut candidates: Vec<(Addr, SVar)> = self
-                .numvar
+            // Determined heap variables: the open candidates (CLM-0024), in
+            // address order.
+            let candidates: Vec<(Addr, SVar)> = self
+                .undetermined
                 .iter()
-                .filter(|(a, _)| !self.fired.contains(*a) && self.is_unbound_var(**a))
-                .map(|(a, s)| (*a, *s))
+                .filter(|a| !self.fired.contains(*a) && self.is_unbound_var(**a))
+                .filter_map(|a| self.numvar.get(a).map(|s| (*a, *s)))
                 .collect();
-            candidates.sort();
             for (a, sv) in candidates {
                 let val = if exact {
                     self.simplex.is_determined(sv)
@@ -759,6 +789,7 @@ impl Store {
                         return false;
                     }
                     self.fired.insert(a);
+                    self.undetermined.remove(&a);
                     self.trail.push(Undo::Fired(a));
                     self.fire(a);
                     progress = true;
@@ -775,8 +806,8 @@ impl Store {
                     }
                 }
             }
-            // Numeric disequations.
-            for id in 0..self.numdifs.len() {
+            // Numeric disequations still pending (CLM-0024).
+            for id in self.pending_numdifs.clone() {
                 if !self.numdifs[id].pending {
                     continue;
                 }
@@ -791,12 +822,13 @@ impl Store {
                         return false;
                     }
                     self.numdifs[id].pending = false;
+                    self.pending_numdifs.remove(&id);
                     self.trail.push(Undo::NumDifPending(id));
                     progress = true;
                 }
             }
-            // Delayed products.
-            for id in 0..self.products.len() {
+            // Delayed products still pending (CLM-0024).
+            for id in self.pending_products.clone() {
                 if !self.products[id].pending {
                     continue;
                 }
@@ -840,6 +872,7 @@ impl Store {
                         return false;
                     }
                     self.products[id].pending = false;
+                    self.pending_products.remove(&id);
                     self.trail.push(Undo::ProductPending(id));
                     progress = true;
                 }
@@ -920,30 +953,37 @@ impl Store {
     // --- numeric constraints ----------------------------------------------
 
     /// The solver's view of a term in numeric position: a constant, a numeric
-    /// variable's solver variable, or an attribute term's unknown.
+    /// variable's solver variable, or an attribute term's unknown. A solver
+    /// variable whose value the store has already determined is its value
+    /// (CLM-0024): the constraint being built then folds as if the number
+    /// had been written, so a value that flows through arithmetic defines no
+    /// row and asserts no slack — in every solution of the store the variable
+    /// has that value, so nothing posted changes, and the trail undoes the
+    /// posted constraint with the determination it relied on.
     pub(crate) fn unknown_of(&mut self, a: Addr) -> Option<LinExpr> {
         let d = self.deref(a);
-        match self.heap[d].clone() {
-            Cell::Num(c) => Some(LinExpr::constant(c)),
-            Cell::Var(_) => {
-                let sv = match self.numvar.get(&d) {
-                    Some(sv) => *sv,
-                    None => {
-                        // A variable under a pending `atom`/`list` relation
-                        // or the atom side of `atom_chars` is not a number
-                        // (CLM-0017).
-                        if self.has_pending_type(d) {
-                            return None;
-                        }
-                        let sv = self.simplex.new_var();
-                        self.set_numvar(d, sv);
-                        sv
+        let sv = match self.heap[d].clone() {
+            Cell::Num(c) => return Some(LinExpr::constant(c)),
+            Cell::Var(_) => match self.numvar.get(&d) {
+                Some(sv) => *sv,
+                None => {
+                    // A variable under a pending `atom`/`list` relation
+                    // or the atom side of `atom_chars` is not a number
+                    // (CLM-0017).
+                    if self.has_pending_type(d) {
+                        return None;
                     }
-                };
-                Some(LinExpr::var(sv))
-            }
-            Cell::Const(_) | Cell::Struct(..) => self.attribute(d).map(LinExpr::var),
-        }
+                    let sv = self.simplex.new_var();
+                    self.set_numvar(d, sv);
+                    sv
+                }
+            },
+            Cell::Const(_) | Cell::Struct(..) => self.attribute(d)?,
+        };
+        Some(match self.class_value(sv) {
+            Some(c) => LinExpr::constant(c),
+            None => LinExpr::var(sv),
+        })
     }
 
     /// Post `a op b` for a numeric relation.
@@ -984,10 +1024,12 @@ impl Store {
             self.defs.insert(d, e);
             let id = self.numdifs.len();
             self.numdifs.push(NumDif { d, pending: true });
+            self.pending_numdifs.insert(id);
             match self.simplex.is_determined(d) {
                 Some(c) if c.is_zero() => Some(false),
                 Some(_) => {
                     self.numdifs[id].pending = false;
+                    self.pending_numdifs.remove(&id);
                     self.trail.push(Undo::NumDifPending(id));
                     Some(true)
                 }
@@ -1106,6 +1148,7 @@ impl Store {
         let n_addr = self.new_var();
         let n = self.simplex.new_var();
         self.set_numvar(n_addr, n);
+        let id = self.products.len();
         self.products.push(Product {
             n,
             kind,
@@ -1115,6 +1158,7 @@ impl Store {
             b_addr,
             pending: true,
         });
+        self.pending_products.insert(id);
         // Maybe already linear (a factor determined): settle decides.
         if self.settle() { Some(n_addr) } else { None }
     }
@@ -1180,13 +1224,25 @@ impl Store {
         id >= self.baseline_attrs || self.attr_touched.contains(&id)
     }
 
-    /// The fixed value of an alias class, if the solver exhibits one.
+    /// The fixed value of an alias class, if the solver exhibits one. The
+    /// class is its root and the aliased variables whose root it is; only
+    /// equated variables are in `aliases`, so this costs the number of
+    /// aliases, not of solver variables (CLM-0024: `unknown_of` asks on
+    /// every post).
     pub(crate) fn class_value(&self, sv: SVar) -> Option<Number> {
         let r = self.root(sv);
-        (0..self.simplex.num_vars())
-            .map(SVar)
-            .filter(|v| self.root(*v) == r)
-            .find_map(|v| self.cheap_value(v))
+        if let Some(c) = self.cheap_value(r) {
+            return Some(c);
+        }
+        if sv != r {
+            if let Some(c) = self.cheap_value(sv) {
+                return Some(c);
+            }
+        }
+        self.aliases
+            .keys()
+            .filter(|v| **v != sv && self.root(**v) == r)
+            .find_map(|v| self.cheap_value(*v))
     }
 
     // --- list lengths (CLM-0015) -------------------------------------------
@@ -1985,5 +2041,61 @@ mod tests {
         let x = st.new_var();
         st.post_arith(ArithOp::Mul, ten, x).unwrap();
         assert!(st.simplex.num_vars() > before);
+    }
+
+    /// CLM-0024: the determination candidates kept incrementally agree with a
+    /// recomputation from the registered entries, through posts, binds,
+    /// determinations and undos.
+    #[test]
+    fn determination_candidates_agree_with_a_recomputation() {
+        use crate::ast::RelOp;
+        fn check(st: &Store) {
+            let expect: BTreeSet<Addr> = st
+                .numvar
+                .keys()
+                .copied()
+                .filter(|a| st.is_unbound_var(*a) && !st.fired.contains(a))
+                .collect();
+            assert_eq!(st.undetermined, expect, "undetermined");
+            let expect: BTreeSet<usize> = (0..st.numdifs.len())
+                .filter(|i| st.numdifs[*i].pending)
+                .collect();
+            assert_eq!(st.pending_numdifs, expect, "pending numdifs");
+            let expect: BTreeSet<usize> = (0..st.products.len())
+                .filter(|i| st.products[*i].pending)
+                .collect();
+            assert_eq!(st.pending_products, expect, "pending products");
+        }
+        let mut st = Store::default();
+        let n = |k: i64| st_num(k);
+        fn st_num(k: i64) -> Number {
+            Number::from_ratio(k, 1).unwrap()
+        }
+        let zero = st.new_num(n(0));
+        let two = st.new_num(n(2));
+        let (x, y, z, w) = (st.new_var(), st.new_var(), st.new_var(), st.new_var());
+        assert!(st.post_rel(RelOp::Gt, x, zero)); // x numeric, open
+        assert!(st.post_rel(RelOp::Gt, y, zero));
+        assert!(st.post_numdif(x, two)); // pending: x != 2
+        let prod = st.post_arith(crate::ast::ArithOp::Mul, x, y).unwrap(); // pending product
+        assert!(st.post_rel(RelOp::Gt, prod, zero));
+        check(&st);
+        let mark = st.mark();
+        assert!(st.post_eq_goal(y, two)); // y determined and fired; product linearised
+        check(&st);
+        assert!(st.post_eq(z, w)); // plain variables: no candidates involved
+        assert!(st.post_eq(x, z)); // x bound to a plain variable: leaves the set
+        check(&st);
+        let _ = st.post_eq_goal(z, two); // either outcome keeps the sets consistent
+        check(&st);
+        st.undo_to(&mark);
+        check(&st);
+        assert!(!st.post_eq_goal(x, two)); // x != 2 pending: fails
+        check(&st);
+        let inner = st.mark();
+        assert!(st.post_rel(RelOp::Lt, x, two));
+        check(&st);
+        st.undo_to(&inner);
+        check(&st);
     }
 }

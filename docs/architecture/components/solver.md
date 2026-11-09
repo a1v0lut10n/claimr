@@ -29,7 +29,14 @@ Claimr's constraint store. Two layers:
   meet: `numvar` (unbound heap variable → solver variable), the attribute
   term registry, numeric disequations, delayed products, list lengths and
   concatenations, alias classes, and the "determined" event that fires
-  suspended wakers.
+  suspended wakers. `unknown_of`, the solver's view of a term in numeric
+  position, returns a determined variable's **value** rather than the
+  variable (CLM-0024): a constraint over values the store already knows
+  folds as if the numbers had been written, defines no row and asserts no
+  slack, so a value flowing through arithmetic step after step costs the
+  solver nothing; in every solution the variable has that value, and the
+  trail undoes the posted constraint together with the determination it
+  relied on.
 
 ## Semantics as implemented (stage 3 — CLM-0006)
 
@@ -76,7 +83,18 @@ Claimr's constraint store. Two layers:
   fire their heap variable's wakers (`dif`, attribute congruence); before an
   answer, `finalize` runs the exact probe on every numeric variable and
   disequation, tightens bounds to fixed values, re-checks every pending
-  tree disequation, and rejects a non-linear residue.
+  tree disequation, and rejects a non-linear residue. The pass walks only
+  its open **candidates** (CLM-0024): the numeric variables still unbound
+  and unfired, the pending disequations and the pending products, kept as
+  sets maintained at every creation, settle, bind and undo (a variable
+  leaving the set by being bound is trailed), so a long derivation does not
+  rescan what it has already settled; `class_value` likewise looks at a
+  class's root and its aliases, not at every solver variable. Before this a
+  numeric countdown was quadratic (4.6 s for 2 000 steps, 19.5 s for 4 000,
+  release build); it now runs 16 000 steps in 0.05 s. Within the solver
+  itself, `check`, `update` and `pivot` still scan every row, so a store
+  with many **open** rows pays per row on each assertion — a column index
+  is the natural next step if that shows up.
 - **Alias classes.** `equate(a, b)` asserts `a − b = 0` through a defined
   slack and records `b → a`; printing treats a class as one variable.
 - **Ground arithmetic never reaches the solver** (CLM-0013,
