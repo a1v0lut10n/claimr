@@ -1,7 +1,7 @@
 ---
 date: 2026-11-10
 type: design
-status: proposed
+status: accepted
 components: [grammar, parser, evaluator, cli]
 aspects: [grammar-authority, answer-soundness]
 tags: [tabling, recursion, termination, transitive-closure, memoisation, directives, linear-tabling, prolog-iii]
