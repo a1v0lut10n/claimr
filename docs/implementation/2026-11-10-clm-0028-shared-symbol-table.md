@@ -1,7 +1,7 @@
 ---
 date: 2026-11-10
 type: task
-status: in-progress
+status: done
 affects:
   - docs/architecture/components/evaluator.md
   - docs/implementation/2026-11-10-clm-0027-tabling.md
@@ -41,11 +41,14 @@ program, copied once per evaluation. A right-recursive chain of n nodes
 queried with a ground second argument nests n evaluations, so n copies of
 n atoms. Release build, `?- reach(a0, aN).`:
 
-| n     | tabled  | untabled |
-|-------|---------|----------|
-| 1 000 | 0.06 s  |          |
-| 2 000 | 0.20 s  |          |
-| 4 000 | 0.66 s  | 0.04 s   |
+| n     | tabled, before | tabled, after | untabled |
+|-------|----------------|---------------|----------|
+| 1 000 | 0.06 s         | 0.02 s        |          |
+| 2 000 | 0.20 s         | 0.03 s        |          |
+| 4 000 | 0.66 s         | 0.04 s        | 0.04 s   |
+
+The *after* column is the fix in place: the tabled ground chain costs what
+the untabled one does.
 
 ## Shape of the fix
 
@@ -104,8 +107,9 @@ machine through a `RefCell` for the same reason (`Program::solve` takes
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test`; existing golden files byte-identical.
-- [ ] The two probes: no panic, `A = xyz`.
-- [ ] `?- reach(a0, a4000).` tabled within a small factor of untabled.
-- [ ] `aivolution lint .` clean; the two `affects` docs current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` (136 unit tests, two new); existing golden files
+      byte-identical.
+- [x] The two probes: no panic, `A = xyz` (unit test).
+- [x] `?- reach(a0, a4000).` tabled 0.04 s, untabled 0.04 s.
+- [x] `aivolution lint .` clean; the two `affects` docs current.

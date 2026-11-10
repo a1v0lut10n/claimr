@@ -552,13 +552,13 @@ impl<'p> Solutions<'p> {
     }
 
     fn render_one(&self, a: Addr) -> String {
-        render_terms(&self.store.symbols, &self.store, self.names(), &[a]).remove(0)
+        render_terms(&self.store, self.names(), &[a]).remove(0)
     }
 
     fn pred_name(&self, key: PredKey) -> String {
         format!(
             "{}/{}",
-            crate::ast::display_name(self.store.symbols.name(key.0)),
+            crate::ast::display_name(self.store.symbols.borrow().name(key.0)),
             key.1
         )
     }
@@ -806,7 +806,7 @@ impl<'p> Solutions<'p> {
             .enumerate()
             .map(|(i, a)| (format!("_T{i}"), *a))
             .collect();
-        let (solution, _) = render_answer(&self.store.symbols, &self.store, &names, &[]);
+        let (solution, _) = render_answer(&self.store, &names, &[]);
         if solution.disequations.is_empty() && solution.constraints.is_empty() {
             return None;
         }
@@ -815,7 +815,7 @@ impl<'p> Solutions<'p> {
         // an answer.
         let mut world = self.program.world.clone();
         world.touch_like(&self.store);
-        let (base, _) = render_answer(&world.symbols, &world, &[], &[]);
+        let (base, _) = render_answer(&world, &[], &[]);
         let residual: Vec<String> = solution
             .disequations
             .iter()
@@ -1244,7 +1244,7 @@ impl<'p> Solutions<'p> {
     /// parent, so a reverse pass sees every child before its parent).
     fn answer(&self) -> Answer {
         if self.proof.is_none() {
-            return render_answer(&self.store.symbols, &self.store, &self.query_vars, &[]).0;
+            return render_answer(&self.store, &self.query_vars, &[]).0;
         }
         let (mut answer, roots) = self.render_proof(0);
         answer.explanation = Some(roots);
@@ -1274,8 +1274,7 @@ impl<'p> Solutions<'p> {
                 ProofKind::Committed { .. } | ProofKind::NoSolution { .. } => {}
             }
         }
-        let (answer, rendered) =
-            render_answer(&self.store.symbols, &self.store, self.names(), &addrs);
+        let (answer, rendered) = render_answer(&self.store, self.names(), &addrs);
         let mut rendered = rendered.into_iter();
         // The clause each record cites: its own for a clause, the enclosing
         // clause's for a constraint goal.
@@ -1384,7 +1383,7 @@ impl<'p> Solutions<'p> {
             return Some(e);
         }
         let (a, b, op) = self.store.nonlinear.take()?;
-        let rendered = render_terms(&self.store.symbols, &self.store, self.names(), &[a, b]);
+        let rendered = render_terms(&self.store, self.names(), &[a, b]);
         Some(EvalError::NonLinear {
             constraint: format!("{} {op} {}", rendered[0], rendered[1]),
         })

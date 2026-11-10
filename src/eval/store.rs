@@ -11,7 +11,9 @@
 //! [`Mark`] exactly — chronological backtracking and trial unification rely
 //! on that.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 
 use crate::ast::ArithOp;
 use crate::number::Number;
@@ -220,7 +222,7 @@ pub struct Mark {
 pub struct Store {
     /// The program's symbol table, carried by the store since CLM-0017 so
     /// that `atom_chars` can intern the atom it spells at wake time.
-    pub(crate) symbols: Symbols,
+    pub(crate) symbols: Rc<RefCell<Symbols>>,
     heap: Vec<Cell>,
     trail: Vec<Undo>,
     difs: Vec<Dif>,
@@ -283,9 +285,10 @@ pub struct Store {
 }
 
 impl Store {
-    /// A store over the given symbol table (a clone of the program's, so
-    /// that symbol indices agree).
-    pub fn with_symbols(symbols: Symbols) -> Self {
+    /// A store over the given symbol table — the program's own, shared by
+    /// every store a program runs (CLM-0028), so that a symbol interned at run
+    /// time in one store means the same name in all of them.
+    pub fn with_symbols(symbols: Rc<RefCell<Symbols>>) -> Self {
         Store {
             symbols,
             ..Self::default()
@@ -1625,10 +1628,10 @@ impl Store {
             Cell::Const(c) if c != LIST => {
                 // The atom is known: `l` is the list of its characters.
                 self.close_chars(id);
-                let name = self.symbols.name(c).to_string();
+                let name = self.symbols.borrow().name(c).to_string();
                 let mut t = self.new_const(LIST);
                 for ch in name.chars().rev() {
-                    let s = self.symbols.intern(&ch.to_string());
+                    let s = self.symbols.borrow_mut().intern(&ch.to_string());
                     let h = self.new_const(s);
                     t = self.new_struct(LIST, vec![h, t]);
                 }
@@ -1660,12 +1663,12 @@ impl Store {
             let dh = self.deref(h);
             match self.heap[dh].clone() {
                 Cell::Const(c) if c != LIST => {
-                    let n = self.symbols.name(c);
+                    let n = self.symbols.borrow().name(c).to_string();
                     if n.chars().count() != 1 {
                         self.close_chars(id);
                         return false;
                     }
-                    name.push_str(n);
+                    name.push_str(&n);
                 }
                 Cell::Var(_) if !self.numvar.contains_key(&dh) => waits.push(dh),
                 _ => {
@@ -1677,7 +1680,7 @@ impl Store {
         waits.extend(open_tail);
         if waits.is_empty() {
             self.close_chars(id);
-            let s = self.symbols.intern(&name);
+            let s = self.symbols.borrow_mut().intern(&name);
             let c = self.new_const(s);
             return self.unify(a, c);
         }
