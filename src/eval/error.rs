@@ -58,6 +58,46 @@ pub enum EvalError {
         /// The instance, rendered.
         instance: String,
     },
+    /// A directive (CLM-0027) the compile step rejects: an unknown
+    /// directive name, an indicator whose arity is not a non-negative
+    /// integer, or a table declared for a built-in or the list constructor.
+    /// `span` is the clause's position when parsed with positions.
+    BadDirective { message: String, span: Option<Span> },
+    /// A solution of a tabled predicate (CLM-0027) whose call is not a
+    /// finite ground term — it carries an unbound variable, an undetermined
+    /// numeric variable or a cycle — so it cannot be recorded as an answer;
+    /// tables hold ground answers only.
+    NonGroundTabledAnswer {
+        /// The predicate, as `name/arity`.
+        predicate: String,
+        /// The call instance, rendered.
+        instance: String,
+    },
+    /// A solution of a tabled predicate (CLM-0027) whose call is ground but
+    /// which holds under a constraint on the world's unknowns (an attribute
+    /// term's bound, a disequation): recording it as a fact would drop the
+    /// condition, and a later caller whose store contradicts it would be
+    /// answered wrongly. Tables hold unconditional answers only.
+    ConstrainedTabledAnswer {
+        /// The predicate, as `name/arity`.
+        predicate: String,
+        /// The call instance, rendered.
+        instance: String,
+        /// The residual constraints, rendered.
+        residual: String,
+    },
+    /// A condition or a comprehension body (a sub-search) consumed a table
+    /// still under evaluation (CLM-0027): deciding it on a partial answer
+    /// set would be unsound, so the query stops.
+    IncompleteTable {
+        /// The predicate, as `name/arity`.
+        predicate: String,
+        /// The construct that would be decided.
+        construct: String,
+    },
+    /// A call to a tabled predicate (CLM-0027) is a cyclic term, which has
+    /// no finite variant key.
+    CyclicTabledCall { call: String },
     /// An internal invariant of the evaluator failed; reported rather than
     /// panicked so the CLI and REPL stay up. Never expected.
     InternalInvariant { what: String },
@@ -107,6 +147,33 @@ impl fmt::Display for EvalError {
                 f,
                 "a solution of `{construct}` has the instance `{instance}`, which is not ground, so there is no single value to collect; constrain the template's variables inside the comprehension"
             ),
+            EvalError::BadDirective { message, .. } => write!(f, "bad directive: {message}"),
+            EvalError::NonGroundTabledAnswer {
+                predicate,
+                instance,
+            } => write!(
+                f,
+                "a solution of the tabled predicate `{predicate}` is `{instance}`, which is not a finite ground term; a table holds ground answers only, so constrain the arguments inside the predicate or leave it untabled"
+            ),
+            EvalError::ConstrainedTabledAnswer {
+                predicate,
+                instance,
+                residual,
+            } => write!(
+                f,
+                "a solution of the tabled predicate `{predicate}` is `{instance}` only under `{residual}`; a table holds unconditional answers, so a constrained one cannot be recorded (decide the constraint inside the predicate, or leave it untabled)"
+            ),
+            EvalError::IncompleteTable {
+                predicate,
+                construct,
+            } => write!(
+                f,
+                "`{construct}` consumes the table of `{predicate}` while it is still being computed (a negation or an aggregate inside the predicate's own recursion); its answers are not complete there, so the construct cannot be decided"
+            ),
+            EvalError::CyclicTabledCall { call } => write!(
+                f,
+                "the call `{call}` to a tabled predicate is a cyclic term, which has no finite table key"
+            ),
             EvalError::InternalInvariant { what } => {
                 write!(f, "internal error: {what} (please report)")
             }
@@ -122,12 +189,17 @@ impl EvalError {
         match self {
             EvalError::ReservedName { span, .. }
             | EvalError::ReservedBuiltin { span, .. }
-            | EvalError::ComprehensionInHead { span } => *span,
+            | EvalError::ComprehensionInHead { span }
+            | EvalError::BadDirective { span, .. } => *span,
             EvalError::InitialStoreUnsatisfiable
             | EvalError::NonLinear { .. }
             | EvalError::CyclicAttributeTerm { .. }
             | EvalError::NonGroundCondition { .. }
             | EvalError::NonGroundSolution { .. }
+            | EvalError::NonGroundTabledAnswer { .. }
+            | EvalError::ConstrainedTabledAnswer { .. }
+            | EvalError::IncompleteTable { .. }
+            | EvalError::CyclicTabledCall { .. }
             | EvalError::InternalInvariant { .. } => None,
         }
     }

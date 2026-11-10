@@ -377,3 +377,31 @@ pub type NotOp = String;
 pub fn not_op(_ctx: &Ctx, token: Token) -> NotOp {
     token.value.into()
 }
+pub fn clause_directive(ctx: &Ctx, directive: Directive) -> Clause {
+    (directive, span_of(ctx))
+}
+/// CLM-0027: a directive, `:- table ancestor/2.`; the name is checked at
+/// compile time.
+pub type Directive = ast::Clause;
+pub fn directive_c1(_ctx: &Ctx, name: Ident, indicators: Indicator1) -> Directive {
+    ast::Clause::Directive {
+        name,
+        indicators,
+    }
+}
+pub type Indicator1 = Vec<Indicator>;
+pub fn indicator1_c1(
+    _ctx: &Ctx,
+    mut indicator1: Indicator1,
+    indicator: Indicator,
+) -> Indicator1 {
+    indicator1.push(indicator);
+    indicator1
+}
+pub fn indicator1_indicator(_ctx: &Ctx, indicator: Indicator) -> Indicator1 {
+    vec![indicator]
+}
+pub type Indicator = ast::Indicator;
+pub fn indicator_c1(_ctx: &Ctx, name: Name, arity: Number) -> Indicator {
+    ast::Indicator { name, arity }
+}

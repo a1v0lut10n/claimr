@@ -260,3 +260,18 @@ fn explain_toggles_the_proof_tree_under_answers() {
         "explaining answers\n?- r(X).\nX = 1\n  r(1)  rule  r(X) :- q(X).\n    q(1)  fact\n ;\nX = 2.\n  r(2)  rule  r(X) :- q(X).\n    q(2)  fact\nnot explaining answers\n?- r(1).\ntrue.\n"
     );
 }
+
+#[test]
+fn a_directive_at_the_prompt_tables_a_predicate() {
+    // CLM-0027: a directive extends the session like any clause, `:list`
+    // prints it as written, and the tabled closure terminates on a cycle.
+    let (out, err, code) = run(
+        &[],
+        ":- table anc/2.\npar(a, b). par(b, a).\nanc(X, Z) :- anc(X, Y), par(Y, Z).\nanc(X, Y) :- par(X, Y).\n:list\n?- anc(a, X).\n;\n;\n",
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        ":- table anc/2.\npar(a, b).\npar(b, a).\nanc(X, Z) :- anc(X, Y), par(Y, Z).\nanc(X, Y) :- par(X, Y).\n?- anc(a, X).\nX = b ;\nX = a.\n"
+    );
+}

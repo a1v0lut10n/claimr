@@ -81,6 +81,9 @@ pub enum Resolution {
     /// written with the list it produced; the solutions' own proofs are
     /// discarded with their derivations.
     Collected,
+    /// A call to a tabled predicate (CLM-0027) answered from its table: the
+    /// subgoals are the derivation that first produced the answer.
+    Tabled,
 }
 
 impl Resolution {
@@ -94,6 +97,7 @@ impl Resolution {
             Resolution::Committed => "committed",
             Resolution::NoSolution => "no-solution",
             Resolution::Collected => "collected",
+            Resolution::Tabled => "tabled",
         }
     }
 }

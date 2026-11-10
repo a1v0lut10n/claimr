@@ -56,7 +56,7 @@ enum Read {
 
 const HELP: &str = "\
 Enter claimr syntax ending in `.`: `?- goals.` is answered, anything else
-(fact, rule, `{ … }.`, `{ … } => head.`) is added to the session.
+(fact, rule, `{ … }.`, `{ … } => head.`, `:- table p/2.`) is added to the session.
 After an answer: `;` then Enter for the next, Enter or `.` to stop.
   :load FILE   append FILE's clauses to the session and answer its queries
   :reload      re-read the loaded files, dropping clauses typed at the prompt
@@ -196,11 +196,15 @@ impl Repl {
                         if trimmed.is_empty() || trimmed.starts_with('%') {
                             continue;
                         }
+                        // A `:` command — but `:-` opens a directive (CLM-0027),
+                        // which is a clause like any other.
                         if let Some(cmd) = trimmed.strip_prefix(':') {
-                            if !self.command(cmd) {
-                                return;
+                            if !cmd.starts_with('-') {
+                                if !self.command(cmd) {
+                                    return;
+                                }
+                                continue;
                             }
-                            continue;
                         }
                         // The words people reach for to leave, with or without a `.`.
                         if matches!(

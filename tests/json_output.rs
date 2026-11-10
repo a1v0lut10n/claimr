@@ -219,3 +219,31 @@ fn sums_and_comprehensions_in_the_json_vocabulary() {
         lines[1]
     );
 }
+
+/// CLM-0027: a tabled call explains as a `tabled` node whose subgoals are
+/// the recorded derivation; a tabling error is a query error document.
+#[test]
+fn tabled_calls_in_the_json_vocabulary() {
+    let path = write_temp(
+        "tabling",
+        ":- table r/2.\ne(a, b). e(b, a).\nr(X, Y) :- e(X, Y).\nr(X, Z) :- e(X, Y), r(Y, Z).\n?- r(a, a).\n",
+    );
+    let (stdout, _, code) = run(&["--json", "--explain", path.to_str().unwrap()]);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(0));
+    assert!(
+        stdout.contains(r#"{"goal":"r(a, a)","by":"tabled","subgoals":[{"goal":"r(a, a)","by":"rule","line":4,"column":1,"clause":"r(X, Z) :- e(X, Y), r(Y, Z).","subgoals":["#),
+        "{stdout}"
+    );
+    let path = write_temp(
+        "tabling-error",
+        ":- table n/1.\nn(X) :- { X > 0 }.\n?- n(X).\n",
+    );
+    let (stdout, _, code) = run(&["--json", path.to_str().unwrap()]);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(1));
+    assert!(
+        stdout.starts_with(r#"{"query":"?- n(X).","outcome":"error","error":{"message":"a solution of the tabled predicate `n/1` is `n(_1)`"#),
+        "{stdout}"
+    );
+}

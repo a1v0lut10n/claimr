@@ -1733,3 +1733,336 @@ fn a_large_collection_builds_on_a_small_stack() {
         assert_eq!(out[1].len(), 1);
     });
 }
+
+// --- CLM-0027: tabling -----------------------------------------------------
+
+const CYCLE: &str = "par(a, b). par(b, c). par(c, a). par(c, d). par(b, d).";
+
+#[test]
+fn tabled_transitive_closure_terminates_on_a_cycle_in_either_direction() {
+    // docs/design/2026-11-10-tabling-for-recursive-rules.md: the left- and
+    // right-recursive definitions give the same finite table on cyclic
+    // data, each answer once, in insertion order.
+    let out = answers(&format!(
+        ":- table anc/2, reach/2.
+         {CYCLE}
+         anc(X, Z) :- anc(X, Y), par(Y, Z).
+         anc(X, Y) :- par(X, Y).
+         reach(X, Y) :- par(X, Y).
+         reach(X, Z) :- par(X, Y), reach(Y, Z).
+         ?- anc(a, X).
+         ?- reach(a, X).
+         ?- anc(X, d).
+         ?- anc(a, a).
+         ?- anc(d, X).
+         ?- anc(X, Y)."
+    ));
+    assert_eq!(out[0], vec!["X = b", "X = c", "X = d", "X = a"]);
+    assert_eq!(out[1], vec!["X = b", "X = c", "X = d", "X = a"]);
+    assert_eq!(out[2], vec!["X = a", "X = b", "X = c"]);
+    assert_eq!(out[3], vec!["true"]);
+    assert!(out[4].is_empty());
+    // Three sources reach all four nodes; nothing twice.
+    assert_eq!(out[5].len(), 12);
+    let mut sorted = out[5].clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted.len(), 12);
+}
+
+#[test]
+fn tables_are_sets_and_belong_to_the_program() {
+    // Two paths to one answer give it once; the second query consumes the
+    // table the first computed (the registry lives on the program).
+    let clauses = parse_program(
+        ":- table r/2.
+         e(a, b). e(a, c). e(b, d). e(c, d).
+         r(X, Y) :- e(X, Y).
+         r(X, Z) :- e(X, Y), r(Y, Z).
+         ?- r(a, d).
+         ?- r(a, X).",
+    )
+    .unwrap();
+    let program = Program::compile(&clauses).unwrap();
+    let first: Vec<String> = program
+        .solve(&program.queries()[0])
+        .map(|a| a.to_string())
+        .collect();
+    assert_eq!(first, vec!["true"]);
+    let second: Vec<String> = program
+        .solve(&program.queries()[1])
+        .map(|a| a.to_string())
+        .collect();
+    assert_eq!(second, vec!["X = b", "X = c", "X = d"]);
+    // Answers recorded over both queries: `r(a, d)`, `r(b, d)`, `r(c, d)`
+    // (the first; `r(d, d)` is empty), then `r(b, _)`, `r(c, _)` and the
+    // three of `r(a, _)` — each once.
+    assert_eq!(program.tables.borrow().total, 8);
+}
+
+#[test]
+fn a_tabled_call_is_filtered_by_the_callers_store() {
+    // The table is for the abstracted call; the caller's constraints on the
+    // arguments apply when the ground answers are unified, in either goal
+    // order, so no call is refused for its store.
+    let out = answers(
+        ":- table num/1.
+         num(1). num(2). num(3).
+         same(X, X).
+         ?- { X > 1 }, num(X).
+         ?- num(X), { X > 1 }.
+         ?- { X != 2 }, num(X).
+         ?- same(X, 3), num(X).
+         ?- num(4).",
+    );
+    assert_eq!(out[0], vec!["X = 2", "X = 3"]);
+    assert_eq!(out[1], vec!["X = 2", "X = 3"]);
+    assert_eq!(out[2], vec!["X = 1", "X = 3"]);
+    assert_eq!(out[3], vec!["X = 3"]);
+    assert!(out[4].is_empty());
+}
+
+#[test]
+fn a_table_is_computed_over_the_world_not_the_callers_store() {
+    // The record's counterexample: a tabled body over a world unknown must
+    // not be memoised under a caller's constraint. With the world fixing the
+    // unknown the solution is a fact (entailed, whatever the caller posted,
+    // which here just fails); without it the solution is conditional and
+    // the table refuses it.
+    let out = answers(
+        ":- table old/1, older/1.
+         { age(bob) = 75 }. { age(cy) > 70 }.
+         old(bob) :- { age(bob) > 70 }.
+         older(cy) :- { age(cy) > 60 }.
+         ?- ({ age(bob) < 60 }, old(bob) ; old(bob)).
+         ?- old(bob).
+         ?- older(cy).",
+    );
+    assert_eq!(out[0], vec!["true"]);
+    assert_eq!(out[1], vec!["true"]);
+    assert_eq!(out[2], vec!["true"]);
+    let err = query_error(
+        ":- table old/1.
+         old(bob) :- { age(bob) > 70 }.
+         ?- old(bob).",
+    );
+    assert!(
+        matches!(&err, EvalError::ConstrainedTabledAnswer { predicate, residual, .. }
+            if predicate == "old/1" && residual == "age(bob) > 70"),
+        "{err:?}"
+    );
+    // A disequation decided inside the predicate is fine; one left pending
+    // on a world unknown is a residual.
+    let out = answers(
+        ":- table dd/1.
+         num(1). num(2). num(3).
+         dd(X) :- num(X), { X != 2 }.
+         ?- dd(X).",
+    );
+    assert_eq!(out[0], vec!["X = 1", "X = 3"]);
+}
+
+#[test]
+fn tabled_answers_must_be_finite_ground_terms() {
+    for src in [
+        ":- table n/1. n(X) :- { X > 0 }. ?- n(X).",
+        ":- table t/1. t(X). ?- t(X).",
+        ":- table c/1. c(X) :- { X = f(X) }. ?- c(X).",
+    ] {
+        let err = query_error(src);
+        assert!(
+            matches!(&err, EvalError::NonGroundTabledAnswer { .. }),
+            "{src}: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn sub_searches_are_decided_on_complete_tables_only() {
+    // A negation or a comprehension over a completed table is fine; inside
+    // the predicate's own recursive group the table is incomplete when the
+    // construct would be decided, and the query stops (invariant 5).
+    let out = answers(&format!(
+        ":- table anc/2.
+         {CYCLE}
+         anc(X, Z) :- anc(X, Y), par(Y, Z).
+         anc(X, Y) :- par(X, Y).
+         ?- \\+ anc(d, a).
+         ?- \\+ anc(a, d).
+         ?- {{ N = |<X | anc(a, X)>| }}.
+         ?- (anc(a, d) -> {{ R = yes }} ; {{ R = no }})."
+    ));
+    assert_eq!(out[0], vec!["true"]);
+    assert!(out[1].is_empty());
+    assert_eq!(out[2], vec!["N = 4"]);
+    assert_eq!(out[3], vec!["R = yes"]);
+    let err = query_error(&format!(
+        ":- table s/1.
+         {CYCLE}
+         s(X) :- par(X, Y), \\+ s(Y).
+         ?- s(a)."
+    ));
+    assert!(
+        matches!(&err, EvalError::IncompleteTable { predicate, construct }
+            if predicate == "s/1" && construct == "\\+ s(Y)"),
+        "{err:?}"
+    );
+    let err = query_error(&format!(
+        ":- table cnt/1.
+         {CYCLE}
+         cnt(X) :- par(X, Y), {{ N = |<Z | cnt(Z)>| }}, {{ N > 0 }}.
+         ?- cnt(a)."
+    ));
+    assert!(
+        matches!(&err, EvalError::IncompleteTable { construct, .. } if construct == "<Z | cnt(Z)>"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn mutual_recursion_completes_as_one_group() {
+    let out = answers(
+        ":- table p/1, q/1, even/1, odd/1.
+         p(X) :- q(X).
+         p(1).
+         q(X) :- p(X).
+         q(2).
+         even(zero).
+         even(s(X)) :- odd(X).
+         odd(s(X)) :- even(X).
+         ?- p(X).
+         ?- q(X).
+         ?- even(s(s(zero))).
+         ?- odd(s(s(zero))).
+         ?- odd(s(zero)).",
+    );
+    assert_eq!(out[0], vec!["X = 2", "X = 1"]);
+    assert_eq!(out[1], vec!["X = 2", "X = 1"]);
+    assert_eq!(out[2], vec!["true"]);
+    assert!(out[3].is_empty());
+    assert_eq!(out[4], vec!["true"]);
+}
+
+#[test]
+fn directives_are_checked_at_compile_time() {
+    for (src, needle) in [
+        (":- tabel foo/1.", "unknown directive `tabel`"),
+        (":- table sum/2.", "built-in"),
+        (":- table '<>'/2.", "built-in"),
+        (":- table foo/1.5.", "non-negative integer"),
+    ] {
+        let clauses = parse_program_spanned(src).expect("parses");
+        let err = Program::compile_spanned(&clauses).unwrap_err();
+        assert!(
+            matches!(&err, EvalError::BadDirective { message, span: Some(_) } if message.contains(needle)),
+            "{src}: {err:?}"
+        );
+    }
+    // A table for a predicate with no clauses is empty; a nullary one works.
+    let out = answers(":- table und/1, z/0. z(). ?- und(X). ?- z().");
+    assert!(out[0].is_empty());
+    assert_eq!(out[1], vec!["true"]);
+}
+
+#[test]
+fn a_tabled_call_explains_with_its_recorded_derivation() {
+    // The `tabled` node carries the derivation that first produced the
+    // answer; its cited clauses reproduce the answer (invariant 6).
+    use crate::Resolution::*;
+    let out = explained(
+        ":- table anc/2.
+         par(a, b). par(b, c). par(c, a).
+         anc(X, Z) :- anc(X, Y), par(Y, Z).
+         anc(X, Y) :- par(X, Y).
+         ?- anc(a, c).",
+    );
+    let roots = out[0][0].explanation.as_ref().unwrap();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0].by, Tabled);
+    assert_eq!(roots[0].goal, "anc(a, c)");
+    let rule = &roots[0].subgoals[0];
+    assert_eq!(rule.by, Rule);
+    assert_eq!(rule.line, Some(3));
+    assert_eq!(rule.subgoals[0].by, Tabled);
+    assert_eq!(rule.subgoals[0].goal, "anc(a, b)");
+    assert_eq!(rule.subgoals[1].by, Fact);
+    assert_eq!(rule.subgoals[1].goal, "par(b, c)");
+    let mut cited: Vec<String> = Vec::new();
+    let mut work: Vec<&crate::ProofNode> = roots.iter().collect();
+    while let Some(n) = work.pop() {
+        if let Some(c) = &n.clause {
+            if !cited.contains(c) {
+                cited.push(c.clone());
+            }
+        }
+        work.extend(n.subgoals.iter());
+    }
+    let program = format!(":- table anc/2.\n{}\n?- anc(a, c).", cited.join("\n"));
+    assert_eq!(answers(&program)[0], vec!["true"]);
+}
+
+#[test]
+fn a_long_tabled_chain_runs_on_a_small_stack() {
+    // Evaluations nest in the machine's own stack, not Rust's: a chain of
+    // 400 distinct variant calls (right recursion) and a 400-pass leader
+    // (left recursion) both run on a 1 MiB thread.
+    fn chain(n: usize) -> String {
+        let mut src = String::from(":- table reach/2, anc/2.\n");
+        for i in 0..n {
+            src.push_str(&format!("next(a{i}, a{}).\n", i + 1));
+        }
+        src.push_str("reach(X, Y) :- next(X, Y).\nreach(X, Z) :- next(X, Y), reach(Y, Z).\n");
+        src.push_str("anc(X, Z) :- anc(X, Y), next(Y, Z).\nanc(X, Y) :- next(X, Y).\n");
+        src.push_str(&format!(
+            "?- reach(a0, a{n}).\n?- {{ N = |<Y | reach(a0, Y)>| }}.\n?- anc(a0, a{n}).\n?- {{ N = |<Y | anc(a0, Y)>| }}."
+        ));
+        src
+    }
+    on_small_stack(|| {
+        let out = answers(&chain(400));
+        assert_eq!(out[0], vec!["true"]);
+        assert_eq!(out[1], vec!["N = 400"]);
+        assert_eq!(out[2], vec!["true"]);
+        assert_eq!(out[3], vec!["N = 400"]);
+    });
+}
+
+#[test]
+fn an_interrupt_inside_an_evaluation_cleans_the_tables() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    // Infinitely many ground answers: tabling does not terminate either; the
+    // flag stops it, and the half-built table is forgotten so the next query
+    // starts clean.
+    let clauses = parse_program(
+        ":- table nat/1.
+         nat(zero).
+         nat(s(X)) :- nat(X).
+         ?- nat(X), { 1 = 2 }.
+         ?- nat(s(zero)).",
+    )
+    .unwrap();
+    let program = Program::compile(&clauses).unwrap();
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut sols = program
+        .solve(&program.queries()[0])
+        .with_interrupt(flag.clone());
+    let setter = {
+        let flag = flag.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            flag.store(true, Ordering::Relaxed);
+        })
+    };
+    assert!(sols.next().is_none());
+    assert!(sols.interrupted());
+    setter.join().unwrap();
+    assert!(program.tables.borrow().is_empty());
+    // The next query recomputes from scratch — with an answer bound the
+    // recursion is finite.
+    let out: Vec<String> = program
+        .solve(&program.queries()[1])
+        .map(|a| a.to_string())
+        .collect();
+    assert_eq!(out, vec!["true"]);
+}

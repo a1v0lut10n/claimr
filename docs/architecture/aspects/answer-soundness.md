@@ -9,6 +9,7 @@ decisions:
   - docs/design/2026-11-09-explanations-of-answers.md
   - docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md
   - docs/design/2026-11-09-numbers-numeric-variables-and-attribute-terms.md
+  - docs/design/2026-11-10-tabling-for-recursive-rules.md
 ---
 
 # answer-soundness
@@ -66,13 +67,18 @@ realise the store.
    solution of its body finalized exactly, every instance of its template
    ground, so that nothing is collected the store does not determine —
    only when every variable the construct shares with the clause outside
-   it is ground at that moment; the outcome is then the same in every
-   completion of the derivation, so committing, negating or collecting
-   never produces an answer the program does not entail, under any
-   nesting. A construct reached with a non-ground external variable stops
-   the query with `EvalError::NonGroundCondition`, a non-ground instance
-   with `EvalError::NonGroundSolution`: nothing is decided in either
-   direction. *Test:* `comprehensions_apply_the_groundness_rules`,
+   it is ground at that moment, and — CLM-0027 — only on **complete
+   tables**: a tabled call inside the construct that finds its table still
+   being computed (the predicate's own recursive group) stops the query
+   with `EvalError::IncompleteTable` rather than deciding on a partial
+   answer set; the outcome is then the same in every completion of the
+   derivation, so committing, negating or collecting never produces an
+   answer the program does not entail, under any nesting. A construct
+   reached with a non-ground external variable stops the query with
+   `EvalError::NonGroundCondition`, a non-ground instance with
+   `EvalError::NonGroundSolution`: nothing is decided in either direction.
+   *Test:* `sub_searches_are_decided_on_complete_tables_only`,
+   `comprehensions_apply_the_groundness_rules`,
    `a_non_ground_external_variable_is_an_error_not_a_decision` (the
    classic wrong positive `s :- \+ r(X)` is an error, not `true`),
    `a_condition_is_finalized_before_the_commit`,
@@ -106,3 +112,26 @@ realise the store.
    `first_argument_indexing_preserves_clause_order_and_answers` (a
    determined variable indexes as its number),
    `attribute_terms_and_congruence`.
+8. **A table is a function of the program.** The answers a tabled
+   predicate (CLM-0027,
+   `2026-11-10-tabling-for-recursive-rules.md`) is answered from depend on
+   the program's clauses and constraint facts and on nothing else: each
+   table is computed over the world store alone, never the calling query's,
+   and holds only solutions that are finite ground terms and hold
+   unconditionally — a solution carrying an unbound variable, a cycle, or a
+   constraint on a world unknown beyond what the world entails stops the
+   query (`EvalError::NonGroundTabledAnswer`,
+   `EvalError::ConstrainedTabledAnswer`) instead of being recorded. A table
+   is complete before any construct decides on it (invariant 5), and a
+   consumption is unification of the call with a recorded answer in the
+   caller's store, so invariants 1 and 2 hold for it as for a fact. A query
+   that stops inside a table's computation forgets every incomplete table.
+   The visible consequence, each answer once, is the set semantics the
+   record chose. *Test:*
+   `tabled_transitive_closure_terminates_on_a_cycle_in_either_direction`,
+   `tables_are_sets_and_belong_to_the_program`,
+   `a_tabled_call_is_filtered_by_the_callers_store`,
+   `a_table_is_computed_over_the_world_not_the_callers_store`,
+   `tabled_answers_must_be_finite_ground_terms`,
+   `an_interrupt_inside_an_evaluation_cleans_the_tables`, and the golden
+   run `examples/tabling.claimr`.

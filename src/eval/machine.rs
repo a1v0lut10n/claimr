@@ -34,6 +34,7 @@ use super::compile::{
 use super::error::EvalError;
 use super::store::{Addr, Cell, Mark, Store, TypeKind};
 use super::symbol::LIST;
+use super::table::TableState;
 use crate::ast::RelOp;
 
 /// An instantiated runtime goal.
@@ -67,7 +68,13 @@ enum Goal<'p> {
     /// condition's solution is one the answer stage would accept), drops
     /// the choice points above `height` — the condition's alternatives and
     /// the else branch — and continues with `then`.
-    Commit { height: usize, then: Then<'p> },
+    Commit {
+        height: usize,
+        then: Then<'p>,
+        /// The construct as written (CLM-0027: named when a table under
+        /// evaluation is consumed inside it).
+        text: &'p str,
+    },
     /// CLM-0025: a solution of a comprehension's body has been reached.
     /// Reaching it finalizes the store, copies the instance of the template
     /// into the accumulator (an error if it is not ground) and fails, so
@@ -79,6 +86,16 @@ enum Goal<'p> {
         construct: &'p str,
         acc: Rc<RefCell<Vec<TTerm>>>,
     },
+    /// CLM-0027: an already-built call to resolve against its clauses — the
+    /// abstract call of a table evaluation, which must not consult the
+    /// table it is computing.
+    Resolve { call: Addr, under: Under },
+    /// CLM-0027: a solution of a table evaluation has been reached.
+    /// Reaching it finalizes the store, records the call's instance as an
+    /// answer of the table (an error if it is not a finite ground term) and
+    /// fails, so the search moves to the next solution; the finishing
+    /// choice point below decides completion.
+    TableOne { key: Rc<TTerm>, call: Addr },
 }
 
 /// What follows a committed condition (CLM-0022).
@@ -163,6 +180,46 @@ enum Retry<'p> {
         under: Under,
         text: &'p str,
     },
+    /// CLM-0027: the clauses of a table evaluation are exhausted — decide
+    /// completion (another pass for a looping leader), swap the caller's
+    /// store back and consume the table for the call that started it.
+    TableFinish {
+        key: Rc<TTerm>,
+        rest: Goals<'p>,
+        call: Addr,
+        under: Under,
+    },
+    /// CLM-0027: the next answer of a table for a call.
+    Answers {
+        key: Rc<TTerm>,
+        next: usize,
+        rest: Goals<'p>,
+        call: Addr,
+        under: Under,
+    },
+}
+
+/// CLM-0027: a table evaluation in progress. The machine runs it on a clone
+/// of the program's world store, the caller's store parked here; everything
+/// the evaluation pushes sits above its `TableFinish` choice point and is
+/// gone before the stores are swapped back.
+struct EvalFrame {
+    parked: Store,
+    /// The abstract call, built on the evaluation's store before its mark,
+    /// and its variables (the key's, in index order).
+    abstract_call: Addr,
+    abstract_vars: Vec<Addr>,
+    /// The lowest frame this evaluation's answers depend on — its own depth
+    /// when none: a recursive variant call to a lower frame lowers it.
+    leader_min: usize,
+    /// A recursive variant call consumed this frame's table during the pass.
+    looping: bool,
+    /// `Tables::total` when the pass started.
+    total_at_start: usize,
+    /// Tables whose evaluation returned incomplete depending on this one.
+    dependents: Vec<Rc<TTerm>>,
+    /// The proof arena's length when the evaluation started.
+    proof_start: usize,
 }
 
 /// One record of the proof arena (CLM-0023).
@@ -200,6 +257,12 @@ enum ProofKind<'p> {
         text: &'p str,
         into: Addr,
     },
+    /// A tabled call (CLM-0027) answered by answer `idx` of its table.
+    Tabled {
+        key: Rc<TTerm>,
+        idx: usize,
+        call: Addr,
+    },
 }
 
 /// The solutions of one query, produced lazily; each `next()` resumes the
@@ -221,15 +284,15 @@ pub struct Solutions<'p> {
     steps: u64,
     /// The proof arena (CLM-0023), present when explanations were asked for.
     proof: Option<Vec<ProofRec<'p>>>,
+    /// CLM-0027: the table evaluations in progress, innermost last.
+    eval_stack: Vec<EvalFrame>,
 }
 
 impl<'p> Solutions<'p> {
     pub(crate) fn new(program: &'p Program, query: &'p Query) -> Self {
-        let mut store = Store::with_symbols(program.symbols.clone());
-        // Constraint facts first (validated satisfiable at compile time).
-        let initial_ok = program.post_initial(&mut store);
-        debug_assert!(initial_ok, "initial store validated at compile time");
-        store.set_baseline();
+        // The world store — constraint facts posted, baseline set — is built
+        // once at compile time (validated satisfiable there).
+        let mut store = program.world.clone();
         // The query's variables are its frame (allocated in order of first
         // occurrence, so definitions post in source order); its goals are
         // pending on it like a clause body's, so the control constructs of
@@ -254,12 +317,13 @@ impl<'p> Solutions<'p> {
             choice_points: Vec::new(),
             query_vars,
             started: false,
-            exhausted: !initial_ok,
+            exhausted: false,
             error: None,
             interrupt: None,
             interrupted: false,
             steps: 0,
             proof: None,
+            eval_stack: Vec::new(),
         }
     }
 
@@ -443,9 +507,340 @@ impl<'p> Solutions<'p> {
                     self.goals = rest;
                     return true;
                 }
+                Retry::TableFinish {
+                    key,
+                    rest,
+                    call,
+                    under,
+                } => {
+                    if self.finish_evaluation(key, call, rest, under) {
+                        return true;
+                    }
+                    if self.store.error.is_some() {
+                        return false;
+                    }
+                }
+                Retry::Answers {
+                    key,
+                    next,
+                    rest,
+                    call,
+                    under,
+                } => {
+                    if self.consume(key, next, call, rest, under) {
+                        return true;
+                    }
+                    if self.store.error.is_some() {
+                        return false;
+                    }
+                }
             }
         }
         false
+    }
+
+    // --- tabling (CLM-0027) ------------------------------------------------
+
+    /// The names the printer may use: the query's variables, except inside
+    /// a table evaluation, whose store is not the query's.
+    fn names(&self) -> &[(String, Addr)] {
+        if self.eval_stack.is_empty() {
+            &self.query_vars
+        } else {
+            &[]
+        }
+    }
+
+    fn render_one(&self, a: Addr) -> String {
+        render_terms(&self.store.symbols, &self.store, self.names(), &[a]).remove(0)
+    }
+
+    fn pred_name(&self, key: PredKey) -> String {
+        format!(
+            "{}/{}",
+            crate::ast::display_name(self.store.symbols.name(key.0)),
+            key.1
+        )
+    }
+
+    /// A call to a tabled predicate: consume its table, or compute it first.
+    fn tabled_call(&mut self, call: Addr, rest: Goals<'p>, under: Under) -> bool {
+        let Some(vkey) = self.store.variant_key(call) else {
+            self.store.error = Some(EvalError::CyclicTabledCall {
+                call: self.render_one(call),
+            });
+            return false;
+        };
+        let vkey = Rc::new(vkey);
+        let state = self.program.tables.borrow().state(&vkey);
+        match state {
+            Some(TableState::Complete) => self.consume(vkey, 0, call, rest, under),
+            Some(TableState::Evaluating(d)) => {
+                // A recursive variant call: every frame above `d` now depends
+                // on `d`, which must iterate; the call consumes what is there.
+                let top = self.eval_stack.len();
+                for f in &mut self.eval_stack[d + 1..top] {
+                    f.leader_min = f.leader_min.min(d);
+                }
+                self.eval_stack[d].looping = true;
+                self.consume(vkey, 0, call, rest, under)
+            }
+            Some(TableState::Incomplete) | None => self.evaluate(vkey, call, rest, under),
+        }
+    }
+
+    /// Start evaluating the table of `vkey`: park the caller's store, run on
+    /// a clone of the world, resolve the abstract call against the clauses
+    /// with a `TableOne` after it and a `TableFinish` choice point below.
+    fn evaluate(&mut self, vkey: Rc<TTerm>, call: Addr, rest: Goals<'p>, under: Under) -> bool {
+        let depth = self.eval_stack.len();
+        let total = {
+            let mut tables = self.program.tables.borrow_mut();
+            tables.begin(&vkey, depth);
+            tables.total
+        };
+        let world = self.program.world.clone();
+        let parked = std::mem::replace(&mut self.store, world);
+        let mut vars: Vec<Option<Addr>> = Vec::new();
+        let built = build_with(&mut self.store, &vkey, &mut |s, i| {
+            let i = i as usize;
+            if vars.len() <= i {
+                vars.resize(i + 1, None);
+            }
+            match vars[i] {
+                Some(a) => a,
+                None => {
+                    let a = s.new_var();
+                    vars[i] = Some(a);
+                    a
+                }
+            }
+        });
+        let Some(abstract_call) = built else {
+            self.store = parked;
+            self.store.error = Some(EvalError::InternalInvariant {
+                what: "a table key did not instantiate".to_string(),
+            });
+            return false;
+        };
+        let abstract_vars: Vec<Addr> = vars.into_iter().flatten().collect();
+        self.eval_stack.push(EvalFrame {
+            parked,
+            abstract_call,
+            abstract_vars,
+            leader_min: depth,
+            looping: false,
+            total_at_start: total,
+            dependents: Vec::new(),
+            proof_start: self.proof_len(),
+        });
+        self.start_pass(vkey, call, rest, under, abstract_call);
+        true
+    }
+
+    fn start_pass(
+        &mut self,
+        vkey: Rc<TTerm>,
+        call: Addr,
+        rest: Goals<'p>,
+        under: Under,
+        abstract_call: Addr,
+    ) {
+        let mark = self.store.mark();
+        self.push_choice_point(
+            Retry::TableFinish {
+                key: vkey.clone(),
+                rest,
+                call,
+                under,
+            },
+            mark,
+        );
+        // The evaluation's own goal list: it never empties, since `TableOne`
+        // always fails (or stops the query).
+        self.goals = cons(
+            Goal::Resolve {
+                call: abstract_call,
+                under: None,
+            },
+            cons(
+                Goal::TableOne {
+                    key: vkey,
+                    call: abstract_call,
+                },
+                None,
+            ),
+        );
+    }
+
+    /// `TableFinish`: the evaluation's clauses are exhausted (the store is
+    /// undone to the pass's start). A looping leader whose pass added an
+    /// answer anywhere runs another pass; otherwise the frame is popped, the
+    /// table completes (or is left incomplete for its leader), the caller's
+    /// store comes back and the caller consumes the table.
+    fn finish_evaluation(
+        &mut self,
+        key: Rc<TTerm>,
+        call: Addr,
+        rest: Goals<'p>,
+        under: Under,
+    ) -> bool {
+        let Some(frame) = self.eval_stack.pop() else {
+            self.store.error = Some(EvalError::InternalInvariant {
+                what: "a table evaluation finished with no frame".to_string(),
+            });
+            return false;
+        };
+        let depth = self.eval_stack.len();
+        let total = self.program.tables.borrow().total;
+        if frame.looping && frame.leader_min == depth && total > frame.total_at_start {
+            let abstract_call = frame.abstract_call;
+            self.eval_stack.push(EvalFrame {
+                looping: false,
+                total_at_start: total,
+                ..frame
+            });
+            self.start_pass(key, call, rest, under, abstract_call);
+            return true;
+        }
+        let world = std::mem::replace(&mut self.store, frame.parked);
+        drop(world);
+        {
+            let mut tables = self.program.tables.borrow_mut();
+            if frame.leader_min < depth {
+                tables.set_state(&key, TableState::Incomplete);
+                let leader = &mut self.eval_stack[frame.leader_min];
+                leader.dependents.push(key.clone());
+                leader.dependents.extend(frame.dependents);
+            } else {
+                tables.set_state(&key, TableState::Complete);
+                for d in &frame.dependents {
+                    tables.set_state(d, TableState::Complete);
+                }
+            }
+        }
+        self.consume(key, 0, call, rest, under)
+    }
+
+    /// Unify `call` with the answers of its table from `from` on, as with a
+    /// list of facts: a choice point for the following answers (always one
+    /// while the table may still grow). A table that is not complete may
+    /// not be consumed inside a condition or a comprehension body.
+    fn consume(
+        &mut self,
+        key: Rc<TTerm>,
+        from: usize,
+        call: Addr,
+        rest: Goals<'p>,
+        under: Under,
+    ) -> bool {
+        let (len, complete) = {
+            let tables = self.program.tables.borrow();
+            (
+                tables.len(&key),
+                tables.state(&key) == Some(TableState::Complete),
+            )
+        };
+        if !complete {
+            if let Some(construct) = enclosing_sub_search(&rest) {
+                let predicate = self.pred_name(pred_key(&self.store, call));
+                self.store.error = Some(EvalError::IncompleteTable {
+                    predicate,
+                    construct,
+                });
+                return false;
+            }
+        }
+        for i in from..len {
+            let answer = self
+                .program
+                .tables
+                .borrow()
+                .answer(&key, i)
+                .map(|(a, _)| a.clone());
+            let Some(answer) = answer else {
+                break;
+            };
+            let mark = self.store.mark();
+            // Ground: no clause variables to supply.
+            let built = build_with(&mut self.store, &answer, &mut |s, _| s.new_var());
+            let Some(built) = built else {
+                self.store.undo_to(&mark);
+                continue;
+            };
+            if !self.store.post_eq(call, built) {
+                self.store.undo_to(&mark);
+                continue;
+            }
+            if i + 1 < len || !complete {
+                self.push_choice_point(
+                    Retry::Answers {
+                        key: key.clone(),
+                        next: i + 1,
+                        rest: rest.clone(),
+                        call,
+                        under,
+                    },
+                    mark,
+                );
+            }
+            self.record(under, ProofKind::Tabled { key, idx: i, call });
+            self.goals = rest;
+            return true;
+        }
+        false
+    }
+
+    /// CLM-0027: the constraints a solution of the current evaluation holds
+    /// under, beyond the world, projected onto the abstract call — rendered,
+    /// or `None` when it is a fact. The store's cheap test answers most
+    /// solutions; otherwise the answer printer's projection decides exactly.
+    fn residual_of_solution(&self) -> Option<String> {
+        if !self.store.has_residual() {
+            return None;
+        }
+        let frame = self.eval_stack.last()?;
+        let names: Vec<(String, Addr)> = frame
+            .abstract_vars
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (format!("_T{i}"), *a))
+            .collect();
+        let (solution, _) = render_answer(&self.store.symbols, &self.store, &names, &[]);
+        if solution.disequations.is_empty() && solution.constraints.is_empty() {
+            return None;
+        }
+        // What the world alone says about the same unknowns is not residual:
+        // a looked-up world fact prints with the solution as it would with
+        // an answer.
+        let mut world = self.program.world.clone();
+        world.touch_like(&self.store);
+        let (base, _) = render_answer(&world.symbols, &world, &[], &[]);
+        let residual: Vec<String> = solution
+            .disequations
+            .iter()
+            .chain(solution.constraints.iter())
+            .filter(|c| !base.disequations.contains(c) && !base.constraints.contains(c))
+            .cloned()
+            .collect();
+        if residual.is_empty() {
+            None
+        } else {
+            Some(residual.join(", "))
+        }
+    }
+
+    /// A query stopped inside an evaluation: the outermost parked store is
+    /// the query's, and every table not complete is forgotten.
+    fn abandon_evaluations(&mut self) {
+        if self.eval_stack.is_empty() {
+            return;
+        }
+        let outer = self.eval_stack.drain(..).next().map(|f| f.parked);
+        if let Some(store) = outer {
+            self.store = store;
+        }
+        self.program.tables.borrow_mut().abandon();
     }
 
     /// CLM-0022: the groundness rule. A condition's external variables must
@@ -522,6 +917,7 @@ impl<'p> Solutions<'p> {
                         goals: then,
                         under,
                     },
+                    text: check.construct.as_str(),
                 };
                 self.goals = prepend(cond, frame, node, cons(commit, rest));
             }
@@ -541,6 +937,7 @@ impl<'p> Solutions<'p> {
                 let commit = Goal::Commit {
                     height,
                     then: Then::Fail,
+                    text: check.construct.as_str(),
                 };
                 // A succeeding condition fails the negation, so its records
                 // never survive; they go under the clause's record meanwhile.
@@ -605,7 +1002,7 @@ impl<'p> Solutions<'p> {
             let rest = node.next.clone();
             // A pending body goal is built now, from its clause's frame.
             let (goal, under) = match &node.goal {
-                Goal::Commit { height, then } => {
+                Goal::Commit { height, then, .. } => {
                     if !self.store.finalize() {
                         // Not a solution after all: the condition's next
                         // alternative, if any.
@@ -666,13 +1063,7 @@ impl<'p> Solutions<'p> {
                             continue;
                         }
                         None => {
-                            let instance = render_terms(
-                                &self.store.symbols,
-                                &self.store,
-                                &self.query_vars,
-                                &[inst],
-                            )
-                            .remove(0);
+                            let instance = self.render_one(inst);
                             self.store.error = Some(EvalError::NonGroundSolution {
                                 construct: construct.to_string(),
                                 instance,
@@ -680,6 +1071,63 @@ impl<'p> Solutions<'p> {
                             return false;
                         }
                     }
+                }
+                Goal::TableOne { key, call } => {
+                    if !self.store.finalize() {
+                        if self.store.error.is_some()
+                            || self.store.nonlinear.is_some()
+                            || !self.backtrack()
+                        {
+                            return false;
+                        }
+                        continue;
+                    }
+                    let (key, call) = (key.clone(), *call);
+                    match self.store.snapshot(call) {
+                        Some(answer) => {
+                            if let Some(residual) = self.residual_of_solution() {
+                                let predicate = self.pred_name(pred_key(&self.store, call));
+                                let instance = self.render_one(call);
+                                self.store.error = Some(EvalError::ConstrainedTabledAnswer {
+                                    predicate,
+                                    instance,
+                                    residual,
+                                });
+                                return false;
+                            }
+                            let proof = if self.proof.is_some() {
+                                let start = self.eval_stack.last().map_or(0, |f| f.proof_start);
+                                Some(self.render_proof(start).1)
+                            } else {
+                                None
+                            };
+                            self.program.tables.borrow_mut().add(&key, answer, proof);
+                            if !self.backtrack() {
+                                return false;
+                            }
+                            continue;
+                        }
+                        None => {
+                            let predicate = self.pred_name(pred_key(&self.store, call));
+                            let instance = self.render_one(call);
+                            self.store.error = Some(EvalError::NonGroundTabledAnswer {
+                                predicate,
+                                instance,
+                            });
+                            return false;
+                        }
+                    }
+                }
+                Goal::Resolve { call, under } => {
+                    let (call, under) = (*call, *under);
+                    let key = pred_key(&self.store, call);
+                    let first = first_arg_key(&self.store, call);
+                    let candidates = self.program.candidates(&key, first.as_ref());
+                    let ok = self.try_clauses(key, candidates, 0, call, rest, under);
+                    if !ok && (self.store.error.is_some() || !self.backtrack()) {
+                        return false;
+                    }
+                    continue;
                 }
                 Goal::Pending {
                     frame,
@@ -721,6 +1169,9 @@ impl<'p> Solutions<'p> {
                                 self.record(under, ProofKind::Builtin { call });
                             }
                             ok
+                        }
+                        None if self.program.tabled.contains(&key) => {
+                            self.tabled_call(call, rest, under)
                         }
                         None => {
                             let first = first_arg_key(&self.store, call);
@@ -792,35 +1243,52 @@ impl<'p> Solutions<'p> {
     /// the tree is built bottom-up (children have higher ids than their
     /// parent, so a reverse pass sees every child before its parent).
     fn answer(&self) -> Answer {
-        let Some(arena) = &self.proof else {
+        if self.proof.is_none() {
             return render_answer(&self.store.symbols, &self.store, &self.query_vars, &[]).0;
+        }
+        let (mut answer, roots) = self.render_proof(0);
+        answer.explanation = Some(roots);
+        answer
+    }
+
+    /// Render the arena's records from `from` on as proof trees (a record
+    /// whose parent is below `from` is a root), with the answer of the
+    /// current store. CLM-0027: a table evaluation renders its slice with
+    /// its own store before the records are discarded.
+    fn render_proof(&self, from: usize) -> (Answer, Vec<ProofNode>) {
+        let arena: &[ProofRec<'p>] = match &self.proof {
+            Some(a) => &a[from..],
+            None => &[],
         };
         let mut addrs = Vec::new();
         for rec in arena {
-            match rec.kind {
-                ProofKind::Clause { call, .. } | ProofKind::Builtin { call } => addrs.push(call),
+            match &rec.kind {
+                ProofKind::Clause { call, .. }
+                | ProofKind::Builtin { call }
+                | ProofKind::Tabled { call, .. } => addrs.push(*call),
                 ProofKind::Constraint { a, b, .. } => {
-                    addrs.push(a);
-                    addrs.push(b);
+                    addrs.push(*a);
+                    addrs.push(*b);
                 }
-                ProofKind::Collected { into, .. } => addrs.push(into),
+                ProofKind::Collected { into, .. } => addrs.push(*into),
                 ProofKind::Committed { .. } | ProofKind::NoSolution { .. } => {}
             }
         }
-        let (mut answer, rendered) =
-            render_answer(&self.store.symbols, &self.store, &self.query_vars, &addrs);
+        let (answer, rendered) =
+            render_answer(&self.store.symbols, &self.store, self.names(), &addrs);
         let mut rendered = rendered.into_iter();
         // The clause each record cites: its own for a clause, the enclosing
         // clause's for a constraint goal.
         let cited = |i: usize| -> Option<(Option<crate::Span>, &str)> {
-            let ProofKind::Clause { key, idx, .. } = &arena[i].kind else {
+            let ProofKind::Clause { key, idx, .. } = &arena[i.checked_sub(from)?].kind else {
                 return None;
             };
             let c = &self.program.clauses(key)[*idx];
             Some((c.span, c.text.as_str()))
         };
         let mut nodes: Vec<ProofNode> = Vec::with_capacity(arena.len());
-        for (i, rec) in arena.iter().enumerate() {
+        for rec in arena.iter() {
+            let mut subgoals = Vec::new();
             let (goal, by, cite, clause) = match &rec.kind {
                 ProofKind::Clause { key, idx, .. } => {
                     let c = &self.program.clauses(key)[*idx];
@@ -868,15 +1336,26 @@ impl<'p> Solutions<'p> {
                         None,
                     )
                 }
+                ProofKind::Tabled { key, idx, .. } => {
+                    // The derivation that first produced the answer.
+                    if let Some((_, Some(proof))) = self.program.tables.borrow().answer(key, *idx) {
+                        subgoals = proof.clone();
+                    }
+                    (
+                        rendered.next().unwrap_or_default(),
+                        Resolution::Tabled,
+                        None,
+                        None,
+                    )
+                }
             };
-            let _ = i;
             nodes.push(ProofNode {
                 goal,
                 by,
                 line: cite.map(|s| s.line),
                 column: cite.map(|s| s.column),
                 clause,
-                subgoals: Vec::new(),
+                subgoals,
             });
         }
         // Attach children to parents, last to first, so each node is complete
@@ -886,17 +1365,16 @@ impl<'p> Solutions<'p> {
         for i in (0..arena.len()).rev() {
             let node = slots[i].take().expect("each node moves once");
             match arena[i].parent {
-                Some(p) => slots[p]
+                Some(p) if p >= from => slots[p - from]
                     .as_mut()
                     .expect("parents precede children")
                     .subgoals
                     .insert(0, node),
-                None => roots.push(node),
+                _ => roots.push(node),
             }
         }
         roots.reverse();
-        answer.explanation = Some(roots);
-        answer
+        (answer, roots)
     }
 
     /// Take the store's runtime error, rendering a non-linear residue with
@@ -906,7 +1384,7 @@ impl<'p> Solutions<'p> {
             return Some(e);
         }
         let (a, b, op) = self.store.nonlinear.take()?;
-        let rendered = render_terms(&self.store.symbols, &self.store, &self.query_vars, &[a, b]);
+        let rendered = render_terms(&self.store.symbols, &self.store, self.names(), &[a, b]);
         Some(EvalError::NonLinear {
             constraint: format!("{} {op} {}", rendered[0], rendered[1]),
         })
@@ -923,6 +1401,7 @@ impl Iterator for Solutions<'_> {
         if self.started && !self.backtrack() {
             self.exhausted = true;
             self.error = self.take_error();
+            self.abandon_evaluations();
             return None;
         }
         self.started = true;
@@ -931,6 +1410,7 @@ impl Iterator for Solutions<'_> {
         } else {
             self.exhausted = true;
             self.error = self.take_error();
+            self.abandon_evaluations();
             None
         }
     }
@@ -963,6 +1443,23 @@ fn instantiate_goal(
             unreachable!("control constructs are opened by the machine, not instantiated")
         }
     })
+}
+
+/// CLM-0027: the construct — a condition or a comprehension body — that the
+/// goals still to run belong to, if any: a `Commit` or `CollectOne` later in
+/// the list means the current goal is inside it. The list of a table
+/// evaluation has an empty tail, so nothing outside the evaluation is seen.
+fn enclosing_sub_search(rest: &Goals<'_>) -> Option<String> {
+    let mut cur = rest.clone();
+    while let Some(node) = cur {
+        match &node.goal {
+            Goal::Commit { text, .. } => return Some(text.to_string()),
+            Goal::CollectOne { construct, .. } => return Some(construct.to_string()),
+            _ => {}
+        }
+        cur = node.next.clone();
+    }
+    None
 }
 
 /// The index key of a call's first argument (CLM-0021): `None` when the

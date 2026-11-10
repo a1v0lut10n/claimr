@@ -175,7 +175,7 @@ enum Waker {
     Sum(usize),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Undo {
     Cell(Addr, Cell),
     DifPending(DifId),
@@ -214,8 +214,9 @@ pub struct Mark {
     simplex: solver::Mark,
 }
 
-/// The store.
-#[derive(Debug, Default)]
+/// The store. `Clone` since CLM-0027: a table evaluation runs on a copy of
+/// the program's world store.
+#[derive(Debug, Default, Clone)]
 pub struct Store {
     /// The program's symbol table, carried by the store since CLM-0017 so
     /// that `atom_chars` can intern the atom it spells at wake time.
@@ -1802,6 +1803,93 @@ impl Store {
                             let sv = *self.numvar.get(&d)?;
                             let c = self.simplex.is_determined(sv)?;
                             out.push(TTerm::Number(c));
+                        }
+                        Cell::Const(c) => out.push(TTerm::Const(c)),
+                        Cell::Num(n) => out.push(TTerm::Number(n)),
+                        Cell::Struct(_, args) => {
+                            if !on_path.insert(d) {
+                                return None;
+                            }
+                            work.push(Step::Build(d));
+                            work.extend(args.iter().rev().map(|a| Step::Enter(*a)));
+                        }
+                    }
+                }
+                Step::Build(d) => {
+                    on_path.remove(&d);
+                    let Cell::Struct(f, args) = self.heap[d].clone() else {
+                        return None;
+                    };
+                    let kids = out.split_off(out.len() - args.len());
+                    out.push(TTerm::Compound(f, kids));
+                }
+            }
+        }
+        out.pop()
+    }
+
+    /// CLM-0027: may this store hold a constraint beyond its world that a
+    /// ground answer would drop? A conservative, cheap test on a store built
+    /// from the world: any pending tree or numeric disequation, delayed list
+    /// or type relation or sum, any attribute term created or looked up, or
+    /// any numeric variable still undetermined. False means the solution is
+    /// a fact relative to the world; true sends the caller to the exact test
+    /// (the answer's projection).
+    pub(crate) fn has_residual(&self) -> bool {
+        !self.undetermined.is_empty()
+            || self.attrs.len() > self.baseline_attrs
+            || !self.attr_touched.is_empty()
+            || self.difs.iter().any(|d| d.pending)
+            || !self.pending_numdifs.is_empty()
+            || !self.pending_products.is_empty()
+            || self.lengths.iter().any(|l| l.pending)
+            || self.concats.iter().any(|c| c.pending)
+            || self.types.iter().any(|t| t.pending)
+            || self.chars.iter().any(|c| c.pending)
+            || self.sums.iter().any(|s| s.pending)
+    }
+
+    /// CLM-0027: make visible in this store (a clone of the world) the
+    /// attribute entries that `other`, a store built from the same world,
+    /// has created or looked up — by key, so only ground attribute terms
+    /// match — so that the two stores project onto the same unknowns.
+    pub(crate) fn touch_like(&mut self, other: &Store) {
+        for (id, entry) in other.attrs.iter().enumerate() {
+            if !other.attr_visible(id) {
+                continue;
+            }
+            if let Some(sv) = self.attr_index.get(&entry.key).copied() {
+                if let Some(mine) = self.attrs.iter().position(|e| e.svar == sv) {
+                    self.attr_touched.insert(mine);
+                }
+            }
+        }
+    }
+
+    /// CLM-0027: the *variant* of the call at `a` — the term as a template
+    /// with every unbound variable (numeric or not: a caller's constraints on
+    /// it are applied when the answers are consumed) replaced by a template
+    /// variable numbered in order of first occurrence, so two calls that are
+    /// renamings of each other give the same key. `None` on a cycle.
+    /// Iterative.
+    pub(crate) fn variant_key(&self, a: Addr) -> Option<TTerm> {
+        enum Step {
+            Enter(Addr),
+            Build(Addr),
+        }
+        let mut vars: HashMap<Addr, u32> = HashMap::new();
+        let mut on_path: HashSet<Addr> = HashSet::new();
+        let mut work = vec![Step::Enter(a)];
+        let mut out: Vec<TTerm> = Vec::new();
+        while let Some(step) = work.pop() {
+            match step {
+                Step::Enter(x) => {
+                    let d = self.deref(x);
+                    match self.heap[d].clone() {
+                        Cell::Var(_) => {
+                            let n = vars.len() as u32;
+                            let i = *vars.entry(d).or_insert(n);
+                            out.push(TTerm::Var(i));
                         }
                         Cell::Const(c) => out.push(TTerm::Const(c)),
                         Cell::Num(n) => out.push(TTerm::Number(n)),
