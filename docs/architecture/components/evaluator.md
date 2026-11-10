@@ -40,9 +40,12 @@ answers in solved form. Public surface (re-exported from `claimr`):
   and re-checked when any is bound or determined; each check records the
   would-bind pairs, which give the disequation's **reduced form** for
   printing (`Z != W` for `f(Z) != f(W)`). `post_eq` / `post_dif` are
-  transactional. Since CLM-0017 the store carries a clone of the program's
+  transactional. Since CLM-0017 the store carries the program's
   **symbol table** (`Store::with_symbols`), so the atom that `atom_chars`
-  spells can be interned at wake time; and it holds the delayed built-in
+  spells can be interned at wake time — one table behind an `Rc<RefCell>`,
+  shared by the program, the world store and every store cloned from it
+  (CLM-0028: a per-store copy let an evaluation's symbol mean another name
+  in the caller's store, and cost a copy of every atom per evaluation); and it holds the delayed built-in
   constraints: **type relations** `atom(X)` / `list(X)` (pending on an
   unbound variable, decided on binding, failing on a numeric variable or
   on two kinds for one variable) and **`atom_chars(A, L)`** (decided when
@@ -223,11 +226,16 @@ answers in solved form. Public surface (re-exported from `claimr`):
   the evaluation's own constructs are seen): `EvalError::IncompleteTable`.
   A query that stops inside an evaluation (error, interrupt) restores the
   outermost parked store and forgets every non-complete table. Evaluations
-  nest in the machine's own stack, never Rust's. A right-recursive closure
-  over a chain of *n* nodes builds *n* tables holding *n²/2* answers in
-  all, and a left-recursive one runs *n* passes over a growing table: both
-  quadratic by nature of the strategy; semi-naive consumption (new answers
-  only in the recursive call) is the known improvement, not done.
+  nest in the machine's own stack, never Rust's. Cost (CLM-0028 measured):
+  a left-recursive closure over a chain or a cycle completes in three
+  passes — the consumption choice point reads the answer count at retry
+  time, so the second pass chains through every answer as it is recorded
+  and the third confirms — and is linear; a right-recursive closure called
+  with its second argument open builds *n* tables holding *n²/2* answers,
+  the size of its output, and is quadratic for that reason alone; the same
+  closure called ground is linear in the number of evaluations, each paying
+  a clone of the world store. Semi-naive consumption would save a constant
+  factor on the confirming pass and is not pursued.
   `Solutions::with_interrupt(Arc<AtomicBool>)` installs a flag polled every
   256 steps (the REPL's Ctrl-C); `Solutions::interrupted()` reports a stop
   through it; `Solutions::may_continue()` tells a caller whether asking for

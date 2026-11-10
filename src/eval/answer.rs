@@ -6,6 +6,7 @@
 //! which is the finite representation of a rational tree. The printer is
 //! iterative so deep terms cannot overflow the stack.
 
+use std::cell::Ref;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
@@ -174,7 +175,7 @@ enum Item {
 }
 
 struct Printer<'a> {
-    symbols: &'a Symbols,
+    symbols: Ref<'a, Symbols>,
     store: &'a Store,
     /// Display names for unbound variables and for cyclic nodes.
     names: HashMap<Addr, String>,
@@ -186,9 +187,9 @@ struct Printer<'a> {
 }
 
 impl<'a> Printer<'a> {
-    fn new(symbols: &'a Symbols, store: &'a Store) -> Self {
+    fn new(store: &'a Store) -> Self {
         Printer {
-            symbols,
+            symbols: store.symbols.borrow(),
             store,
             names: HashMap::new(),
             cyclic: HashSet::new(),
@@ -368,12 +369,11 @@ impl<'a> Printer<'a> {
 /// goal instances — with the same printer, so internal names agree between
 /// the answer and its explanation.
 pub(crate) fn render_answer(
-    symbols: &Symbols,
     store: &Store,
     query_vars: &[(String, Addr)],
     extra: &[Addr],
 ) -> (Answer, Vec<String>) {
-    let mut p = Printer::new(symbols, store);
+    let mut p = Printer::new(store);
     let mut equations = Vec::new();
 
     // Projection of tree disequations (design D7): one belongs to the answer
@@ -817,12 +817,11 @@ fn reachable_vars(store: &Store, roots: impl IntoIterator<Item = Addr>) -> HashS
 
 /// Render terms with the query's variable names (for runtime error messages).
 pub(crate) fn render_terms(
-    symbols: &Symbols,
     store: &Store,
     query_vars: &[(String, Addr)],
     addrs: &[Addr],
 ) -> Vec<String> {
-    let mut p = Printer::new(symbols, store);
+    let mut p = Printer::new(store);
     for (name, addr) in query_vars {
         let d = store.deref(*addr);
         if matches!(store.cell(d), Cell::Var(_)) {

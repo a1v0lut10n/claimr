@@ -2066,3 +2066,39 @@ fn an_interrupt_inside_an_evaluation_cleans_the_tables() {
         .collect();
     assert_eq!(out, vec!["true"]);
 }
+
+/// CLM-0028: the program and every store it runs share one symbol table,
+/// so an atom interned at run time inside a table evaluation (by
+/// `atom_chars`) means the same name in the caller's store. Before, the
+/// evaluation's store was a clone of the world's table: the first query
+/// panicked on an unknown symbol index and the second answered `A = ab`.
+#[test]
+fn a_symbol_interned_in_a_table_evaluation_is_known_to_the_caller() {
+    let out = answers(
+        ":- table mk/1.
+         mk(A) :- atom_chars(A, <x, y, z>).
+         ?- mk(A).
+         ?- atom_chars(B, <a, b>), mk(A).
+         ?- mk(A), atom_chars(A, L).",
+    );
+    assert_eq!(out[0], vec!["A = xyz"]);
+    assert_eq!(out[1], vec!["B = ab, A = xyz"]);
+    assert_eq!(out[2], vec!["A = xyz, L = <x, y, z>"]);
+}
+
+/// CLM-0028: the world store holds the program's own table, not a copy —
+/// the clone per evaluation was quadratic over nested evaluations.
+#[test]
+fn the_world_store_shares_the_programs_symbol_table() {
+    let clauses = parse_program("p(a). ?- p(X).").unwrap();
+    let program = Program::compile(&clauses).unwrap();
+    assert!(std::rc::Rc::ptr_eq(
+        &program.symbols,
+        &program.world.symbols
+    ));
+    let out: Vec<String> = program
+        .solve(&program.queries()[0])
+        .map(|a| a.to_string())
+        .collect();
+    assert_eq!(out, vec!["X = a"]);
+}

@@ -10,6 +10,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 
 use crate::Span;
 use crate::ast::{self, ArithOp, Clause, Expr, Goal, RelOp};
@@ -458,7 +459,8 @@ impl Query {
 /// A compiled program, ready to answer queries.
 #[derive(Debug, Clone)]
 pub struct Program {
-    pub(crate) symbols: Symbols,
+    /// The symbol table, shared with every store the program runs (CLM-0028).
+    pub(crate) symbols: Rc<RefCell<Symbols>>,
     preds: HashMap<PredKey, Pred>,
     /// The built-in predicates by key (CLM-0017).
     pub(crate) builtins: HashMap<PredKey, Builtin>,
@@ -887,7 +889,7 @@ impl Program {
             pred.finish();
         }
         let mut program = Program {
-            symbols,
+            symbols: Rc::new(RefCell::new(symbols)),
             preds,
             builtins,
             initial,
@@ -897,7 +899,7 @@ impl Program {
             tables: RefCell::new(Tables::default()),
         };
         // The initial store must be satisfiable, or the program has no models.
-        let mut store = Store::with_symbols(program.symbols.clone());
+        let mut store = Store::with_symbols(Rc::clone(&program.symbols));
         if !program.post_initial(&mut store) {
             return Err(EvalError::InitialStoreUnsatisfiable);
         }
