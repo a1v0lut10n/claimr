@@ -22,7 +22,7 @@ a single constraint goal.
 
 ```ebnf
 program        ::= { clause }
-clause         ::= fact | rule | constraint_fact | constraint_rule | implication | query
+clause         ::= fact | rule | constraint_fact | constraint_rule | implication | query | directive
 ```
 
 ## Facts and Rules
@@ -50,6 +50,19 @@ query          ::= "?-" (body_with_constraints | "{" constraint_expr "}") "."
 ```ebnf
 implication    ::= "{" constraint_expr "}" "=>" atom "."
 ```
+
+## Directives
+
+```ebnf
+directive      ::= ":-" identifier indicator { "," indicator } "."   (* CLM-0027 *)
+indicator      ::= name "/" number
+```
+
+A directive begins with `:-` (a rule's `:-` follows an atom). The directive
+name is any identifier syntactically and is checked when the program is
+compiled; `table` is the only one: `:- table ancestor/2.` declares tabled
+predicates, see *Tabling* below. The arity must be a non-negative integer,
+and a built-in or `'<>'` cannot be tabled.
 
 ## Bodies
 
@@ -232,6 +245,29 @@ it has no single value to collect. A comprehension inside a template is
 collected once per solution of the outer body
 (`<<X, |<Y | p(Y), { Y < X }>|> | p(X)>`). The built-in `sum(L, S)` sums a
 list's elements as a linear relation, see [`builtins.md`](builtins.md).
+
+**Tabling** (CLM-0027,
+[`../design/2026-11-10-tabling-for-recursive-rules.md`](../design/2026-11-10-tabling-for-recursive-rules.md)):
+`:- table ancestor/2.` makes every call to `ancestor/2` go through a
+*table* of its ground answers, so the natural transitive closure,
+`ancestor(X, Z) :- ancestor(X, Y), parent(Y, Z).`, terminates on finite
+data whatever its shape — cycles included, in either direction of
+recursion — and gives each answer once (a table is a set: two paths to one
+answer are one answer, so a comprehension over a tabled predicate counts
+distinct answers). The table belongs to the program and is computed over
+its constraint facts alone, so it holds in every query; a caller's
+constraints on the call's arguments apply when the answers are consumed
+(`{ X > 1 }, num(X)` filters the table). Three things stop a query: a
+solution whose call is not a finite ground term (`:- table n/1. n(X) :-
+{ X > 0 }.`), a solution that holds only under a constraint on a world
+unknown (`old(bob) :- { age(bob) > 70 }` with nothing fixing `age(bob)`),
+and a negation, if-then-else condition or comprehension body that consumes a
+table still being computed — the predicate's own recursion, as in
+`s(X) :- parent(X, Y), \+ s(Y).`; over a completed table all three
+constructs are fine. A tabled predicate with infinitely many answers does
+not terminate under tabling either. Prolog III has no tabling: its manual
+shows the transitive example looping and rewrites it without left
+recursion (pp. 162–163).
 
 **Strings** (CLM-0017,
 [`../design/2026-11-09-strings-as-character-lists-and-type-relations.md`](../design/2026-11-09-strings-as-character-lists-and-type-relations.md))

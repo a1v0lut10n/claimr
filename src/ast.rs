@@ -24,6 +24,28 @@ pub enum Clause {
         head: Atom,
     },
     Query(Vec<Goal>),
+    /// CLM-0027 (docs/design/2026-11-10-tabling-for-recursive-rules.md): a
+    /// directive, `:- table ancestor/2.` — `name` is the directive, the
+    /// indicators the predicates it applies to. Validated at compile time.
+    Directive {
+        name: String,
+        indicators: Vec<Indicator>,
+    },
+}
+
+/// A predicate indicator `name/arity` in a directive (CLM-0027). The arity
+/// is the literal as parsed; the compile step requires a non-negative
+/// integer.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Indicator {
+    pub name: String,
+    pub arity: Number,
+}
+
+impl fmt::Display for Indicator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", display_name(&self.name), self.arity)
+    }
 }
 
 /// A goal in a rule or query body: an atom to prove, a constraint block, or
@@ -489,6 +511,16 @@ impl fmt::Display for Clause {
             Clause::Query(body) => {
                 f.write_str("?- ")?;
                 fmt_body(f, body)?;
+                f.write_str(".")
+            }
+            Clause::Directive { name, indicators } => {
+                write!(f, ":- {name} ")?;
+                for (i, ind) in indicators.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{ind}")?;
+                }
                 f.write_str(".")
             }
         }

@@ -69,7 +69,9 @@ nodes, one per query goal, each
   condition's proofs are the `subgoals`, the then branch follows as
   siblings), `no-solution` (a condition, or a negated goal, that had none),
   `collected` (a list comprehension, CLM-0025, as written with the list it
-  produced: `<X | p(X)> = <1, 2>`; the solutions' own proofs are not kept);
+  produced: `<X | p(X)> = <1, 2>`; the solutions' own proofs are not kept),
+  `tabled` (a call to a tabled predicate, CLM-0027, answered from its
+  table; the `subgoals` are the derivation that first produced the answer);
 - `line`, `column`, `clause` — the cited clause's position (1-based) and
   text as written, present for facts and rules, position only for a
   constraint (the clause it is in); absent when nothing is cited.

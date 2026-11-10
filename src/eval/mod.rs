@@ -16,6 +16,7 @@ mod machine;
 mod project;
 mod store;
 mod symbol;
+mod table;
 
 #[cfg(test)]
 mod tests;

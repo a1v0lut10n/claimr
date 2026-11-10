@@ -1,0 +1,52 @@
+% Tabling (CLM-0027, docs/design/2026-11-10-tabling-for-recursive-rules.md):
+% a declared predicate memoises its ground answers, so a transitive closure
+% terminates on cyclic data in either direction of recursion, and gives
+% each answer once.
+
+:- table part_of/2, reaches/2, even/1, odd/1.
+
+% A part-of graph with a cycle through a data error: the project is
+% recorded as part of one of its own steps.
+contains(project, tree1).
+contains(project, tree2).
+contains(tree1, step1).
+contains(tree1, step2).
+contains(tree2, step3).
+contains(step3, project).
+
+% Left recursion — the natural definition, which loops under plain SLD.
+part_of(X, Z) :- part_of(X, Y), contains(Y, Z).
+part_of(X, Y) :- contains(X, Y).
+
+% Right recursion — the same relation; on a cycle it would repeat forever.
+reaches(X, Y) :- contains(X, Y).
+reaches(X, Z) :- contains(X, Y), reaches(Y, Z).
+
+% Mutual recursion over the same table group.
+even(zero).
+even(s(X)) :- odd(X).
+odd(s(X)) :- even(X).
+
+% Everything under the project, once each, in either direction.
+?- part_of(project, X).
+?- reaches(project, X).
+
+% The cycle: the project is part of itself.
+?- part_of(project, project).
+
+% Both arguments open: every pair of the closure.
+?- part_of(X, step1).
+
+% Counting distinct parts with a comprehension over the table.
+?- { N = |<X | part_of(project, X)>| }.
+
+% A negation over a completed table.
+?- \+ part_of(step1, project).
+
+% A caller's constraint on an argument filters the answers.
+?- same(X, tree1), part_of(X, Y).
+same(X, X).
+
+% Mutual recursion.
+?- even(s(s(zero))).
+?- odd(s(s(zero))).

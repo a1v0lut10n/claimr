@@ -33,6 +33,10 @@ declarative programs.
   answer with its proof tree — the clauses, by position and text, and the
   constraint instances that derived it
   ([`docs/design/2026-11-09-explanations-of-answers.md`](docs/design/2026-11-09-explanations-of-answers.md))
+- **Tabling** (`:- table ancestor/2.`): declared predicates memoise their
+  ground answers, so transitive closures terminate on cyclic data in either
+  direction of recursion and give each answer once
+  ([`docs/design/2026-11-10-tabling-for-recursive-rules.md`](docs/design/2026-11-10-tabling-for-recursive-rules.md))
 - **Parser generated with [rustemo](https://crates.io/crates/rustemo)**, an
   LR parser generator for Rust — the grammar file is the single source of
   truth for the syntax, and syntax errors carry line/column positions
@@ -54,7 +58,7 @@ The top-level shape:
 
 ```ebnf
 program        ::= { clause }
-clause         ::= fact | rule | constraint_fact | constraint_rule | implication | query
+clause         ::= fact | rule | constraint_fact | constraint_rule | implication | query | directive
 
 fact           ::= atom "."
 rule           ::= atom ":-" body "."
@@ -62,6 +66,8 @@ constraint_fact ::= "{" constraint_expr "}" "."
 constraint_rule ::= atom ":-" body_with_constraints "."
 query          ::= "?-" (body_with_constraints | "{" constraint_expr "}") "."
 implication    ::= "{" constraint_expr "}" "=>" atom "."
+directive      ::= ":-" identifier indicator { "," indicator } "."   (* `:- table ancestor/2.` *)
+indicator      ::= name "/" number
 
 body           ::= alt [ ";" body ]              (* `;` right-assoc, `->` then `,` tighter *)
 alt            ::= conj [ "->" conj ]
@@ -98,6 +104,11 @@ in both directions. A string `"abc"` is the list of its characters
 its characters as a delayed constraint, and `number/1`, `atom/1`, `list/1`
 are type relations with Prolog III's semantics — the only built-in
 predicates ([`docs/reference/builtins.md`](docs/reference/builtins.md)).
+`:- table ancestor/2.` declares a tabled predicate: its calls are answered
+from a table of its ground answers, computed once over the program, so
+`ancestor(X, Z) :- ancestor(X, Y), parent(Y, Z).` terminates on a cyclic
+`parent` graph and answers each ancestor once
+([`examples/tabling.claimr`](examples/tabling.claimr)).
 
 ## Examples
 

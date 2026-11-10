@@ -11,6 +11,7 @@ decisions:
   - docs/design/2026-11-09-explanations-of-answers.md
   - docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md
   - docs/design/2026-11-09-numbers-numeric-variables-and-attribute-terms.md
+  - docs/design/2026-11-10-tabling-for-recursive-rules.md
 aspects: [answer-soundness, exact-arithmetic]
 ---
 
@@ -107,7 +108,15 @@ answers in solved form. Public surface (re-exported from `claimr`):
   enclosing body, once per solution; the external-variable analysis treats
   the template's and the body's variables as the construct's, with the
   rest of the enclosing goal as outside; a comprehension in a head or a
-  constraint fact is `EvalError::ComprehensionInHead`, positioned.
+  constraint fact is `EvalError::ComprehensionInHead`, positioned. A
+  **directive** `:- table name/arity, ….` (CLM-0027) is validated here —
+  the name, a non-negative integer arity, not a built-in or `'<>'`, else
+  `EvalError::BadDirective`, positioned — and fills `Program.tabled`. The
+  program also keeps its **world store** (`Program.world`: the constraint
+  facts posted, baseline set, built once to validate them; every query and
+  every table evaluation runs on a clone) and its **tables**
+  (`Program.tables`, `table.rs`, behind a `RefCell` since queries borrow
+  the program shared).
 - **`machine.rs`** — the SLD machine: goals left to right, clauses in program
   order, chronological backtracking through choice points and the trail. A
   call whose first argument is bound visits only the clauses the index
@@ -162,7 +171,9 @@ answers in solved form. Public surface (re-exported from `claimr`):
   `:explain`) the machine keeps a proof arena — one record per successful
   step: the clause that resolved a call (with the call's address), a
   constraint goal's two sides and operator, a built-in's call, a committed
-  condition, a condition found without a solution — each under the record
+  condition, a condition found without a solution, a tabled call with the
+  index of the answer it took (CLM-0027; rendered as a `tabled` node whose
+  subgoals are the table's recorded derivation) — each under the record
   of the clause whose body it belongs to; every pending goal carries that
   parent. A choice point remembers the arena's length and backtracking
   truncates to it, as the trail does for bindings; a commit keeps the
@@ -171,6 +182,52 @@ answers in solved form. Public surface (re-exported from `claimr`):
   answer the arena's goal instances are rendered by the answer's own
   printer (so `_N` names agree) and the tree is assembled bottom-up without
   recursion.
+  **Tabling** (CLM-0027, design record
+  `2026-11-10-tabling-for-recursive-rules.md`): a call to a predicate in
+  `Program.tabled` goes through its table, keyed by the call's **variant**
+  (`Store::variant_key`: the call as a template with its unbound variables,
+  constrained or not, numbered by first occurrence; a cyclic call is
+  `EvalError::CyclicTabledCall`). A complete table is **consumed**: the
+  call unifies with each recorded answer in the caller's store, a choice
+  point (`Retry::Answers`) per remaining answer, so the caller's
+  constraints filter exactly. An absent table is **evaluated**: the
+  caller's store is parked in an evaluation frame (`eval_stack`), a clone
+  of the world store takes its place, the key is instantiated with fresh
+  variables as the *abstract call*, and the machine runs the goal list
+  `[Resolve(abstract call), TableOne]` — with an empty tail, above a
+  `Retry::TableFinish` choice point. `Resolve` takes the predicate's
+  clauses directly (the abstract call must not consult the table it is
+  computing); `TableOne` finalizes the store, takes the call's instance as
+  a closed term (`Store::snapshot`; not a finite ground term →
+  `EvalError::NonGroundTabledAnswer`), checks that the solution holds
+  unconditionally (a cheap test, `Store::has_residual`, then the answer
+  printer's projection onto the call compared with the world's projection
+  on the same unknowns, `Store::touch_like`; a residual →
+  `EvalError::ConstrainedTabledAnswer`), records the answer if new — with
+  its derivation, rendered from the arena records made since the evaluation
+  began, when explaining — and fails. `TableFinish` is reached when the
+  clauses are exhausted: it decides completion by **linear tabling** — a
+  table is `Complete`, `Evaluating(depth)` or `Incomplete`; a recursive
+  variant call (to an `Evaluating` table) lowers `leader_min` of every
+  frame above it, marks that frame `looping` and consumes the answers so
+  far (the count is read at each retry, so later answers of the pass are
+  seen too); a looping leader whose pass added an answer to any table runs
+  another pass on the same store; a frame depending on a lower one leaves
+  its table `Incomplete` and registers as that frame's dependent, to be
+  re-evaluated when called in the leader's next pass and completed with it;
+  otherwise the table and its dependents complete — then swaps the caller's
+  store back and consumes the table for the call that started it. A table
+  that is not complete may not be consumed inside a condition or a
+  comprehension body (`enclosing_sub_search`: a `Commit` or `CollectOne`
+  later in the goal list; the evaluation's list has an empty tail, so only
+  the evaluation's own constructs are seen): `EvalError::IncompleteTable`.
+  A query that stops inside an evaluation (error, interrupt) restores the
+  outermost parked store and forgets every non-complete table. Evaluations
+  nest in the machine's own stack, never Rust's. A right-recursive closure
+  over a chain of *n* nodes builds *n* tables holding *n²/2* answers in
+  all, and a left-recursive one runs *n* passes over a growing table: both
+  quadratic by nature of the strategy; semi-naive consumption (new answers
+  only in the recursive call) is the known improvement, not done.
   `Solutions::with_interrupt(Arc<AtomicBool>)` installs a flag polled every
   256 steps (the REPL's Ctrl-C); `Solutions::interrupted()` reports a stop
   through it; `Solutions::may_continue()` tells a caller whether asking for

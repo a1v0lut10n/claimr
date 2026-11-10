@@ -8,7 +8,8 @@
 //! each becomes a fresh numeric variable plus a linear constraint posted to
 //! the store (design record `2026-08-17-arithmetic-in-terms.md`).
 
-use std::collections::{BTreeSet, HashMap};
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::Span;
 use crate::ast::{self, ArithOp, Clause, Expr, Goal, RelOp};
@@ -18,9 +19,11 @@ use super::error::EvalError;
 use super::machine::Solutions;
 use super::store::{Addr, Store};
 use super::symbol::{LIST_LABEL, Symbol, Symbols};
+use super::table::Tables;
 
-/// A term template: variables are clause-local indices.
-#[derive(Debug, Clone)]
+/// A term template: variables are clause-local indices. `Eq`/`Hash` since
+/// CLM-0027: a table's variant key and its ground answers are templates.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum TTerm {
     Var(u32),
     Number(Number),
@@ -462,6 +465,15 @@ pub struct Program {
     /// Constraint facts, each with its variable count: the initial store.
     pub(crate) initial: Vec<(Vec<TGoal>, u32)>,
     queries: Vec<Query>,
+    /// CLM-0027: the predicates declared `:- table`.
+    pub(crate) tabled: HashSet<PredKey>,
+    /// The world store — the constraint facts posted, baseline set — built
+    /// once here; every query, and every table evaluation (CLM-0027), runs
+    /// on a clone.
+    pub(crate) world: Store,
+    /// CLM-0027: the tables, a function of the program; behind a `RefCell`
+    /// because queries borrow the program shared.
+    pub(crate) tables: RefCell<Tables>,
 }
 
 /// Per-clause variable numbering.
@@ -736,6 +748,7 @@ impl Program {
         let mut preds: HashMap<PredKey, Pred> = HashMap::new();
         let mut initial = Vec::new();
         let mut queries = Vec::new();
+        let mut tabled: HashSet<PredKey> = HashSet::new();
 
         for (clause, span) in clauses {
             // CLM-0014: `'<>'` is the list constructor; a program cannot define
@@ -840,24 +853,56 @@ impl Program {
                         text: clause.to_string(),
                     });
                 }
+                // CLM-0027: `:- table name/arity, ….`
+                Clause::Directive { name, indicators } => {
+                    let bad = |message: String| EvalError::BadDirective { message, span };
+                    if name != "table" {
+                        return Err(bad(format!("unknown directive `{name}`")));
+                    }
+                    for ind in indicators {
+                        let arity = if ind.arity.is_integer() && !ind.arity.is_negative() {
+                            ind.arity.numer().to_string().parse::<usize>().ok()
+                        } else {
+                            None
+                        };
+                        let Some(arity) = arity else {
+                            return Err(bad(format!(
+                                "the arity of `{ind}` must be a non-negative integer"
+                            )));
+                        };
+                        if ind.name == LIST_LABEL
+                            || BUILTINS
+                                .iter()
+                                .any(|(n, a, _)| *n == ind.name && *a == arity)
+                        {
+                            return Err(bad(format!("`{ind}` is a built-in and cannot be tabled")));
+                        }
+                        tabled.insert((lw.symbols.intern(&ind.name), arity));
+                    }
+                }
             }
         }
 
         for pred in preds.values_mut() {
             pred.finish();
         }
-        let program = Program {
+        let mut program = Program {
             symbols,
             preds,
             builtins,
             initial,
             queries,
+            tabled,
+            world: Store::default(),
+            tables: RefCell::new(Tables::default()),
         };
         // The initial store must be satisfiable, or the program has no models.
         let mut store = Store::with_symbols(program.symbols.clone());
         if !program.post_initial(&mut store) {
             return Err(EvalError::InitialStoreUnsatisfiable);
         }
+        store.set_baseline();
+        program.world = store;
         Ok(program)
     }
 

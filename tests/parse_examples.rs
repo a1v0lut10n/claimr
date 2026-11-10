@@ -338,3 +338,23 @@ fn comprehensions_parse_and_round_trip() {
         assert_eq!(parse_clause(&clause.to_string()).unwrap(), clause);
     }
 }
+
+#[test]
+fn directives_parse_and_round_trip() {
+    // CLM-0027: `:- table name/arity, ….` is a clause; the printer
+    // round-trips it, quoting a name exactly when needed.
+    use claimr::{Clause, parse_clause, parse_program};
+    let clause = parse_clause(":- table ancestor/2, 'part of'/2, z/0.").unwrap();
+    let Clause::Directive { name, indicators } = &clause else {
+        panic!("directive");
+    };
+    assert_eq!(name, "table");
+    assert_eq!(indicators.len(), 3);
+    assert_eq!(indicators[1].name, "part of");
+    assert_eq!(clause.to_string(), ":- table ancestor/2, 'part of'/2, z/0.");
+    assert_eq!(parse_clause(&clause.to_string()).unwrap(), clause);
+    // A rule's `:-` follows an atom; a directive's begins the clause.
+    let program = parse_program(":- table a/1.\na(X) :- b(X).\n").unwrap();
+    assert_eq!(program.len(), 2);
+    assert!(matches!(program[1], Clause::Rule { .. }));
+}

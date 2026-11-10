@@ -1,0 +1,32 @@
+?- part_of(project, X).
+X = tree1
+X = tree2
+X = step1
+X = step2
+X = step3
+X = project
+?- reaches(project, X).
+X = tree1
+X = tree2
+X = step1
+X = step2
+X = step3
+X = project
+?- part_of(project, project).
+true
+?- part_of(X, step1).
+X = project
+X = step3
+X = tree2
+X = tree1
+?- { N = |<X | part_of(project, X)>| }.
+N = 6
+?- \+ part_of(step1, project).
+true
+?- same(X, tree1), part_of(X, Y).
+X = tree1, Y = step1
+X = tree1, Y = step2
+?- even(s(s(zero))).
+true
+?- odd(s(s(zero))).
+false

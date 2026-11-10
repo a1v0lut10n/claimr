@@ -24,7 +24,7 @@
 
 Program: clauses=Clause*;
 
-Clause: Fact | Rule | ConstraintFact | Implication | Query;
+Clause: Fact | Rule | ConstraintFact | Implication | Query | Directive;
 
 // ---------------------------------------------------------------------------
 // Clauses
@@ -40,6 +40,14 @@ ConstraintFact: '{' constraints=ConstraintExpr '}' '.';
 Implication: '{' constraints=ConstraintExpr '}' '=>' head=Atom '.';
 
 Query: '?-' body=Body '.';
+
+// CLM-0027 (docs/design/2026-11-10-tabling-for-recursive-rules.md): a
+// directive — `:- table ancestor/2.` declares tabled predicates. The
+// directive name is any identifier here and is checked in the compile
+// step; a rule's `:-` follows an atom, a directive's begins the clause.
+Directive: ':-' name=Ident indicators=Indicator+[Comma] '.';
+
+Indicator: name=Name '/' arity=Number;
 
 // ---------------------------------------------------------------------------
 // Bodies and goals
