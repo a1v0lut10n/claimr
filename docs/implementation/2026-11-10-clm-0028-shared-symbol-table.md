@@ -32,8 +32,9 @@ mk(A) :- atom_chars(A, <x, y, z>).
 The evaluation's store interns `xyz` as the next free symbol and records
 `mk(xyz)` in the table as that index; the caller's store has either no
 such symbol (the panic) or, having interned `ab` first, a different one
-(the wrong answer). The second case violates invariant 1 of
-`answer-soundness`: the answer is not a consequence of the program.
+(the wrong answer). The second case violates invariant 8 of
+`answer-soundness`: the answer the caller got depended on the caller's own
+history (what it had interned), not on the program alone.
 
 The same clone is also the quadratic cost measured while weighing semi-naive
 consumption: the table is a vector and a hash map of every atom in the
