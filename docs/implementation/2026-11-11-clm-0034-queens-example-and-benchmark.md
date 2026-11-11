@@ -1,7 +1,7 @@
 ---
 date: 2026-11-11
 type: task
-status: in-progress
+status: done
 affects:
   - docs/reference/README.md
 components: [cli, evaluator]
@@ -76,12 +76,28 @@ answers for 4 queens, one branch of the 3-queens failure tree under
 
 ## Findings
 
-(filled in as the work proceeds)
+- **Two timings in parallel skew each other.** Cargo runs the two benchmark
+  tests on two threads; the first-solution figure for 8 queens read 358 ms
+  beside the all-solutions test and 70 ms alone. The documented command
+  passes `--test-threads=1`; two serial runs agreed within 2 %.
+- **The harness costs a few milliseconds.** Through the test (process start,
+  a temp file, the parse) all 92 solutions of 8 queens take 1.24 s where
+  the same binary from a shell took 0.93–1.11 s; the recorded numbers are
+  the reproducible ones.
+- **Assignment by head unification hides the conflicts.** With
+  `member(Q, Values)` the store rejects a value at the head of `member`, and
+  CLM-0031's aggregation rule folds every rejected value into one
+  `no clause` leaf: the 3-queens failure tree has 7 branches, 6 of them
+  `member(_1, <>)`. With `member(V, Values), { Q = V }` the rejection is a
+  constraint step, and the tree names the attacking queen in 20 branches —
+  989 lines, which is why the README quotes one branch.
+- **Measured, not assumed:** 4 queens has 2 solutions, 5 has 10, 6 has 4,
+  8 has 92; the golden file and the benchmark assert those counts.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
       `cargo test` (the new golden run; the benchmark tests ignored and
-      compiled); `cargo test --release --test benchmarks -- --ignored --nocapture`
-      runs and its numbers are the ones recorded.
-- [ ] `aivolution lint .` clean.
+      compiled); `cargo test --release --test benchmarks -- --ignored
+      --nocapture --test-threads=1` run twice, its numbers the ones recorded.
+- [x] `aivolution lint .` clean.
