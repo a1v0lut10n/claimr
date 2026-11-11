@@ -150,14 +150,31 @@ realise the store.
    into a fresh store and finalized, has no solution, and the set with any
    one member removed has one; both decided exactly, by the oracle that
    decides answers. No origin is traced through the solver: the set is not
-   inferred, it is verified. Today the load error for unsatisfiable
-   constraint facts carries such a set; CLM-0031 adds the failure tree,
-   whose branches must each be a derivation the search tried, and which
-   must say when it is truncated. *Test:*
+   inferred, it is verified; when a replay cannot decide a subset (a
+   non-linear residue), every step is cited and the explanation says it is
+   not minimised rather than claim it. The load error for unsatisfiable
+   constraint facts carries such a set, and so does every `unsatisfiable`
+   leaf of a failure tree (CLM-0031). A failure tree, in turn, is a proof of
+   finite failure within its budget: every branch is a derivation the search
+   tried, in search order, ending at the step it died on, with head failures
+   aggregated into the call's leaf; a negation's leaf carries the solution
+   that defeated it; failures inside a condition, a comprehension body or a
+   table evaluation are the sub-search's, not branches; branches recorded
+   before an answer are discarded, since the tree explains `false` only;
+   and a tree cut at the budget says how many branches it omits. Recording
+   and explaining change no decision the machine takes. *Test:*
    `a_conflict_set_is_unsatisfiable_whole_and_satisfiable_without_any_member`,
    `a_world_fact_is_cited_when_it_is_the_cause`,
    `a_head_clash_is_explained_by_the_failing_step_alone`,
    `the_set_reported_among_several_minimal_ones_is_deterministic`,
    `an_answers_steps_replay_to_a_satisfiable_system` (an answer's own
-   steps are a satisfiable system), and
-   `unsatisfiable_constraint_facts_name_a_minimal_conflicting_set`.
+   steps are a satisfiable system),
+   `unsatisfiable_constraint_facts_name_a_minimal_conflicting_set`, and
+   the `failure_trees` tests — `the_records_example_line_for_line`,
+   `several_branches_are_headed_and_each_cites_its_own_conflict`,
+   `no_clause_names_the_counts`, `a_negation_with_a_solution_carries_its_proof`,
+   `failures_inside_a_condition_are_not_branches`,
+   `the_budget_truncates_and_counts`,
+   `branches_are_discarded_when_an_answer_arrives`,
+   `an_if_then_else_without_else_whose_condition_fails` (the marker leaves
+   `may_continue` as it is) — with the golden run `examples/failure.claimr`.

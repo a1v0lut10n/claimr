@@ -1,7 +1,7 @@
 ---
 date: 2026-11-11
 type: task
-status: in-progress
+status: done
 affects:
   - docs/architecture/components/evaluator.md
   - docs/architecture/aspects/answer-soundness.md
@@ -101,11 +101,33 @@ the lines after `false`, the REPL after `false.`, under `--explain` /
 
 ## Findings
 
-(filled in as the work proceeds)
+- **A failed goal renders as it stood.** A constraint goal's instance is
+  rendered from its two built sides, as CLM-0023 renders a posted one, so an
+  arithmetic term over variables still unbound when the goal failed shows
+  as the lowered numeric variable: `{ X - Y = 0 }` failing before `X` and
+  `Y` are known prints `{ _1 = 0 }`. The same holds for an answer's proof
+  tree today; rendering the template instead is a refinement for both.
+- **No program found that fails only at the answer-time check.** Every
+  unsatisfiable store met in testing was rejected at a post, since the
+  incremental determination pass (CLM-0024) decides a disequation as soon
+  as its sides are determined. The `answer` leaf and `Step::Answer` are in
+  place for a store the exact finalize alone rejects, but no test reaches
+  them.
+- **The condition's text is the goal of its leaves.** A negation's
+  `has-solution` leaf and an if-then-else's `no-solution` leaf show the
+  construct as written (`\+ claim(F, residual_error, _)`), as the
+  `committed` and `no-solution` proof nodes of CLM-0023 do, with clause
+  variables under their source names rather than the derivation's bindings.
+- **The reason `no-solution` joins the record's four.** An if-then-else
+  without an else whose condition fails is a failed branch the record did
+  not list; the vocabulary gains the reason, and `json-output.md` pins it.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test`; existing golden files byte-identical.
-- [ ] A program run without `--explain` behaves and prints exactly as before.
-- [ ] `aivolution lint .` clean; the four `affects` docs current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` (eleven new unit tests in `failure_trees`, the JSON
+      integration test, the REPL test, the golden run of
+      `examples/failure.claimr`); existing golden files byte-identical.
+- [x] A program run without `--explain` behaves and prints exactly as before
+      (the golden runs and the JSON byte-identity test).
+- [x] `aivolution lint .` clean; the four `affects` docs current.

@@ -317,3 +317,22 @@ fn step_budget_at_the_prompt() {
     assert!(err.contains("usage: :steps N"), "{err}");
     assert_eq!(out, "?- par(a, X).\nX = b.\n");
 }
+
+#[test]
+fn explain_shows_why_a_query_failed() {
+    // CLM-0031: under `:explain` a query with no answer prints its failure
+    // tree after `false.`; the session compiles without positions, so a
+    // citation is the kind alone.
+    let (out, err, code) = run(
+        &[],
+        "q(1).\n:explain\n?- q(3).\n?- q(1), { 1 > 2 }.\n:explain\n?- q(3).\n",
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        "explaining answers\n\
+         ?- q(3).\nfalse.\n  q(3)  failed: no clause (the clause cannot match the first argument)\n\
+         ?- q(1), { 1 > 2 }.\nfalse.\n  q(1)  fact\n  { 1 > 2 }  failed: unsatisfiable with\n\
+         not explaining answers\n?- q(3).\nfalse.\n"
+    );
+}

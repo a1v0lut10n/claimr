@@ -1,0 +1,56 @@
+?- eligible(bob), { age(bob) < 18 }.
+false
+  eligible(bob)  rule 9:1  eligible(X) :- { age(X) >= 18 }.
+    { age(bob) >= 18 }  constraint 9:1
+  { age(bob) < 18 }  failed: unsatisfiable with
+    eligible(bob)  rule 9:1
+    { age(bob) >= 18 }  constraint 9:1
+?- violation(c18).
+false
+  violation(c18)  rule 13:1  violation(C) :- k(C, K), n(C, N), { K > N }.
+    k(c18, 2)  fact 11:12
+    n(c18, 4)  fact 12:12
+    { 2 > 4 }  failed: unsatisfiable with
+      k(c18, 2)  fact 11:12
+      n(c18, 4)  fact 12:12
+?- { budget(acme) < 500 }.
+false
+  { budget(acme) < 500 }  failed: unsatisfiable with
+    { budget(acme) >= 1000 }  fact 10:1
+?- k(c99, K).
+false
+  k(c99, K)  failed: no clause (none of 2 clauses can match the first argument)
+?- q(f(3)).
+false
+  q(f(3))  failed: no clause (none of 2 candidates unifies)
+?- p(X), { X > 5 }.
+false
+  branch 1
+    p(1)  fact 15:1
+    { 1 > 5 }  failed: unsatisfiable with
+      p(1)  fact 15:1
+  branch 2
+    p(2)  fact 15:7
+    { 2 > 5 }  failed: unsatisfiable with
+      p(2)  fact 15:7
+?- \+ claim(m1, residual_error, _).
+false
+  \+ claim(m1, residual_error, _)  failed: has a solution
+    claim(m1, residual_error, low)  fact 14:1
+?- \+ p(3), { 1 > 2 }.
+false
+  \+ p(3)  no-solution
+  { 1 > 2 }  failed: unsatisfiable with
+?- anc(b, Z).
+false
+  anc(b, Z)  failed: no table answer (0 in the table)
+?- first(3).
+false
+  first(3)  rule 21:1  first(X) :- p(X) -> { X = 1 }.
+    p(X) -> { X = 1 }  failed: no solution
+?- violation(c17).
+true
+  violation(c17)  rule 13:1  violation(C) :- k(C, K), n(C, N), { K > N }.
+    k(c17, 5)  fact 11:1
+    n(c17, 3)  fact 12:1
+    { 5 > 3 }  constraint 13:1

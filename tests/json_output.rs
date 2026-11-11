@@ -271,3 +271,36 @@ fn a_step_limit_is_a_query_error_document() {
         lines[1]
     );
 }
+
+/// CLM-0031: under `--explain`, an outcome-none document carries its
+/// `failure` tree; without the flag the document is unchanged.
+#[test]
+fn a_failed_query_explains_itself_in_json() {
+    let src = "k(c17, 5).\n?- k(c17, K), { K > 7 }.\n?- k(c99, K).\n";
+    let path = write_temp("failure", src);
+    let (stdout, _, code) = run(&["--json", "--explain", path.to_str().unwrap()]);
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        stdout,
+        concat!(
+            "{\"query\":\"?- k(c17, K), { K > 7 }.\",\"outcome\":\"none\",\"answers\":[],",
+            "\"failure\":{\"branches\":[[",
+            "{\"goal\":\"k(c17, 5)\",\"by\":\"fact\",\"line\":1,\"column\":1,\"clause\":\"k(c17, 5).\",\"subgoals\":[]},",
+            "{\"goal\":\"{ 5 > 7 }\",\"by\":\"failed\",\"reason\":\"unsatisfiable\",\"conflict\":[",
+            "{\"goal\":\"k(c17, 5)\",\"by\":\"fact\",\"line\":1,\"column\":1,\"clause\":\"k(c17, 5).\",\"subgoals\":[]}",
+            "],\"subgoals\":[]}]],\"omitted\":0}}\n",
+            "{\"query\":\"?- k(c99, K).\",\"outcome\":\"none\",\"answers\":[],",
+            "\"failure\":{\"branches\":[[",
+            "{\"goal\":\"k(c99, K)\",\"by\":\"failed\",\"reason\":\"no-clause\",\"clauses\":1,\"candidates\":0,\"subgoals\":[]}",
+            "]],\"omitted\":0}}\n",
+        )
+    );
+    let (stdout, _, code) = run(&["--json", path.to_str().unwrap()]);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        stdout,
+        "{\"query\":\"?- k(c17, K), { K > 7 }.\",\"outcome\":\"none\",\"answers\":[]}\n\
+         {\"query\":\"?- k(c99, K).\",\"outcome\":\"none\",\"answers\":[]}\n"
+    );
+}

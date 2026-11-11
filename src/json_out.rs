@@ -19,7 +19,7 @@
 //!   `{"error": {"file": "…", "line": N?, "column": N?,
 //!   "message": "…"}}` — line/column only when known.
 
-use claimr::{Answer, ProofNode};
+use claimr::{Answer, FailureTree, ProofNode, Reason};
 
 /// JSON string escaping per RFC 8259: `"`, `\`, and control
 /// characters; the common controls get their short forms.
@@ -110,6 +110,10 @@ fn proof_object(node: &ProofNode, children: &[String]) -> String {
         format!("\"goal\":\"{}\"", escape(&node.goal)),
         format!("\"by\":\"{}\"", node.by.as_str()),
     ];
+    // CLM-0031: a failed node's reason first, its detail after the citation.
+    if let Some(failure) = &node.failure {
+        fields.push(format!("\"reason\":\"{}\"", failure.reason.as_str()));
+    }
     if let Some(line) = node.line {
         fields.push(format!("\"line\":{line}"));
     }
@@ -119,24 +123,57 @@ fn proof_object(node: &ProofNode, children: &[String]) -> String {
     if let Some(clause) = &node.clause {
         fields.push(format!("\"clause\":\"{}\"", escape(clause)));
     }
+    if let Some(failure) = &node.failure {
+        if failure.reason == Reason::Unsatisfiable {
+            fields.push(format!("\"conflict\":{}", proof_array(&failure.conflict)));
+        }
+        if let Some(note) = &failure.note {
+            fields.push(format!("\"note\":\"{}\"", escape(note)));
+        }
+        if let Some(n) = failure.clauses {
+            fields.push(format!("\"clauses\":{n}"));
+        }
+        if let Some(n) = failure.candidates {
+            fields.push(format!("\"candidates\":{n}"));
+        }
+        if let Some(n) = failure.answers {
+            fields.push(format!("\"answers\":{n}"));
+        }
+    }
     fields.push(format!("\"subgoals\":[{}]", children.join(",")));
     format!("{{{}}}", fields.join(","))
 }
 
 /// The per-query document: `outcome` is `"solutions"` when any answer
-/// exists, `"none"` otherwise.
-pub fn query_document(query_text: &str, answers: &[Answer]) -> String {
+/// exists, `"none"` otherwise. CLM-0031: with a failure tree (an
+/// outcome-none query under `--explain`) the document gains `failure`,
+/// `{"branches": [[node, …], …], "omitted": N}`; without one it is unchanged.
+pub fn query_document(
+    query_text: &str,
+    answers: &[Answer],
+    failure: Option<&FailureTree>,
+) -> String {
     let outcome = if answers.is_empty() {
         "none"
     } else {
         "solutions"
     };
     let rendered: Vec<String> = answers.iter().map(answer_object).collect();
-    format!(
-        "{{\"query\":\"{}\",\"outcome\":\"{outcome}\",\"answers\":[{}]}}",
+    let mut out = format!(
+        "{{\"query\":\"{}\",\"outcome\":\"{outcome}\",\"answers\":[{}]",
         escape(query_text),
         rendered.join(","),
-    )
+    );
+    if let Some(tree) = failure {
+        let branches: Vec<String> = tree.branches.iter().map(|b| proof_array(b)).collect();
+        out.push_str(&format!(
+            ",\"failure\":{{\"branches\":[{}],\"omitted\":{}}}",
+            branches.join(","),
+            tree.omitted
+        ));
+    }
+    out.push('}');
+    out
 }
 
 /// The runtime-failure document for one query.
@@ -188,11 +225,11 @@ mod tests {
             explanation: None,
         };
         assert_eq!(
-            query_document("?- ok(s1).", &[truth]),
+            query_document("?- ok(s1).", &[truth], None),
             r#"{"query":"?- ok(s1).","outcome":"solutions","answers":[{"equations":[],"disequations":[],"constraints":[]}]}"#
         );
         assert_eq!(
-            query_document("?- ok(s2).", &[]),
+            query_document("?- ok(s2).", &[], None),
             r#"{"query":"?- ok(s2).","outcome":"none","answers":[]}"#
         );
         let bound = Answer {
@@ -202,7 +239,7 @@ mod tests {
             explanation: None,
         };
         assert_eq!(
-            query_document("?- q(X).", &[bound]),
+            query_document("?- q(X).", &[bound], None),
             r#"{"query":"?- q(X).","outcome":"solutions","answers":[{"equations":["X = 3"],"disequations":["X != Y"],"constraints":["age(alice) = 30"]}]}"#
         );
         // CLM-0023: the explanation, when present, nests under `subgoals`.
@@ -224,6 +261,7 @@ mod tests {
                         column: Some(1),
                         clause: Some("k(c17, 5).".to_string()),
                         subgoals: vec![],
+                        failure: None,
                     },
                     ProofNode {
                         goal: "{ 5 > 3 }".to_string(),
@@ -232,12 +270,14 @@ mod tests {
                         column: Some(1),
                         clause: None,
                         subgoals: vec![],
+                        failure: None,
                     },
                 ],
+                failure: None,
             }]),
         };
         assert_eq!(
-            query_document("?- violation(C).", &[explained]),
+            query_document("?- violation(C).", &[explained], None),
             r#"{"query":"?- violation(C).","outcome":"solutions","answers":[{"equations":["C = c17"],"disequations":[],"constraints":[],"explanation":[{"goal":"violation(c17)","by":"rule","line":2,"column":1,"clause":"violation(C) :- k(C, K), { K > 3 }.","subgoals":[{"goal":"k(c17, 5)","by":"fact","line":1,"column":1,"clause":"k(c17, 5).","subgoals":[]},{"goal":"{ 5 > 3 }","by":"constraint","line":2,"column":1,"subgoals":[]}]}]}]}"#
         );
         assert_eq!(

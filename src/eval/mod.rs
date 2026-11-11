@@ -22,7 +22,7 @@ mod table;
 #[cfg(test)]
 mod tests;
 
-pub use answer::{Answer, ProofNode, Resolution};
+pub use answer::{Answer, Failure, FailureTree, ProofNode, Reason, Resolution};
 pub use compile::{Program, Query};
 pub use error::EvalError;
 pub use machine::Solutions;

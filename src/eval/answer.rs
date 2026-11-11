@@ -49,6 +49,165 @@ pub struct ProofNode {
     /// The cited clause as written (facts and rules).
     pub clause: Option<String>,
     pub subgoals: Vec<ProofNode>,
+    /// CLM-0031: why the goal failed; present only on a `Resolution::Failed`
+    /// node of a failure tree.
+    pub failure: Option<Box<Failure>>,
+}
+
+/// Why a goal failed (CLM-0031,
+/// docs/design/2026-11-11-explanations-of-failure.md): the leaf of a failed
+/// branch carries one of these.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    pub reason: Reason,
+    /// `Unsatisfiable`: the earlier steps of the derivation that, together
+    /// with the failed goal, have no solution — shallow nodes (goal, what
+    /// resolved it, position, clause), a minimal set unless `note` says
+    /// otherwise.
+    pub conflict: Vec<ProofNode>,
+    /// `Unsatisfiable`: why the set could not be minimised (every step is
+    /// then cited).
+    pub note: Option<String>,
+    /// `NoClause`: the predicate's clauses, and the candidates the
+    /// first-argument index admitted.
+    pub clauses: Option<usize>,
+    pub candidates: Option<usize>,
+    /// `NoTableAnswer`: the answers in the table.
+    pub answers: Option<usize>,
+}
+
+/// The reason a goal failed (CLM-0031).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reason {
+    /// The step's store effect had no solution; `conflict` says why.
+    Unsatisfiable,
+    /// No candidate clause resolved the call.
+    NoClause,
+    /// A negation whose condition succeeded; the solution's proof is the
+    /// node's `subgoals`.
+    HasSolution,
+    /// A tabled call whose complete table has no unifying answer.
+    NoTableAnswer,
+    /// An if-then-else without an else whose condition had no solution.
+    NoSolution,
+}
+
+impl Reason {
+    /// The JSON spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Reason::Unsatisfiable => "unsatisfiable",
+            Reason::NoClause => "no-clause",
+            Reason::HasSolution => "has-solution",
+            Reason::NoTableAnswer => "no-table-answer",
+            Reason::NoSolution => "no-solution",
+        }
+    }
+}
+
+impl Failure {
+    /// The human rendering after `failed: `.
+    pub fn describe(&self) -> String {
+        match self.reason {
+            Reason::Unsatisfiable => match &self.note {
+                None => "unsatisfiable with".to_string(),
+                Some(note) => format!("unsatisfiable with every step (not minimised: {note})"),
+            },
+            Reason::NoClause => {
+                let clauses = self.clauses.unwrap_or(0);
+                let candidates = self.candidates.unwrap_or(0);
+                let why = if clauses == 0 {
+                    "undefined predicate".to_string()
+                } else if candidates == 0 && clauses == 1 {
+                    "the clause cannot match the first argument".to_string()
+                } else if candidates == 0 {
+                    format!("none of {clauses} clauses can match the first argument")
+                } else if candidates == 1 {
+                    "the candidate does not unify".to_string()
+                } else {
+                    format!("none of {candidates} candidates unifies")
+                };
+                format!("no clause ({why})")
+            }
+            Reason::HasSolution => "has a solution".to_string(),
+            Reason::NoTableAnswer => {
+                format!(
+                    "no table answer ({} in the table)",
+                    self.answers.unwrap_or(0)
+                )
+            }
+            Reason::NoSolution => "no solution".to_string(),
+        }
+    }
+}
+
+/// The failure tree of a query that had no answer (CLM-0031): the failed
+/// derivations as branches, in search order, up to the machine's budget;
+/// `omitted` counts the rest.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FailureTree {
+    pub branches: Vec<Vec<ProofNode>>,
+    pub omitted: usize,
+}
+
+impl FailureTree {
+    /// The tree as lines for a human, to print after `false`: each branch
+    /// as a proof tree ending at its failed goal, headed `branch N` when
+    /// there are several, and the omitted count last.
+    pub fn lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let headed = self.branches.len() > 1;
+        for (i, roots) in self.branches.iter().enumerate() {
+            let depth = if headed {
+                out.push(format!("  branch {}", i + 1));
+                2
+            } else {
+                1
+            };
+            push_tree_lines(&mut out, roots, depth);
+        }
+        match self.omitted {
+            0 => {}
+            1 => out.push("  … and 1 more failed branch".to_string()),
+            n => out.push(format!("  … and {n} more failed branches")),
+        }
+        out
+    }
+}
+
+/// One node per line, indented two spaces per level, in derivation order —
+/// the goal, what resolved it, the cited position, and a rule's text; a
+/// failed node's reason, then its conflict's citations (without rule text)
+/// and the subgoals. Iterative: a derivation can be deep.
+fn push_tree_lines(out: &mut Vec<String>, roots: &[ProofNode], depth: usize) {
+    // (node, depth, is a citation)
+    let mut work: Vec<(&ProofNode, usize, bool)> =
+        roots.iter().rev().map(|n| (n, depth, false)).collect();
+    while let Some((node, depth, cited)) = work.pop() {
+        let indent = "  ".repeat(depth);
+        if let (Resolution::Failed, Some(failure)) = (node.by, &node.failure) {
+            out.push(format!(
+                "{indent}{}  failed: {}",
+                node.goal,
+                failure.describe()
+            ));
+            work.extend(node.subgoals.iter().rev().map(|n| (n, depth + 1, false)));
+            work.extend(failure.conflict.iter().rev().map(|n| (n, depth + 1, true)));
+            continue;
+        }
+        let mut line = format!("{indent}{}  {}", node.goal, node.by.as_str());
+        if let (Some(l), Some(c)) = (node.line, node.column) {
+            line.push_str(&format!(" {l}:{c}"));
+        }
+        if node.by == Resolution::Rule && !cited {
+            if let Some(text) = &node.clause {
+                line.push_str("  ");
+                line.push_str(text);
+            }
+        }
+        out.push(line);
+        work.extend(node.subgoals.iter().rev().map(|n| (n, depth + 1, false)));
+    }
 }
 
 /// A proof tree of any depth drops in constant stack (as terms do, CLM-0019):
@@ -56,8 +215,14 @@ pub struct ProofNode {
 impl Drop for ProofNode {
     fn drop(&mut self) {
         let mut work = std::mem::take(&mut self.subgoals);
+        if let Some(failure) = self.failure.take() {
+            work.extend(failure.conflict);
+        }
         while let Some(mut n) = work.pop() {
             work.append(&mut n.subgoals);
+            if let Some(failure) = n.failure.take() {
+                work.extend(failure.conflict);
+            }
         }
     }
 }
@@ -85,6 +250,9 @@ pub enum Resolution {
     /// A call to a tabled predicate (CLM-0027) answered from its table: the
     /// subgoals are the derivation that first produced the answer.
     Tabled,
+    /// CLM-0031: the goal at which a failed branch died; `ProofNode::failure`
+    /// says why.
+    Failed,
 }
 
 impl Resolution {
@@ -99,6 +267,7 @@ impl Resolution {
             Resolution::NoSolution => "no-solution",
             Resolution::Collected => "collected",
             Resolution::Tabled => "tabled",
+            Resolution::Failed => "failed",
         }
     }
 }
@@ -115,23 +284,8 @@ impl Answer {
     /// answer carries no explanation. Iterative: a derivation can be deep.
     pub fn explanation_lines(&self) -> Vec<String> {
         let mut out = Vec::new();
-        let Some(roots) = &self.explanation else {
-            return out;
-        };
-        let mut work: Vec<(&ProofNode, usize)> = roots.iter().rev().map(|n| (n, 1)).collect();
-        while let Some((node, depth)) = work.pop() {
-            let mut line = format!("{}{}  {}", "  ".repeat(depth), node.goal, node.by.as_str());
-            if let (Some(l), Some(c)) = (node.line, node.column) {
-                line.push_str(&format!(" {l}:{c}"));
-            }
-            if node.by == Resolution::Rule {
-                if let Some(text) = &node.clause {
-                    line.push_str("  ");
-                    line.push_str(text);
-                }
-            }
-            out.push(line);
-            work.extend(node.subgoals.iter().rev().map(|n| (n, depth + 1)));
+        if let Some(roots) = &self.explanation {
+            push_tree_lines(&mut out, roots, 1);
         }
         out
     }

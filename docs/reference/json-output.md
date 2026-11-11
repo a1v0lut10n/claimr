@@ -79,6 +79,45 @@ nodes, one per query goal, each
 Without `--explain` the field is absent and the document is byte-identical
 to the shape above; a consumer that does not know the field can ignore it.
 
+## Failure (`--explain`, CLM-0031)
+
+With `--explain` a query with `"outcome": "none"` carries one more field,
+`failure`, its failure tree
+(`docs/design/2026-11-11-explanations-of-failure.md`):
+
+```json
+{"query": "?- eligible(bob), { age(bob) < 18 }.", "outcome": "none", "answers": [],
+ "failure": {"branches": [[
+   {"goal": "eligible(bob)", "by": "rule", "line": 1, "column": 1,
+    "clause": "eligible(X) :- { age(X) >= 18 }.",
+    "subgoals": [{"goal": "{ age(bob) >= 18 }", "by": "constraint", "line": 1, "column": 1, "subgoals": []}]},
+   {"goal": "{ age(bob) < 18 }", "by": "failed", "reason": "unsatisfiable",
+    "conflict": [
+      {"goal": "eligible(bob)", "by": "rule", "line": 1, "column": 1, "clause": "eligible(X) :- { age(X) >= 18 }.", "subgoals": []},
+      {"goal": "{ age(bob) >= 18 }", "by": "constraint", "line": 1, "column": 1, "subgoals": []}],
+    "subgoals": []}
+ ]], "omitted": 0}}
+```
+
+- `branches` — the derivations the search tried, in search order, at most
+  64; each a list of root nodes in the shape of `explanation`, ending at
+  the node that failed;
+- `omitted` — how many further failed branches the budget left out;
+- a failed node has `"by": "failed"` and a `reason`: `unsatisfiable` (the
+  step's store effect had no solution; `conflict` lists the earlier steps
+  it conflicts with as shallow nodes, a minimal set, or every step with a
+  `note` saying why it could not be minimised), `no-clause` (no candidate
+  clause resolved the call; `clauses` is the predicate's clause count,
+  `candidates` the number the first-argument index admitted), `has-solution`
+  (a negation whose goal succeeded; the solution's proof is the node's
+  `subgoals`), `no-table-answer` (a tabled call; `answers` is the table's
+  size), `no-solution` (an if-then-else without an else whose condition
+  failed). The goal is the failed goal as it stood, or `answer` for the
+  answer-time check.
+
+Without `--explain`, or when the query has answers, the field is absent and
+the document is byte-identical to the shapes above.
+
 ## A query that fails at runtime
 
 ```json
