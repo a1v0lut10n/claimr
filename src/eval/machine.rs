@@ -23,15 +23,18 @@
 //! arena rendered as a tree.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::answer::{
-    Answer, Failure, FailureTree, ProofNode, Reason, Resolution, render_answer, render_terms,
+    Answer, Failure, FailureTree, ProofNode, Reason, Resolution, render_answer, render_template,
+    render_terms,
 };
 use super::compile::{
     ANONYMOUS, ArgKey, Builtin, CondCheck, PredKey, Program, Query, TGoal, TTerm, build_with,
+    term_vars,
 };
 use super::error::EvalError;
 use super::explain::{self, ConstraintOp, Step};
@@ -277,14 +280,9 @@ enum ProofKind<'p> {
         frame: Frame,
         src: CallRef<'p>,
     },
-    /// A constraint goal, as posted, with its template and frame.
-    Constraint {
-        a: Addr,
-        op: &'static str,
-        b: Addr,
-        goal: &'p TGoal,
-        frame: Frame,
-    },
+    /// A constraint goal: its template and frame, rendered as written with
+    /// the derivation's bindings (CLM-0032) and closed for replay (CLM-0030).
+    Constraint { goal: &'p TGoal, frame: Frame },
     Builtin {
         call: Addr,
         builtin: Builtin,
@@ -314,10 +312,14 @@ struct Failed<'p> {
     detail: FailDetail,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum FailedGoal<'p> {
     Call(Addr),
-    Constraint(Addr, &'static str, Addr),
+    /// A constraint goal, rendered from its template (CLM-0032).
+    Constraint {
+        goal: &'p TGoal,
+        frame: Frame,
+    },
     /// A construct as written.
     Text(&'p str),
     /// The answer-time finalize.
@@ -1460,30 +1462,27 @@ impl<'p> Solutions<'p> {
                 }
                 RtGoal::Eq(a, b) => {
                     self.goals = rest.clone();
-                    self.constraint(under, a, "=", b, (tgoal, frame.clone()), |s| {
-                        s.post_eq_goal(a, b)
-                    })
+                    self.constraint(under, (tgoal, frame.clone()), |s| s.post_eq_goal(a, b))
                 }
                 RtGoal::Dif(a, b) => {
                     self.goals = rest.clone();
-                    self.constraint(under, a, "!=", b, (tgoal, frame.clone()), |s| {
-                        s.post_dif_goal(a, b)
-                    })
+                    self.constraint(under, (tgoal, frame.clone()), |s| s.post_dif_goal(a, b))
                 }
                 RtGoal::Rel(op, a, b) => {
                     self.goals = rest.clone();
-                    self.constraint(under, a, rel_text(op), b, (tgoal, frame.clone()), |s| {
-                        s.post_rel(op, a, b)
-                    })
+                    self.constraint(under, (tgoal, frame.clone()), |s| s.post_rel(op, a, b))
                 }
             };
             if !ok && self.store.error.is_none() {
                 // CLM-0031: a constraint goal the store rejected.
                 if let Some(step) = constraint_step(tgoal, &frame) {
                     let failed = match goal {
-                        RtGoal::Eq(a, b) => FailedGoal::Constraint(a, "=", b),
-                        RtGoal::Dif(a, b) => FailedGoal::Constraint(a, "!=", b),
-                        RtGoal::Rel(op, a, b) => FailedGoal::Constraint(a, rel_text(op), b),
+                        RtGoal::Eq(..) | RtGoal::Dif(..) | RtGoal::Rel(..) => {
+                            FailedGoal::Constraint {
+                                goal: tgoal,
+                                frame: frame.clone(),
+                            }
+                        }
                         RtGoal::Call(call) => FailedGoal::Call(call),
                     };
                     self.fail(under, &rest, failed, |s| s.conflict_for(step));
@@ -1499,27 +1498,39 @@ impl<'p> Solutions<'p> {
     fn constraint(
         &mut self,
         under: Under,
-        a: Addr,
-        op: &'static str,
-        b: Addr,
         src: (&'p TGoal, Frame),
         post: impl FnOnce(&mut Store) -> bool,
     ) -> bool {
         let ok = post(&mut self.store);
         if ok {
             let (goal, frame) = src;
-            self.record(
-                under,
-                ProofKind::Constraint {
-                    a,
-                    op,
-                    b,
-                    goal,
-                    frame,
-                },
-            );
+            self.record(under, ProofKind::Constraint { goal, frame });
         }
         ok
+    }
+
+    /// CLM-0032: a constraint goal as written with the derivation's
+    /// bindings — the two sides rendered from their templates, each clause
+    /// variable as its rendered binding taken from `rendered` in the order
+    /// `goal_var_addrs` lists them.
+    fn render_goal(
+        &self,
+        goal: &TGoal,
+        frame: &[Addr],
+        rendered: &mut impl Iterator<Item = String>,
+    ) -> String {
+        let Some((op, l, r)) = goal_sides(goal) else {
+            return String::new();
+        };
+        let vars: HashMap<u32, String> = goal_var_addrs(goal, frame)
+            .into_iter()
+            .map(|(i, _)| (i, rendered.next().unwrap_or_default()))
+            .collect();
+        format!(
+            "{{ {} {op} {} }}",
+            render_template(&self.store, l, &vars),
+            render_template(&self.store, r, &vars)
+        )
     }
 
     // --- failure (CLM-0031) ------------------------------------------------
@@ -1702,17 +1713,15 @@ impl<'p> Solutions<'p> {
                     addrs.push(src.addr)
                 }
                 ProofKind::Builtin { call, .. } => addrs.push(*call),
-                ProofKind::Constraint { a, b, .. } => {
-                    addrs.push(*a);
-                    addrs.push(*b);
+                ProofKind::Constraint { goal, frame } => {
+                    addrs.extend(goal_var_addrs(goal, frame).into_iter().map(|(_, a)| a));
                 }
                 ProofKind::Collected { into, .. } => addrs.push(*into),
                 ProofKind::Committed { .. } | ProofKind::NoSolution { .. } => {}
-                ProofKind::Failed(f) => match f.goal {
-                    FailedGoal::Call(a) => addrs.push(a),
-                    FailedGoal::Constraint(a, _, b) => {
-                        addrs.push(a);
-                        addrs.push(b);
+                ProofKind::Failed(f) => match &f.goal {
+                    FailedGoal::Call(a) => addrs.push(*a),
+                    FailedGoal::Constraint { goal, frame } => {
+                        addrs.extend(goal_var_addrs(goal, frame).into_iter().map(|(_, a)| a));
                     }
                     FailedGoal::Text(_) | FailedGoal::Answer => {}
                 },
@@ -1750,16 +1759,10 @@ impl<'p> Solutions<'p> {
                         Some(c.text.clone()),
                     )
                 }
-                ProofKind::Constraint { op, .. } => {
-                    let a = rendered.next().unwrap_or_default();
-                    let b = rendered.next().unwrap_or_default();
+                ProofKind::Constraint { goal, frame } => {
+                    let text = self.render_goal(goal, frame, &mut rendered);
                     let cite = rec.parent.and_then(cited).and_then(|(s, _)| s);
-                    (
-                        format!("{{ {a} {op} {b} }}"),
-                        Resolution::Constraint,
-                        cite,
-                        None,
-                    )
+                    (text, Resolution::Constraint, cite, None)
                 }
                 ProofKind::Builtin { .. } => (
                     rendered.next().unwrap_or_default(),
@@ -1795,12 +1798,10 @@ impl<'p> Solutions<'p> {
                     )
                 }
                 ProofKind::Failed(f) => {
-                    let goal = match f.goal {
+                    let goal = match &f.goal {
                         FailedGoal::Call(_) => rendered.next().unwrap_or_default(),
-                        FailedGoal::Constraint(_, op, _) => {
-                            let a = rendered.next().unwrap_or_default();
-                            let b = rendered.next().unwrap_or_default();
-                            format!("{{ {a} {op} {b} }}")
+                        FailedGoal::Constraint { goal, frame } => {
+                            self.render_goal(goal, frame, &mut rendered)
                         }
                         FailedGoal::Text(t) => t.to_string(),
                         FailedGoal::Answer => "answer".to_string(),
@@ -2068,4 +2069,28 @@ fn fact_node(program: &Program, j: usize) -> ProofNode {
         subgoals: Vec::new(),
         failure: None,
     }
+}
+
+/// CLM-0032: a constraint goal's operator and two sides; `None` for a call
+/// or a construct.
+fn goal_sides(goal: &TGoal) -> Option<(&'static str, &TTerm, &TTerm)> {
+    match goal {
+        TGoal::Eq(a, b) => Some(("=", a, b)),
+        TGoal::Dif(a, b) => Some(("!=", a, b)),
+        TGoal::Rel(op, a, b) => Some((rel_text(*op), a, b)),
+        _ => None,
+    }
+}
+
+/// CLM-0032: the clause variables a constraint goal mentions, in index
+/// order, with their heap addresses in `frame` — what rendering the goal as
+/// written needs to have rendered.
+fn goal_var_addrs(goal: &TGoal, frame: &[Addr]) -> Vec<(u32, Addr)> {
+    let Some((_, l, r)) = goal_sides(goal) else {
+        return Vec::new();
+    };
+    let mut vars = std::collections::BTreeSet::new();
+    term_vars(l, &mut vars);
+    term_vars(r, &mut vars);
+    vars.into_iter().map(|i| (i, frame[i as usize])).collect()
 }

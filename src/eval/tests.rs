@@ -1455,7 +1455,7 @@ feature(X) :- colour(X) ; { X = none }.
     );
     assert_eq!(
         (roots[1].goal.as_str(), roots[1].by),
-        ("{ 3 = 3 }", Constraint)
+        ("{ 3 = |<a, b, c>| }", Constraint)
     );
     assert_eq!((roots[1].line, roots[1].clause.as_deref()), (None, None));
 }
@@ -1709,7 +1709,7 @@ fn a_comprehension_explains_as_one_collected_leaf() {
         vec![
             "  count(2)  rule 2:1  count(N) :- { N = |<X | p(X)>| }.",
             "    <X | p(X)> = <1, 2>  collected",
-            "    { 2 = 2 }  constraint 2:1",
+            "    { 2 = |<1, 2>| }  constraint 2:1",
         ]
     );
     assert_eq!(
@@ -2606,5 +2606,69 @@ mod failure_trees {
         assert!(solutions.next().is_none());
         assert!(solutions.error().is_some());
         assert!(solutions.failure().is_none());
+    }
+}
+
+// --- constraint goals render as written (CLM-0032) --------------------------
+
+mod constraints_as_written {
+    //! A constraint node, and a failed constraint leaf, show the goal as
+    //! written with the derivation's bindings for its variables — arithmetic,
+    //! lengths and lists in source form — never a lowered numeric variable.
+
+    use crate::{Program, parse_program};
+
+    fn program(src: &str) -> Program {
+        Program::compile(&parse_program(src).expect("parses")).expect("compiles")
+    }
+
+    #[test]
+    fn a_failed_goal_over_unbound_variables_prints_as_written() {
+        let program = program("?- { X - Y = 0 }, { X - Y = 1 }.");
+        let mut solutions = program.solve(&program.queries()[0]).with_explanations();
+        assert_eq!(solutions.by_ref().count(), 0);
+        assert_eq!(
+            solutions.failure().expect("a failure tree").lines(),
+            [
+                "  { X - Y = 0 }  constraint",
+                "  { X - Y = 1 }  failed: unsatisfiable with",
+                "    { X - Y = 0 }  constraint",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_answers_goal_keeps_its_arithmetic_lengths_lists_parentheses_and_quoting() {
+        let program = program(
+            "?- { Z = X + 1 }.
+             ?- { L = |<a, b, c>| }.
+             ?- { X = <a, b> . T }, { N = |X| }.
+             ?- { 2 * (3 - 1) = B }, { A = 'x y' }, { M = -B }.",
+        );
+        let explained = |i: usize| {
+            let mut solutions = program.solve(&program.queries()[i]).with_explanations();
+            let answer = solutions.next().expect("an answer");
+            assert!(solutions.next().is_none());
+            answer.explanation_lines()
+        };
+        // A lowered arithmetic result over an unbound variable shows the
+        // expression, not `_1`; a determined variable shows its value.
+        assert_eq!(explained(0), ["  { Z = X + 1 }  constraint"]);
+        assert_eq!(explained(1), ["  { 3 = |<a, b, c>| }  constraint"]);
+        assert_eq!(
+            explained(2),
+            [
+                "  { <a, b> . T = <a, b> . T }  constraint",
+                "  { N = |<a, b> . T| }  constraint",
+            ]
+        );
+        assert_eq!(
+            explained(3),
+            [
+                "  { 2 * (3 - 1) = 4 }  constraint",
+                "  { 'x y' = 'x y' }  constraint",
+                "  { -4 = -4 }  constraint",
+            ]
+        );
     }
 }

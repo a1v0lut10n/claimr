@@ -1,7 +1,7 @@
 ---
 date: 2026-11-11
 type: task
-status: in-progress
+status: done
 affects:
   - docs/architecture/components/evaluator.md
   - docs/reference/json-output.md
@@ -73,11 +73,30 @@ unchanged (every variable in it is bound at the leaf).
 
 ## Findings
 
-(filled in as the work proceeds)
+- **The AST renderer does the hard part.** Converting the template to an
+  `ast::Expr` and printing it reuses the precedence rules (`2 * (3 - 1)`
+  keeps its parentheses, `-B` its sign), the list forms (`<a, b> . T`) and
+  the quoting of atoms (`'x y'`) that the parser's own `Display` already
+  pins, instead of a second renderer that would drift from it. A rendered
+  variable binding is placed as an `Expr::Var` with the rendered text as
+  its name, which the renderer prints verbatim.
+- **Two expectations moved, both for the better.** `{ 3 = 3 }` in
+  `examples/explain.claimr` became `{ 3 = |<a, b, c>| }`, and a
+  comprehension's count `{ 2 = 2 }` became `{ 2 = |<1, 2>| }`: the goal
+  now says what was measured, with the measured value in the place of its
+  variable. Every other golden line, the failure golden included, is
+  byte-identical, since their variables were bound to plain values.
+- **A bound variable still shows its value, not its name.** `{ X = 1 }`
+  with `X` bound prints `{ 1 = 1 }`, as before and as `{ cv1 = cv1 }` did
+  in CLM-0023: the rule is the goal as written with the bindings, and a
+  binding to a number is a number. Printing the source name alongside
+  would be a different rule.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test`; `examples/explain.answers` changes in the one line
-      above, every other golden byte-identical.
-- [ ] `aivolution lint .` clean; the two `affects` docs current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` (two new unit tests in `constraints_as_written`, two
+      expectations moved); `examples/explain.answers` changes in the one
+      line above, every other golden byte-identical (the failure golden
+      diffed clean).
+- [x] `aivolution lint .` clean; the two `affects` docs current.

@@ -64,7 +64,9 @@ nodes, one per query goal, each
   bindings and variable names (a committed or failed condition: the
   construct as written);
 - `by` — what resolved it: `fact`, `rule` (its body goals are the
-  `subgoals`), `constraint` (a `{ … }` goal, as the instance posted),
+  `subgoals`), `constraint` (a `{ … }` goal as written, with the derivation's bindings
+  for its variables and its arithmetic, lengths and lists in source form —
+  `{ 5 > 3 }`, `{ 3 = |<a, b, c>| }`, `{ Z = X + 1 }`; CLM-0032),
   `builtin`, `committed` (an if-then-else whose condition succeeded; the
   condition's proofs are the `subgoals`, the then branch follows as
   siblings), `no-solution` (a condition, or a negated goal, that had none),

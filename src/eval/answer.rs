@@ -11,12 +11,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use crate::Number;
+use crate::ast::{Atom, Expr};
 use crate::solver::{LinExpr, SVar};
 
+use super::compile::TTerm;
 use super::project::{Projected, project};
 use super::store::{Addr, Cell, PendingDif, Store, TypeKind};
-use super::symbol::LIST_LABEL;
-use super::symbol::Symbols;
+use super::symbol::{LIST, LIST_LABEL, Symbols};
 
 /// One answer to a query.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -986,4 +987,107 @@ pub(crate) fn render_terms(
         p.find_cycles(a);
     }
     addrs.iter().map(|a| p.render(*a)).collect()
+}
+
+/// CLM-0032: a constraint goal's side as written — the clause template with
+/// each variable replaced by its rendered binding (`vars`, by clause
+/// variable index), arithmetic, lengths, concatenations and lists in source
+/// form — printed by the AST's precedence-aware renderer, so parentheses
+/// and quoting come out as the parser would read them back. Iterative: a
+/// list spine is flattened in a loop (CLM-0019).
+pub(crate) fn render_template(store: &Store, tpl: &TTerm, vars: &HashMap<u32, String>) -> String {
+    enum Walk<'a> {
+        Enter(&'a TTerm),
+        Build(&'a TTerm),
+        List { items: usize, tail: bool },
+    }
+    fn pop(out: &mut Vec<Expr>) -> Expr {
+        out.pop().unwrap_or_else(|| Expr::Ident(String::from("?")))
+    }
+    let symbols = store.symbols.borrow();
+    let mut work = vec![Walk::Enter(tpl)];
+    let mut out: Vec<Expr> = Vec::new();
+    while let Some(step) = work.pop() {
+        match step {
+            Walk::Enter(t) => match t {
+                TTerm::Compound(f, args) if *f == LIST && args.len() == 2 => {
+                    let mut items: Vec<&TTerm> = vec![&args[0]];
+                    let mut cur = &args[1];
+                    while let TTerm::Compound(g, next) = cur {
+                        if *g != LIST || next.len() != 2 {
+                            break;
+                        }
+                        items.push(&next[0]);
+                        cur = &next[1];
+                    }
+                    let tail = !matches!(cur, TTerm::Const(c) if *c == LIST);
+                    work.push(Walk::List {
+                        items: items.len(),
+                        tail,
+                    });
+                    if tail {
+                        work.push(Walk::Enter(cur));
+                    }
+                    work.extend(items.iter().rev().map(|i| Walk::Enter(i)));
+                }
+                TTerm::Var(_) | TTerm::Number(_) | TTerm::Const(_) => work.push(Walk::Build(t)),
+                TTerm::Compound(_, args) => {
+                    work.push(Walk::Build(t));
+                    work.extend(args.iter().rev().map(Walk::Enter));
+                }
+                TTerm::Neg(x) | TTerm::Len(x) => {
+                    work.push(Walk::Build(t));
+                    work.push(Walk::Enter(x));
+                }
+                TTerm::Arith(_, l, r) | TTerm::Concat(l, r) => {
+                    work.push(Walk::Build(t));
+                    work.push(Walk::Enter(r));
+                    work.push(Walk::Enter(l));
+                }
+            },
+            Walk::Build(t) => {
+                let e = match t {
+                    TTerm::Var(i) => {
+                        Expr::Var(vars.get(i).cloned().unwrap_or_else(|| String::from("_")))
+                    }
+                    TTerm::Number(n) => Expr::Number(n.clone()),
+                    TTerm::Const(c) if *c == LIST => Expr::List {
+                        items: Vec::new(),
+                        tail: None,
+                    },
+                    TTerm::Const(c) => Expr::Ident(symbols.name(*c).to_string()),
+                    TTerm::Compound(f, args) => {
+                        let args = out.split_off(out.len() - args.len());
+                        Expr::Atom(Box::new(Atom {
+                            name: symbols.name(*f).to_string(),
+                            args,
+                        }))
+                    }
+                    TTerm::Neg(_) => Expr::Neg(Box::new(pop(&mut out))),
+                    TTerm::Len(_) => Expr::Len(Box::new(pop(&mut out))),
+                    TTerm::Arith(op, ..) => {
+                        let right = Box::new(pop(&mut out));
+                        let left = Box::new(pop(&mut out));
+                        Expr::Binary {
+                            op: *op,
+                            left,
+                            right,
+                        }
+                    }
+                    TTerm::Concat(..) => {
+                        let r = Box::new(pop(&mut out));
+                        let l = Box::new(pop(&mut out));
+                        Expr::Concat(l, r)
+                    }
+                };
+                out.push(e);
+            }
+            Walk::List { items, tail } => {
+                let tail = tail.then(|| Box::new(pop(&mut out)));
+                let items = out.split_off(out.len() - items);
+                out.push(Expr::List { items, tail });
+            }
+        }
+    }
+    out.pop().map(|e| e.to_string()).unwrap_or_default()
 }
