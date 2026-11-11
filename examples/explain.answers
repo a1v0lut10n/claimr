@@ -37,4 +37,4 @@ S = f(_1)
 ?- atom_chars(A, <a, b>), { L = |<a, b, c>| }.
 A = ab, L = 3
   atom_chars(ab, <a, b>)  builtin
-  { 3 = 3 }  constraint
+  { 3 = |<a, b, c>| }  constraint

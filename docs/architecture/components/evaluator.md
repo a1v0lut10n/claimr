@@ -174,7 +174,11 @@ answers in solved form. Public surface (re-exported from `claimr`):
   (`Solutions::with_explanations`, the CLI's `--explain`, the REPL's
   `:explain`) the machine keeps a proof arena — one record per successful
   step: the clause that resolved a call (with the call's address), a
-  constraint goal's two sides and operator, a built-in's call, a committed
+  constraint goal's template and frame (CLM-0032: rendered as written with
+  the derivation's bindings by `answer::render_template`, arithmetic,
+  lengths and lists in source form, so an arithmetic term over variables
+  still unbound shows the expression rather than its lowered numeric
+  variable), a built-in's call, a committed
   condition, a condition found without a solution, a tabled call with the
   index of the answer it took (CLM-0027; rendered as a `tabled` node whose
   subgoals are the table's recorded derivation) — each under the record

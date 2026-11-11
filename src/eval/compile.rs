@@ -140,7 +140,7 @@ fn has_control(goals: &[TGoal]) -> bool {
 
 /// The clause variables a term mentions. Iterative: a literal may be deep
 /// (CLM-0019).
-fn term_vars(root: &TTerm, out: &mut BTreeSet<u32>) {
+pub(crate) fn term_vars(root: &TTerm, out: &mut BTreeSet<u32>) {
     let mut work = vec![root];
     while let Some(t) = work.pop() {
         match t {
