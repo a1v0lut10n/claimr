@@ -8,6 +8,40 @@ minor versions may change the language. Each entry names the ticket
 journal entry under `docs/journal/` carry the detail, and the design record
 under `docs/design/` that decided it.
 
+## [0.6.0] — 2026-11-11
+
+Errors a program can route on, and the constraint-programming showcase.
+Programs written for 0.5.0 run unchanged and print the same; every
+existing JSON field keeps its name, value and place.
+
+### Added
+
+- **`kind` and `class` on every JSON error object** (CLM-0033;
+  `docs/design/2026-11-11-json-error-kind-and-class.md`). The `error`
+  object of an `"outcome": "error"` query document and of the stderr file
+  document carries `kind`, a stable kebab-case name for the precise error
+  (`step-limit`, `non-linear`, `unsatisfiable-facts`, `non-ground-condition`,
+  `syntax`, `read`, …; open to additions), `class`, what the caller should
+  do about it from a closed set (`syntax`, `program`, `unsupported`,
+  `resource`, `io`, `internal`), and the error's data as fields named as in
+  the variant — `steps` and `goal`, `conflict` as a list of cited clauses,
+  `constraint`, `construct` and `variable`, … — ahead of the unchanged
+  `message`. The table is in `docs/reference/json-output.md`.
+- **N queens** (CLM-0034): `examples/queens.claimr`, the constraint-
+  programming showcase in twenty lines — the columns are unknowns, every
+  pair of rows is constrained before any value is chosen, the search only
+  picks values — with a README section, a golden run, and
+  `tests/benchmarks.rs` with `docs/reference/benchmarks.md` recording the
+  numbers (a first solution for 12 queens in about half a second; all 92
+  solutions of 8 in 1.2 s on an M4 Pro). An incubation note on integer
+  domains and propagation starts from those numbers.
+
+### Changed
+
+- **API.** `EvalError::kind()`, `class()` and `fields()`; new `ErrorClass`
+  and `ErrorValue`. `json_out`'s error writers take the error (or the kind,
+  class and fields) instead of a message.
+
 ## [0.5.0] — 2026-11-11
 
 Explanations of failure: a query that has no answer can say why, and a
@@ -176,6 +210,7 @@ form projected onto the query), the exact linear constraint solver
 (Dutertre–de Moura simplex over arbitrary-precision rationals, attribute
 terms, numeric disequations, delayed products) and the REPL.
 
+[0.6.0]: https://github.com/a1v0lut10n/claimr/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/a1v0lut10n/claimr/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/a1v0lut10n/claimr/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/a1v0lut10n/claimr/compare/v0.2.0...v0.3.0
