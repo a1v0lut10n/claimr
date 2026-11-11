@@ -42,8 +42,9 @@ declarative programs.
   ([`docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md`](docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md))
 - **A REPL** (`claimr`, `claimr -i file`) with Prolog-style answer stepping
 - **Machine-readable output** (`claimr --json`): one JSON document per
-  query, structured diagnostics — a pinned contract for programmatic
-  consumers ([`docs/reference/json-output.md`](docs/reference/json-output.md))
+  query, structured diagnostics — each error with a `kind`, a `class` the
+  caller can route on, and its data as fields — a pinned contract for
+  programmatic consumers ([`docs/reference/json-output.md`](docs/reference/json-output.md))
 - **Explanations** (`claimr --explain`, `:explain` in the REPL): each
   answer with its proof tree — the clauses, by position and text, and the
   constraint instances that derived it
