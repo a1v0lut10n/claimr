@@ -1,7 +1,7 @@
 ---
 date: 2026-11-11
 type: design
-status: proposed
+status: accepted
 components: [cli, evaluator]
 aspects: []
 tags: [json-output, errors, contract, kind, class, machine-readable, aicogito]
