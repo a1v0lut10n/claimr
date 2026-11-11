@@ -123,6 +123,13 @@ fn clauses_at_the_prompt_extend_the_session() {
          eligible(X) :- { age(X) >= 18 }.\n{ age(bob) > 70 }.\n"
     );
     assert!(err.contains("constraint facts are unsatisfiable"), "{err}");
+    // CLM-0030: the two facts that conflict are cited (the session compiles
+    // without positions, so by text alone), the rule is not.
+    assert!(
+        err.contains("\n  { age(bob) > 70 }.  fact\n  { age(bob) < 10 }.  fact"),
+        "{err}"
+    );
+    assert!(!err.contains("eligible"), "{err}");
 }
 
 #[test]

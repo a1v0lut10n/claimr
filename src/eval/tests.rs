@@ -586,10 +586,10 @@ fn constraint_facts_form_the_initial_store() {
     assert_eq!(out[1], vec!["Z != a"]);
     // Unsatisfiable facts: no models.
     let clauses = parse_program("{ a != a }. p(1).").unwrap();
-    assert_eq!(
+    assert!(matches!(
         Program::compile(&clauses).unwrap_err(),
-        EvalError::InitialStoreUnsatisfiable
-    );
+        EvalError::InitialStoreUnsatisfiable { .. }
+    ));
     let clauses = parse_program("{ X = a }. { X != a }. p(1).").unwrap();
     // Different clauses have different X: satisfiable.
     assert!(Program::compile(&clauses).is_ok());
@@ -918,10 +918,10 @@ fn numeric_examples_from_the_readme_run() {
 #[test]
 fn compile_spanned_still_works_and_initial_store_checks_numerics() {
     let clauses = parse_program_spanned("{ X > 3, X < 2 }. p(1).").unwrap();
-    assert_eq!(
+    assert!(matches!(
         Program::compile_spanned(&clauses).unwrap_err(),
-        EvalError::InitialStoreUnsatisfiable
-    );
+        EvalError::InitialStoreUnsatisfiable { .. }
+    ));
     let clauses = parse_program_spanned("{ age(a) > 3 }. p(1). ?- p(X).").unwrap();
     assert!(Program::compile_spanned(&clauses).is_ok());
 }
@@ -2198,4 +2198,217 @@ fn a_tabled_predicate_with_infinite_answers_stops_under_the_budget() {
         .map(|a| a.to_string())
         .collect();
     assert_eq!(out, vec!["true"]);
+}
+
+// --- explanations of failure, stage 1 (CLM-0030) ---------------------------
+
+mod conflict_sets {
+    //! The replay oracle and the minimal-conflict finder of
+    //! `docs/design/2026-11-11-explanations-of-failure.md`: a conflict set
+    //! is unsatisfiable with the failing step and satisfiable with any one
+    //! member removed, decided by the same exact check an answer passes.
+
+    use crate::ast::RelOp;
+    use crate::eval::compile::TTerm;
+    use crate::eval::explain::{ConstraintOp, Step, minimal_conflict, satisfiable};
+    use crate::{EvalError, Number, Program, parse_program, parse_program_spanned};
+
+    fn compiled(src: &str) -> Program {
+        Program::compile(&parse_program(src).expect("parses")).expect("compiles")
+    }
+
+    /// `{ age(bob) OP n }` as a closed step: ground, so no variable ids.
+    fn age_bob(program: &Program, op: RelOp, n: i64) -> Step {
+        let mut symbols = program.symbols.borrow_mut();
+        let age = symbols.intern("age");
+        let bob = symbols.intern("bob");
+        Step::Constraint {
+            op: ConstraintOp::Rel(op),
+            a: TTerm::Compound(age, vec![TTerm::Const(bob)]),
+            b: TTerm::Number(Number::from(n)),
+        }
+    }
+
+    fn with(steps: &[Step], picked: &[usize], failing: &Step) -> bool {
+        let mut set: Vec<&Step> = picked.iter().map(|&i| &steps[i]).collect();
+        set.push(failing);
+        satisfiable_or_panic(&set)
+    }
+
+    fn satisfiable_or_panic(steps: &[&Step]) -> bool {
+        // The oracle needs the program; every test here has one program, so
+        // the caller threads it through the thread-local below.
+        PROGRAM
+            .with(|p| satisfiable(p.borrow().as_ref().expect("a program"), steps))
+            .expect("the replay decides")
+    }
+
+    thread_local! {
+        static PROGRAM: std::cell::RefCell<Option<Program>> = const { std::cell::RefCell::new(None) };
+    }
+
+    fn install(program: Program) -> Program {
+        PROGRAM.with(|p| *p.borrow_mut() = Some(program.clone()));
+        program
+    }
+
+    /// The property the aspect states, checked for one conflict set.
+    fn assert_minimal_conflict(steps: &[Step], conflict: &[usize], failing: &Step) {
+        assert!(
+            !with(steps, conflict, failing),
+            "the conflict set with the failing step must be unsatisfiable"
+        );
+        for drop in conflict {
+            let rest: Vec<usize> = conflict.iter().copied().filter(|i| i != drop).collect();
+            assert!(
+                with(steps, &rest, failing),
+                "removing step {drop} must leave a satisfiable system"
+            );
+        }
+    }
+
+    #[test]
+    fn an_answers_steps_replay_to_a_satisfiable_system() {
+        // Every kind of step: a world fact, clause heads, a tabled call, a
+        // comprehension, a built-in and a constraint goal.
+        let program = install(compiled(
+            ":- table anc/2.
+             { budget(a) >= 1 }.
+             parent(a, b). parent(b, c).
+             anc(X, Y) :- parent(X, Y).
+             anc(X, Z) :- anc(X, Y), parent(Y, Z).
+             p(1). p(2).
+             count(N) :- { N = |<X | p(X)>| }.
+             q(A, N) :- anc(a, c), count(N), atom_chars(A, <a, b>), { N > 1 }.
+             ?- q(A, N).",
+        ));
+        let mut solutions = program.solve(&program.queries()[0]).with_explanations();
+        let answer = solutions.next().expect("an answer");
+        assert_eq!(answer.to_string(), "A = ab, N = 2");
+        let steps = solutions.derivation_steps();
+        assert!(steps.iter().any(|s| matches!(s, Step::Fact(0))));
+        assert!(steps.iter().any(|s| matches!(s, Step::Head { .. })));
+        assert!(steps.iter().any(|s| matches!(s, Step::Tabled { .. })));
+        assert!(steps.iter().any(|s| matches!(s, Step::Collected { .. })));
+        assert!(steps.iter().any(|s| matches!(s, Step::Builtin { .. })));
+        assert!(steps.iter().any(|s| matches!(s, Step::Constraint { .. })));
+        let all: Vec<&Step> = steps.iter().collect();
+        assert!(satisfiable_or_panic(&all));
+        // Without explanations only the facts are known.
+        let mut plain = program.solve(&program.queries()[0]);
+        plain.next().expect("an answer");
+        assert!(matches!(
+            plain.derivation_steps().as_slice(),
+            [Step::Fact(0)]
+        ));
+    }
+
+    #[test]
+    fn a_conflict_set_is_unsatisfiable_whole_and_satisfiable_without_any_member() {
+        let program = install(compiled(
+            "eligible(X) :- { age(X) >= 18 }.
+             ?- eligible(bob).",
+        ));
+        let mut solutions = program.solve(&program.queries()[0]).with_explanations();
+        assert_eq!(
+            solutions.next().expect("an answer").to_string(),
+            "age(bob) >= 18"
+        );
+        let steps = solutions.derivation_steps();
+        assert_eq!(steps.len(), 2, "the head and the constraint");
+        let failing = age_bob(&program, RelOp::Lt, 18);
+        let conflict = minimal_conflict(&program, &steps, &failing).expect("decided");
+        // The head connects X to bob; without it the body's constraint is
+        // about another unknown. Both are needed.
+        assert_eq!(conflict, vec![0, 1]);
+        assert_minimal_conflict(&steps, &conflict, &failing);
+    }
+
+    #[test]
+    fn a_world_fact_is_cited_when_it_is_the_cause() {
+        let program = install(compiled(
+            "{ age(bob) >= 18 }.
+             ?- { age(bob) > 0 }.",
+        ));
+        let mut solutions = program.solve(&program.queries()[0]).with_explanations();
+        solutions.next().expect("an answer");
+        let steps = solutions.derivation_steps();
+        assert_eq!(steps.len(), 2, "the fact and the query's constraint");
+        let failing = age_bob(&program, RelOp::Lt, 18);
+        let conflict = minimal_conflict(&program, &steps, &failing).expect("decided");
+        assert_eq!(conflict, vec![0], "the fact alone; `> 0` is not needed");
+        assert_minimal_conflict(&steps, &conflict, &failing);
+    }
+
+    #[test]
+    fn a_head_clash_is_explained_by_the_failing_step_alone() {
+        let program = install(compiled("q(1). ?- q(1)."));
+        let q = program.symbols.borrow_mut().intern("q");
+        let failing = Step::Head {
+            head: TTerm::Compound(q, vec![TTerm::Number(Number::from(1))]),
+            call: TTerm::Compound(q, vec![TTerm::Number(Number::from(2))]),
+        };
+        let conflict = minimal_conflict(&program, &[], &failing).expect("decided");
+        assert!(conflict.is_empty());
+        assert!(!satisfiable_or_panic(&[&failing]));
+    }
+
+    #[test]
+    fn the_set_reported_among_several_minimal_ones_is_deterministic() {
+        // `{ X > 5 }` and `{ X > 7 }` each conflict with `{ X < 3 }` on
+        // their own; the earlier step is the one reported.
+        let program = install(compiled("?- { X > 5 }, { X > 7 }."));
+        let mut solutions = program.solve(&program.queries()[0]).with_explanations();
+        assert_eq!(solutions.next().expect("an answer").to_string(), "X > 7");
+        let steps = solutions.derivation_steps();
+        let Step::Constraint { a, .. } = &steps[0] else {
+            panic!("a constraint step");
+        };
+        let failing = Step::Constraint {
+            op: ConstraintOp::Rel(RelOp::Lt),
+            a: a.clone(),
+            b: TTerm::Number(Number::from(3)),
+        };
+        let conflict = minimal_conflict(&program, &steps, &failing).expect("decided");
+        assert_eq!(conflict, vec![0]);
+        assert_minimal_conflict(&steps, &conflict, &failing);
+        let other = minimal_conflict(&program, &steps, &failing).expect("decided");
+        assert_eq!(conflict, other);
+    }
+
+    #[test]
+    fn unsatisfiable_constraint_facts_name_a_minimal_conflicting_set() {
+        let src = "{ age(bob) >= 18 }.\n{ price(x) > 0 }.\n{ age(bob) < 10 }.\np(1).\n";
+        let clauses = parse_program_spanned(src).expect("parses");
+        let err = Program::compile_spanned(&clauses).expect_err("no models");
+        let EvalError::InitialStoreUnsatisfiable { conflict } = &err else {
+            panic!("expected the load error, got {err:?}");
+        };
+        let cited: Vec<(usize, &str)> = conflict
+            .iter()
+            .map(|(span, text)| (span.expect("positioned").line, text.as_str()))
+            .collect();
+        assert_eq!(
+            cited,
+            vec![(1, "{ age(bob) >= 18 }."), (3, "{ age(bob) < 10 }.")]
+        );
+        assert_eq!(
+            err.to_string(),
+            "the program's constraint facts are unsatisfiable (no models); a minimal conflicting set:\n  \
+             { age(bob) >= 18 }.  fact 1:1\n  { age(bob) < 10 }.  fact 3:1"
+        );
+        // Without positions the facts are cited by text alone.
+        let err = Program::compile(&parse_program(src).expect("parses")).expect_err("no models");
+        assert!(
+            err.to_string()
+                .ends_with("\n  { age(bob) >= 18 }.  fact\n  { age(bob) < 10 }.  fact")
+        );
+        // A fact unsatisfiable on its own is the whole set.
+        let err = Program::compile(&parse_program("{ X > 3, X < 2 }. p(1).").expect("parses"))
+            .expect_err("no models");
+        assert!(
+            err.to_string().ends_with("set:\n  { X > 3, X < 2 }.  fact"),
+            "{err}"
+        );
+    }
 }

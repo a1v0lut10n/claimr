@@ -77,7 +77,13 @@ fn errors_are_reported_and_exit_1() {
     std::fs::write(&file, "{ X > 3, X < 2 }.\n?- ok(1).\n").unwrap();
     let out = claimr().arg(&file).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("constraint facts are unsatisfiable"));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("constraint facts are unsatisfiable"), "{err}");
+    // CLM-0030: the load error names the conflicting facts by position and text.
+    assert!(
+        err.contains("a minimal conflicting set:\n  { X > 3, X < 2 }.  fact 1:1"),
+        "{err}"
+    );
     // Non-linear residue at answer time: runtime error naming the query, exit 1.
     std::fs::write(&file, "?- { Y = X * Z }.\n").unwrap();
     let out = claimr().arg(&file).output().unwrap();

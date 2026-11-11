@@ -1,6 +1,6 @@
 ---
 type: architecture-component
-last-verified: 2026-11-09
+last-verified: 2026-11-11
 decisions:
   - docs/design/2026-08-17-evaluator.md
   - docs/design/2026-08-17-arithmetic-in-terms.md
@@ -12,6 +12,7 @@ decisions:
   - docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md
   - docs/design/2026-11-09-numbers-numeric-variables-and-attribute-terms.md
   - docs/design/2026-11-10-tabling-for-recursive-rules.md
+  - docs/design/2026-11-11-explanations-of-failure.md
 aspects: [answer-soundness, exact-arithmetic]
 ---
 
@@ -184,7 +185,12 @@ answers in solved form. Public surface (re-exported from `claimr`):
   its `no-solution` leaf when taken. Off, nothing is recorded. At an
   answer the arena's goal instances are rendered by the answer's own
   printer (so `_N` names agree) and the tree is assembled bottom-up without
-  recursion.
+  recursion. Since CLM-0030 each record also keeps what closing the step for
+  replay needs — a clause's frame and the call's source (template and frame,
+  a `CallRef`), a constraint goal's template and frame, a built-in's — so
+  `Solutions::derivation_steps` can turn the live arena into the closed
+  `Step`s of `explain.rs`; nothing is allocated for it on the hot path
+  beyond an `Rc` clone of a frame.
   **Tabling** (CLM-0027, design record
   `2026-11-10-tabling-for-recursive-rules.md`): a call to a predicate in
   `Program.tabled` goes through its table, keyed by the call's **variant**
@@ -254,6 +260,26 @@ answers in solved form. Public surface (re-exported from `claimr`):
   before an answer is yielded `Store::finalize` runs (exact determination
   and disequation checks; a non-linear residue stops the query with
   `EvalError::NonLinear`, exposed by `Solutions::error`).
+- **`explain.rs`** — explanations of failure, stage 1 (CLM-0030, design
+  record `2026-11-11-explanations-of-failure.md`): a derivation's **steps**
+  as closed, replayable records (`Step`: a clause head unified with its
+  call, a constraint goal, a built-in, a table answer, a collected list, a
+  constraint fact of the program), *closed* meaning a `TTerm` whose
+  variables are the heap addresses of the frame variables they stood for
+  (`close`), so steps taken under different frames agree on which variable
+  is which; the **replay oracle** (`satisfiable`: the steps posted in order
+  into a fresh store over the program's symbol table, then finalized — the
+  exact check an answer passes; a store error or a non-linear residue is an
+  `Err`, never a verdict); and the **minimiser** (`minimal_conflict`:
+  QuickXplain over the steps before a failing one, in their order, giving
+  the indices of a minimal subset that is unsatisfiable with the failing
+  step while every proper subset is satisfiable — deterministic, the
+  failing step implicit since it is in every such set). Used today at load
+  time: `Program::compile` reports an unsatisfiable set of constraint facts
+  as `EvalError::InitialStoreUnsatisfiable { conflict }`, the minimal
+  conflicting facts cited by position and text (`Program.initial` keeps
+  both, `post_fact` posts one fact as a replay step). The failure tree that
+  explains a query's `false` is CLM-0031.
 - **`project.rs`** — answer projection and simplification (stage 4): the
   visible numeric store as a residual system over alias-class roots (bounds
   with non-public definitions expanded, definitions of public defined

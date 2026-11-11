@@ -11,7 +11,12 @@ use crate::Span;
 pub enum EvalError {
     /// The program's constraint facts are jointly unsatisfiable: it has no
     /// models, so no query could ever succeed.
-    InitialStoreUnsatisfiable,
+    InitialStoreUnsatisfiable {
+        /// CLM-0030: a minimal conflicting set of the facts, each by its
+        /// position (when parsed with positions) and text; empty when the
+        /// set could not be computed.
+        conflict: Vec<(Option<Span>, String)>,
+    },
     /// A non-linear constraint (a product or quotient of two unknowns) was
     /// still pending when an answer would have been produced. Claimr does not
     /// approximate: the query stops instead of printing an unchecked answer.
@@ -112,8 +117,18 @@ pub enum EvalError {
 impl fmt::Display for EvalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EvalError::InitialStoreUnsatisfiable => {
-                f.write_str("the program's constraint facts are unsatisfiable (no models)")
+            EvalError::InitialStoreUnsatisfiable { conflict } => {
+                f.write_str("the program's constraint facts are unsatisfiable (no models)")?;
+                if !conflict.is_empty() {
+                    f.write_str("; a minimal conflicting set:")?;
+                    for (span, text) in conflict {
+                        match span {
+                            Some(s) => write!(f, "\n  {text}  fact {}:{}", s.line, s.column)?,
+                            None => write!(f, "\n  {text}  fact")?,
+                        }
+                    }
+                }
+                Ok(())
             }
             EvalError::NonLinear { constraint } => write!(
                 f,
@@ -201,7 +216,7 @@ impl EvalError {
             | EvalError::ReservedBuiltin { span, .. }
             | EvalError::ComprehensionInHead { span }
             | EvalError::BadDirective { span, .. } => *span,
-            EvalError::InitialStoreUnsatisfiable
+            EvalError::InitialStoreUnsatisfiable { .. }
             | EvalError::NonLinear { .. }
             | EvalError::CyclicAttributeTerm { .. }
             | EvalError::NonGroundCondition { .. }

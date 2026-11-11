@@ -98,7 +98,12 @@ Read, parse, and compile failures emit one document on **stderr**:
 {"error": {"file": "f.claimr", "line": 2, "column": 1, "message": "Expected one of …"}}
 ```
 
-`line` and `column` (1-based) appear only when known.
+`line` and `column` (1-based) appear only when known. A program whose
+constraint facts are unsatisfiable is such a failure; since CLM-0030 its
+`message` continues after `the program's constraint facts are
+unsatisfiable (no models)` with `; a minimal conflicting set:` and one line
+per fact, `  { age(bob) >= 18 }.  fact 3:1` — the shape is unchanged, the
+message carries the lines.
 
 ## Exit codes
 

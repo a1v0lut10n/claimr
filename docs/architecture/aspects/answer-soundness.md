@@ -1,6 +1,6 @@
 ---
 type: architecture-aspect
-last-verified: 2026-11-09
+last-verified: 2026-11-11
 applies-to: [evaluator, solver]
 decisions:
   - docs/design/2026-08-17-evaluator.md
@@ -10,6 +10,7 @@ decisions:
   - docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md
   - docs/design/2026-11-09-numbers-numeric-variables-and-attribute-terms.md
   - docs/design/2026-11-10-tabling-for-recursive-rules.md
+  - docs/design/2026-11-11-explanations-of-failure.md
 ---
 
 # answer-soundness
@@ -140,3 +141,23 @@ realise the store.
    `tabled_answers_must_be_finite_ground_terms`,
    `an_interrupt_inside_an_evaluation_cleans_the_tables`, and the golden
    run `examples/tabling.claimr`.
+9. **A conflict set is unsatisfiable and minimal by the check that reports
+   it.** An explanation of failure (CLM-0030,
+   `2026-11-11-explanations-of-failure.md`) cites a failed step together
+   with a set of earlier steps of its derivation — clause heads, posted
+   constraints, built-ins, table answers, collected lists, the program's
+   constraint facts — such that the set with the failing step, replayed
+   into a fresh store and finalized, has no solution, and the set with any
+   one member removed has one; both decided exactly, by the oracle that
+   decides answers. No origin is traced through the solver: the set is not
+   inferred, it is verified. Today the load error for unsatisfiable
+   constraint facts carries such a set; CLM-0031 adds the failure tree,
+   whose branches must each be a derivation the search tried, and which
+   must say when it is truncated. *Test:*
+   `a_conflict_set_is_unsatisfiable_whole_and_satisfiable_without_any_member`,
+   `a_world_fact_is_cited_when_it_is_the_cause`,
+   `a_head_clash_is_explained_by_the_failing_step_alone`,
+   `the_set_reported_among_several_minimal_ones_is_deterministic`,
+   `an_answers_steps_replay_to_a_satisfiable_system` (an answer's own
+   steps are a satisfiable system), and
+   `unsatisfiable_constraint_facts_name_a_minimal_conflicting_set`.
