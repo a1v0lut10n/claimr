@@ -25,6 +25,21 @@ declarative programs.
 - **Quoted atoms** (`'situation:frame-in-spec'`) — any content as an atom;
   identity is content, quoting is spelling, print-back quotes exactly when
   needed
+- **Lists as a constraint domain** — Prolog III tuples `<a, b, c>`, the
+  cons pattern `<H> . T`, the length `|L|` as a number in the constraint
+  store, and concatenation `X . Y` as a constraint that runs in both
+  directions
+  ([`docs/design/2026-11-09-lists-as-a-constraint-domain.md`](docs/design/2026-11-09-lists-as-a-constraint-domain.md))
+- **Strings as character lists** (`"abc"` is `<a, b, c>`), `atom_chars/2`
+  as a delayed constraint, and the type relations `number/1`, `atom/1`,
+  `list/1` ([`docs/reference/builtins.md`](docs/reference/builtins.md))
+- **Control in bodies** — disjunction `A ; B`, if-then-else `C -> T ; E`
+  and negation `\+ G`, decided only on a ground condition so an answer is
+  never a guess
+  ([`docs/design/2026-11-09-negation-disjunction-and-if-then-else.md`](docs/design/2026-11-09-negation-disjunction-and-if-then-else.md))
+- **Aggregation** — the list comprehension `<T | Body>`, counts as its
+  length `|<T | Body>|`, and the exact sum relation `sum(L, S)`
+  ([`docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md`](docs/design/2026-11-09-aggregation-list-comprehensions-and-sum.md))
 - **A REPL** (`claimr`, `claimr -i file`) with Prolog-style answer stepping
 - **Machine-readable output** (`claimr --json`): one JSON document per
   query, structured diagnostics — a pinned contract for programmatic
@@ -37,6 +52,10 @@ declarative programs.
   ground answers, so transitive closures terminate on cyclic data in either
   direction of recursion and give each answer once
   ([`docs/design/2026-11-10-tabling-for-recursive-rules.md`](docs/design/2026-11-10-tabling-for-recursive-rules.md))
+- **A step limit** (`claimr --steps N`, `:steps N`): a budget of resolution
+  steps for the whole query, reached as a runtime error that names the
+  goal — an untabled recursion over cyclic data is reported, never a hang
+  ([`docs/design/2026-11-11-step-limit-for-queries.md`](docs/design/2026-11-11-step-limit-for-queries.md))
 - **Parser generated with [rustemo](https://crates.io/crates/rustemo)**, an
   LR parser generator for Rust — the grammar file is the single source of
   truth for the syntax, and syntax errors carry line/column positions
@@ -44,11 +63,14 @@ declarative programs.
   lexing in claimr's own vocabulary, for editors and UIs
 
 Current status: the **parser** (`src/parser/`), the **evaluator**
-(`src/eval/`: SLD resolution over rational trees, `=`/`!=` on terms, answers
-in solved form, projected onto the query), the **linear constraint solver**
-(`src/solver/`: exact rational simplex, attribute terms such as `age(X)`,
+(`src/eval/`: SLD resolution over rational trees with first-argument
+indexing and tabling, `=`/`!=` on terms, lists, strings, control
+constructs, comprehensions, answers in solved form projected onto the
+query, explanations), the **linear constraint solver** (`src/solver/`:
+exact rational simplex, attribute terms such as `age(X)`, list lengths,
 delayed non-linear products), and the **REPL** are implemented. Open:
-non-linear and finite-domain constraints.
+non-linear and finite-domain constraints, explanations of failure. The
+[changelog](CHANGELOG.md) lists what each release added.
 
 ## Grammar
 
@@ -195,6 +217,7 @@ claimr> :quit
 | `:clear` | empty the session |
 | `:limit N` | cap answers per query in `:all` mode (0 = unlimited) |
 | `:steps N` | stop a query after N resolution steps with an error, so an untabled recursion over cyclic data is reported rather than hung (0 = unlimited) |
+| `:explain` | toggle the proof tree under each answer |
 | `:all` | toggle between stepping answers and printing them all |
 | `:help`, `:quit` | leave with `:quit`, `exit.`, Ctrl-D, or Ctrl-C twice at an empty prompt; Ctrl-C interrupts a running query |
 
@@ -260,6 +283,7 @@ nonlinear.claimr: in `?- { Y = X * Z }.`: non-linear constraint `X * Z` is still
 ```
 claimr/
 ├── Cargo.toml
+├── CHANGELOG.md         # what each release added
 ├── build.rs             # generates the parser from the grammar (rustemo)
 ├── src/
 │   ├── lib.rs           # public API: parse_program, parse_clause, ParseError
@@ -269,12 +293,12 @@ claimr/
 │   │   ├── claimr.rustemo       # THE grammar (authoritative)
 │   │   ├── claimr_actions.rs    # semantic actions: productions -> ast
 │   │   └── mod.rs               # includes the generated parser (OUT_DIR)
-│   ├── eval/            # evaluator: store (heap, trail, dif, numeric glue), unify, compile, SLD machine, answers
+│   ├── eval/            # evaluator: store (heap, trail, dif, numeric glue), compile, SLD machine, tables, projection, answers
 │   ├── solver/          # exact linear solver: delta-rationals, linear expressions, simplex
 │   ├── highlight.rs     # error-tolerant line lexer for editors and UIs
 │   ├── json_out.rs      # the --json output writer (pinned contract)
 │   ├── repl.rs          # the interactive loop
-│   └── main.rs          # `claimr` CLI: run a program, --json, --parse, or the REPL
+│   └── main.rs          # `claimr` CLI: run a program (--json, --explain, --limit, --steps), --parse, or the REPL
 ├── examples/            # sample .claimr programs (parsed by the tests; *.answers = golden runs)
 ├── tests/               # integration tests
 └── docs/                # documentation workflow (see docs/README.md)
