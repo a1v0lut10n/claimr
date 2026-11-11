@@ -86,7 +86,9 @@ to the shape above; a consumer that does not know the field can ignore it.
 ```
 
 Printed for the failing query (stdout), then the run stops — exit 1,
-as in human mode.
+as in human mode. A query that exceeds the budget given with `--steps N`
+(CLM-0029) is such a failure; its message opens with a fixed phrase,
+`step limit of N reached at GOAL; …`, and the document shape is unchanged.
 
 ## A file that never runs
 

@@ -98,6 +98,12 @@ pub enum EvalError {
     /// A call to a tabled predicate (CLM-0027) is a cyclic term, which has
     /// no finite variant key.
     CyclicTabledCall { call: String },
+    /// The query reached its budget of resolution steps (CLM-0029,
+    /// `--steps N` / `:steps N` / `Solutions::with_step_limit`): a resource
+    /// bound the caller set, not a judgment about the query. `goal` is the
+    /// goal the machine was about to resolve, rendered (in backticks) or
+    /// named by kind.
+    StepLimit { steps: u64, goal: String },
     /// An internal invariant of the evaluator failed; reported rather than
     /// panicked so the CLI and REPL stay up. Never expected.
     InternalInvariant { what: String },
@@ -174,6 +180,10 @@ impl fmt::Display for EvalError {
                 f,
                 "the call `{call}` to a tabled predicate is a cyclic term, which has no finite table key"
             ),
+            EvalError::StepLimit { steps, goal } => write!(
+                f,
+                "step limit of {steps} reached at {goal}; the query may not terminate (an untabled recursion over cyclic data?) — raise the limit, or table the predicate"
+            ),
             EvalError::InternalInvariant { what } => {
                 write!(f, "internal error: {what} (please report)")
             }
@@ -200,6 +210,7 @@ impl EvalError {
             | EvalError::ConstrainedTabledAnswer { .. }
             | EvalError::IncompleteTable { .. }
             | EvalError::CyclicTabledCall { .. }
+            | EvalError::StepLimit { .. }
             | EvalError::InternalInvariant { .. } => None,
         }
     }

@@ -247,3 +247,27 @@ fn tabled_calls_in_the_json_vocabulary() {
         "{stdout}"
     );
 }
+
+/// CLM-0029: the step limit is the existing query error document — no new
+/// output shape; the message opens with a fixed phrase.
+#[test]
+fn a_step_limit_is_a_query_error_document() {
+    let path = write_temp(
+        "steps",
+        "par(a, b). par(b, a).\nanc(X, Z) :- anc(X, Y), par(Y, Z).\nanc(X, Y) :- par(X, Y).\n?- par(a, X).\n?- anc(a, X).\n",
+    );
+    let (stdout, _, code) = run(&["--json", "--steps", "1000", path.to_str().unwrap()]);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(1));
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert_eq!(
+        lines[0],
+        r#"{"query":"?- par(a, X).","outcome":"solutions","answers":[{"equations":["X = b"],"disequations":[],"constraints":[]}]}"#
+    );
+    assert!(
+        lines[1].starts_with(r#"{"query":"?- anc(a, X).","outcome":"error","error":{"message":"step limit of 1000 reached at `anc(a, _1)`;"#),
+        "{}",
+        lines[1]
+    );
+}

@@ -46,7 +46,12 @@ realise the store.
 3. **Nothing satisfiable is dropped as an error.** Undefined predicates
    fail (no clauses ⇒ no solutions); unsupported constructs are rejected at
    load time with a positioned diagnostic, never silently ignored at run
-   time. *Test:* stage-boundary tests in `src/eval/tests.rs`.
+   time. A stop under a caller's step budget (CLM-0029, `--steps N`) is a
+   resource error that names its count and goal, not a judgment about the
+   query: the answers found before it stand and nothing is reported
+   `false`. *Test:* stage-boundary tests in `src/eval/tests.rs`; the
+   step-budget tests there (`a_step_budget_stops_a_looping_query_and_names_the_goal`,
+   `answers_before_the_step_budget_are_yielded_then_the_error`).
 4. **Projection is sound.** What is printed is equivalent, on the public
    variables, to the store: internal numeric variables are eliminated by
    equivalence-preserving substitution and Fourier–Motzkin (or, over the

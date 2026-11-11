@@ -35,6 +35,8 @@ pub struct Repl {
     /// CLM-0023: print each answer's proof tree.
     explain: bool,
     limit: Option<usize>,
+    /// CLM-0029: a budget of resolution steps per query (`:steps`).
+    steps: Option<u64>,
     interrupt: Arc<AtomicBool>,
     input: Input,
     interactive: bool,
@@ -63,6 +65,7 @@ After an answer: `;` then Enter for the next, Enter or `.` to stop.
   :list        print the session's clauses
   :clear       empty the session
   :limit N     cap answers per query in :all mode (0 = unlimited)
+  :steps N     stop a query after N resolution steps with an error (0 = unlimited)
   :all         toggle between stepping answers and printing them all
   :explain     toggle the proof tree under each answer (CLM-0023)
   :help        this text
@@ -70,8 +73,9 @@ After an answer: `;` then Enter for the next, Enter or `.` to stop.
 Ctrl-C interrupts a running query.";
 
 impl Repl {
-    /// A REPL with an empty session. `limit` seeds `:limit`.
-    pub fn new(limit: Option<usize>) -> Result<Self, String> {
+    /// A REPL with an empty session. `limit` seeds `:limit`, `steps` seeds
+    /// `:steps` (CLM-0029).
+    pub fn new(limit: Option<usize>, steps: Option<u64>) -> Result<Self, String> {
         let interactive = io::stdin().is_terminal();
         let input = if interactive {
             let editor =
@@ -94,6 +98,7 @@ impl Repl {
             all_mode: false,
             explain: false,
             limit,
+            steps,
             interrupt,
             input,
             interactive,
@@ -299,6 +304,11 @@ impl Repl {
                 Ok(n) => self.limit = Some(n),
                 Err(_) => eprintln!("usage: :limit N  (0 = unlimited)"),
             },
+            "steps" => match arg.parse::<u64>() {
+                Ok(0) => self.steps = None,
+                Ok(n) => self.steps = Some(n),
+                Err(_) => eprintln!("usage: :steps N  (0 = unlimited)"),
+            },
             "all" => {
                 self.all_mode = !self.all_mode;
                 println!(
@@ -360,6 +370,9 @@ impl Repl {
         let q = program.queries().last().expect("the query").clone();
         self.interrupt.store(false, Ordering::Relaxed);
         let mut sols = program.solve(&q).with_interrupt(self.interrupt.clone());
+        if let Some(n) = self.steps {
+            sols = sols.with_step_limit(n);
+        }
         if self.explain {
             sols = sols.with_explanations();
         }

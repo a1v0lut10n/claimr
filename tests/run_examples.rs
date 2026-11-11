@@ -103,3 +103,54 @@ fn parse_flag_dumps_the_ast() {
     assert!(stdout.starts_with("Fact(Atom { name: \"human\""));
     assert!(String::from_utf8_lossy(&out.stderr).contains("parsed 7 clause(s)"));
 }
+
+/// CLM-0029: `--steps N` stops a query over budget as a runtime error —
+/// the answers printed before it stand, the error names the query and the
+/// goal, exit 1 — and composes with `--limit`.
+#[test]
+fn steps_flag_stops_a_looping_query() {
+    let dir = std::env::temp_dir().join(format!("claimr-steps-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("loop.claimr");
+    std::fs::write(
+        &file,
+        "par(a, b). par(b, a).\nanc(X, Z) :- anc(X, Y), par(Y, Z).\nanc(X, Y) :- par(X, Y).\n\
+         ?- par(a, X).\n?- anc(a, X).\n?- par(b, X).\n",
+    )
+    .unwrap();
+    let out = claimr()
+        .args(["--steps", "1000"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "?- par(a, X).\nX = b\n?- anc(a, X).\n"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("in `?- anc(a, X).`: step limit of 1000 reached at `anc(a, _1)`; the query may not terminate"),
+        "{err}"
+    );
+    // With --limit too: the answer limit bounds output, the step limit work.
+    let out = claimr()
+        .args(["--steps", "1000", "--limit", "1"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "?- par(a, X).\nX = b\n?- anc(a, X).\n"
+    );
+    // A bad value is a usage error.
+    let out = claimr()
+        .args(["--steps", "many"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("bad --steps value"));
+    std::fs::remove_dir_all(&dir).ok();
+}

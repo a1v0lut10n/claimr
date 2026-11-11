@@ -2102,3 +2102,100 @@ fn the_world_store_shares_the_programs_symbol_table() {
         .collect();
     assert_eq!(out, vec!["X = a"]);
 }
+
+/// CLM-0029: a budget of resolution steps stops a query that would not
+/// terminate, as a runtime error naming the count and the goal about to be
+/// resolved; it is not an interrupt.
+#[test]
+fn a_step_budget_stops_a_looping_query_and_names_the_goal() {
+    let clauses = parse_program(
+        "par(a, b). par(b, a).
+         anc(X, Z) :- anc(X, Y), par(Y, Z).
+         anc(X, Y) :- par(X, Y).
+         ?- anc(a, X).",
+    )
+    .unwrap();
+    let program = Program::compile(&clauses).unwrap();
+    let mut sols = program.solve(&program.queries()[0]).with_step_limit(200);
+    assert!(sols.next().is_none());
+    assert!(!sols.interrupted());
+    match sols.error() {
+        Some(EvalError::StepLimit { steps, goal }) => {
+            assert_eq!(*steps, 200);
+            assert_eq!(goal, "`anc(a, _1)`");
+        }
+        other => panic!("expected the step limit, got {other:?}"),
+    }
+    let text = sols.error().unwrap().to_string();
+    assert!(
+        text.starts_with("step limit of 200 reached at `anc(a, _1)`"),
+        "{text}"
+    );
+}
+
+/// CLM-0029: the budget is exact — a query that takes `steps()` steps
+/// succeeds under that budget and fails under one less — and covers the
+/// whole query across its answers.
+#[test]
+fn the_step_budget_is_exact_over_the_whole_query() {
+    let clauses = parse_program("p(a). p(b). q(X) :- p(X), p(Y), { X != Y }. ?- q(X).").unwrap();
+    let program = Program::compile(&clauses).unwrap();
+    let q = &program.queries()[0];
+    let mut free = program.solve(q);
+    let answers: Vec<String> = free.by_ref().map(|a| a.to_string()).collect();
+    assert_eq!(answers, vec!["X = a", "X = b"]);
+    let steps = free.steps();
+    assert!(steps > 2, "{steps}");
+    let mut enough = program.solve(q).with_step_limit(steps);
+    let got: Vec<String> = enough.by_ref().map(|a| a.to_string()).collect();
+    assert_eq!(got, answers);
+    assert!(enough.error().is_none());
+    let mut short = program.solve(q).with_step_limit(steps - 1);
+    let _ = short.by_ref().count();
+    assert!(
+        matches!(short.error(), Some(EvalError::StepLimit { steps: s, .. }) if *s == steps - 1),
+        "{:?}",
+        short.error()
+    );
+}
+
+/// CLM-0029: the answers found before the budget runs out are yielded; the
+/// error comes after them, at the goal where the search stood.
+#[test]
+fn answers_before_the_step_budget_are_yielded_then_the_error() {
+    let clauses = parse_program("p(a). p(X) :- loop(X). loop(X) :- loop(X). ?- p(X).").unwrap();
+    let program = Program::compile(&clauses).unwrap();
+    let mut sols = program.solve(&program.queries()[0]).with_step_limit(100);
+    assert_eq!(
+        sols.next().map(|a| a.to_string()),
+        Some("X = a".to_string())
+    );
+    assert!(sols.next().is_none());
+    assert!(
+        matches!(sols.error(), Some(EvalError::StepLimit { goal, .. }) if goal == "`loop(X)`"),
+        "{:?}",
+        sols.error()
+    );
+}
+
+/// CLM-0029: a tabled predicate with infinitely many ground answers stops
+/// under the budget like any query, and the table it was computing is
+/// abandoned, so a later query starts clean.
+#[test]
+fn a_tabled_predicate_with_infinite_answers_stops_under_the_budget() {
+    let clauses =
+        parse_program(":- table nat/1. nat(z). nat(s(X)) :- nat(X). ?- nat(X). ?- nat(s(z)).")
+            .unwrap();
+    let program = Program::compile(&clauses).unwrap();
+    let mut sols = program.solve(&program.queries()[0]).with_step_limit(500);
+    assert!(sols.next().is_none());
+    assert!(matches!(sols.error(), Some(EvalError::StepLimit { .. })));
+    drop(sols);
+    assert!(program.tables.borrow().is_empty());
+    let out: Vec<String> = program
+        .solve(&program.queries()[1])
+        .with_step_limit(500)
+        .map(|a| a.to_string())
+        .collect();
+    assert_eq!(out, vec!["true"]);
+}

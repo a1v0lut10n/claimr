@@ -238,7 +238,15 @@ answers in solved form. Public surface (re-exported from `claimr`):
   factor on the confirming pass and is not pursued.
   `Solutions::with_interrupt(Arc<AtomicBool>)` installs a flag polled every
   256 steps (the REPL's Ctrl-C); `Solutions::interrupted()` reports a stop
-  through it; `Solutions::may_continue()` tells a caller whether asking for
+  through it; `Solutions::with_step_limit(n)` (CLM-0029,
+  `docs/design/2026-11-11-step-limit-for-queries.md`) is a budget of
+  resolution steps for the whole query — one iteration of the machine loop,
+  sub-searches and table evaluations included, `Solutions::steps()` the
+  count so far — checked exactly on every step and reached as
+  `EvalError::StepLimit { steps, goal }`, an ordinary runtime error naming
+  the goal about to be resolved (a stop under it is not an interrupt; the
+  tables under evaluation are abandoned as on any stop); the CLI's
+  `--steps N` and the REPL's `:steps N` set it, unlimited by default; `Solutions::may_continue()` tells a caller whether asking for
   another answer could still find one (choice points remain) — what the
   REPL's `;` prompt is based on.
   A step is taken only if head unification, the clause's arithmetic

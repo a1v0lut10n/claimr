@@ -7,7 +7,9 @@
 //! - `claimr` with no file starts the interactive loop; `claimr -i <file>`
 //!   runs the file, then continues interactively with its program.
 //! - `--parse` prints the parsed clauses instead; `--limit N` caps the answers
-//!   printed per query (unlimited by default; seeds the REPL's `:limit`).
+//!   printed per query (unlimited by default; seeds the REPL's `:limit`);
+//!   `--steps N` (CLM-0029) is a budget of resolution steps per query, reached
+//!   as a runtime error (unlimited by default; seeds the REPL's `:steps`).
 //! - `--json` (CLM-0010, batch only) emits one JSON document per query on
 //!   stdout and structured diagnostics on stderr — the machine-readable
 //!   contract in `docs/reference/json-output.md`; the human format above is
@@ -25,11 +27,12 @@ use std::{env, fs, path::Path, process::ExitCode};
 use claimr::{Program, parse_program_spanned};
 
 const USAGE: &str = "\
-usage: claimr [--parse] [--limit N] [--explain] <file.claimr>   run a program
-       claimr --json [--limit N] [--explain] <file.claimr>      run a program, JSON per query
-       claimr [--limit N]                                        interactive loop
+usage: claimr [--parse] [--limit N] [--steps N] [--explain] <file.claimr>   run a program
+       claimr --json [--limit N] [--steps N] [--explain] <file.claimr>      run a program, JSON per query
+       claimr [--limit N] [--steps N]                                        interactive loop
        claimr -i <file.claimr>                                   run, then interactive
---explain prints each answer's proof tree (the clauses and constraints that derived it).";
+--explain prints each answer's proof tree (the clauses and constraints that derived it).
+--steps N stops a query that takes more than N resolution steps with an error (unlimited by default).";
 
 struct Options {
     parse_only: bool,
@@ -37,6 +40,8 @@ struct Options {
     json: bool,
     explain: bool,
     limit: Option<usize>,
+    /// CLM-0029: a budget of resolution steps per query.
+    steps: Option<u64>,
     path: Option<String>,
 }
 
@@ -46,6 +51,7 @@ fn parse_args() -> Result<Options, String> {
     let mut json = false;
     let mut explain = false;
     let mut limit = None;
+    let mut steps = None;
     let mut path = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -59,6 +65,13 @@ fn parse_args() -> Result<Options, String> {
                 limit = Some(
                     n.parse::<usize>()
                         .map_err(|_| format!("bad --limit value {n:?}"))?,
+                );
+            }
+            "--steps" => {
+                let n = args.next().ok_or("--steps needs a number")?;
+                steps = Some(
+                    n.parse::<u64>()
+                        .map_err(|_| format!("bad --steps value {n:?}"))?,
                 );
             }
             "-h" | "--help" => return Err(USAGE.to_string()),
@@ -90,6 +103,7 @@ fn parse_args() -> Result<Options, String> {
         json,
         explain,
         limit,
+        steps,
         path,
     })
 }
@@ -105,7 +119,7 @@ fn main() -> ExitCode {
 
     // Interactive: no file, or -i file.
     if opts.path.is_none() || opts.interactive {
-        let mut repl = match repl::Repl::new(opts.limit) {
+        let mut repl = match repl::Repl::new(opts.limit, opts.steps) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("claimr: {e}");
@@ -190,6 +204,9 @@ fn main() -> ExitCode {
         for query in program.queries() {
             let mut answers = Vec::new();
             let mut solutions = program.solve(query);
+            if let Some(n) = opts.steps {
+                solutions = solutions.with_step_limit(n);
+            }
             if opts.explain {
                 solutions = solutions.with_explanations();
             }
@@ -215,6 +232,9 @@ fn main() -> ExitCode {
         println!("{}", query.text());
         let mut count = 0usize;
         let mut solutions = program.solve(query);
+        if let Some(n) = opts.steps {
+            solutions = solutions.with_step_limit(n);
+        }
         if opts.explain {
             solutions = solutions.with_explanations();
         }
