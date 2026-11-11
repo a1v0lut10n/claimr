@@ -275,3 +275,38 @@ fn a_directive_at_the_prompt_tables_a_predicate() {
         ":- table anc/2.\npar(a, b).\npar(b, a).\nanc(X, Z) :- anc(X, Y), par(Y, Z).\nanc(X, Y) :- par(X, Y).\n?- anc(a, X).\nX = b ;\nX = a.\n"
     );
 }
+
+/// CLM-0029: `--steps` seeds `:steps`; a query over budget is a runtime
+/// error that keeps the session; the budget spans the answers stepped with
+/// `;`; `:steps 0` lifts it.
+#[test]
+fn step_budget_at_the_prompt() {
+    let (out, err, code) = run(
+        &["--steps", "200"],
+        "par(a, b).\npar(b, a).\n\
+         anc(X, Z) :- anc(X, Y), par(Y, Z).\nanc(X, Y) :- par(X, Y).\n\
+         ?- anc(a, X).\n\
+         ?- par(a, X).\n\
+         :steps 300\n\
+         p(a).\np(X) :- loop(X).\nloop(X) :- loop(X).\n\
+         ?- p(X).\n;\n\
+         :steps 0\n\
+         ?- par(b, X).\n",
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("in `?- anc(a, X).`: step limit of 200 reached at `anc(a, _1)`"),
+        "{err}"
+    );
+    assert!(
+        err.contains("in `?- p(X).`: step limit of 300 reached at `loop(X)`"),
+        "{err}"
+    );
+    assert!(out.contains("X = b.\n"), "{out}");
+    assert!(out.contains("X = a ;\n"), "{out}");
+    assert!(out.ends_with("X = a.\n"), "{out}");
+    // Without a budget the same session answers as before.
+    let (out, err, _) = run(&[], "par(a, b).\n:steps x\n?- par(a, X).\n");
+    assert!(err.contains("usage: :steps N"), "{err}");
+    assert_eq!(out, "?- par(a, X).\nX = b.\n");
+}

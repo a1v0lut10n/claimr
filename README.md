@@ -158,6 +158,7 @@ cargo run -- examples/family.claimr
 # Or, after `cargo install --path .`
 claimr path/to/program.claimr
 claimr --limit 5 program.claimr    # cap answers per query (unlimited by default)
+claimr --steps 100000 program.claimr  # stop a query that takes more than N resolution steps with an error (unlimited by default)
 claimr --json program.claimr       # one JSON document per query (docs/reference/json-output.md)
 claimr --explain program.claimr    # each answer with its proof tree: the clauses and constraints that derived it
 claimr --parse program.claimr      # dump the parsed clauses instead of running
@@ -193,6 +194,7 @@ claimr> :quit
 | `:list` | print the session's clauses |
 | `:clear` | empty the session |
 | `:limit N` | cap answers per query in `:all` mode (0 = unlimited) |
+| `:steps N` | stop a query after N resolution steps with an error, so an untabled recursion over cyclic data is reported rather than hung (0 = unlimited) |
 | `:all` | toggle between stepping answers and printing them all |
 | `:help`, `:quit` | leave with `:quit`, `exit.`, Ctrl-D, or Ctrl-C twice at an empty prompt; Ctrl-C interrupts a running query |
 

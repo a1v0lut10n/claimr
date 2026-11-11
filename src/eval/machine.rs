@@ -282,6 +282,8 @@ pub struct Solutions<'p> {
     interrupt: Option<Arc<AtomicBool>>,
     interrupted: bool,
     steps: u64,
+    /// CLM-0029: the budget of resolution steps for the whole query, if any.
+    step_limit: Option<u64>,
     /// The proof arena (CLM-0023), present when explanations were asked for.
     proof: Option<Vec<ProofRec<'p>>>,
     /// CLM-0027: the table evaluations in progress, innermost last.
@@ -322,6 +324,7 @@ impl<'p> Solutions<'p> {
             interrupt: None,
             interrupted: false,
             steps: 0,
+            step_limit: None,
             proof: None,
             eval_stack: Vec::new(),
         }
@@ -337,6 +340,20 @@ impl<'p> Solutions<'p> {
     pub fn with_interrupt(mut self, flag: Arc<AtomicBool>) -> Self {
         self.interrupt = Some(flag);
         self
+    }
+
+    /// CLM-0029: stop the search with `EvalError::StepLimit` once it has
+    /// taken more than `n` resolution steps — one iteration of the machine
+    /// loop, sub-searches and table evaluations included — across all the
+    /// answers asked of it. Unlimited by default.
+    pub fn with_step_limit(mut self, n: u64) -> Self {
+        self.step_limit = Some(n);
+        self
+    }
+
+    /// The resolution steps taken so far (CLM-0029): what a budget counts.
+    pub fn steps(&self) -> u64 {
+        self.steps
     }
 
     /// Record each answer's proof tree (CLM-0023): `Answer::explanation` is
@@ -359,8 +376,19 @@ impl<'p> Solutions<'p> {
         !self.exhausted && !self.choice_points.is_empty()
     }
 
-    fn check_interrupt(&mut self) -> bool {
+    /// One resolution step is about to be taken: count it against the budget
+    /// (CLM-0029, exact) and poll the interrupt flag every 256 steps. True
+    /// when the search must stop.
+    fn account_step(&mut self) -> bool {
         self.steps += 1;
+        if self.step_limit.is_some_and(|limit| self.steps > limit) {
+            let goal = self.describe_next_goal();
+            self.store.error = Some(EvalError::StepLimit {
+                steps: self.steps - 1,
+                goal,
+            });
+            return true;
+        }
         if self.steps % 256 == 0 {
             if let Some(flag) = &self.interrupt {
                 if flag.load(Ordering::Relaxed) {
@@ -370,6 +398,33 @@ impl<'p> Solutions<'p> {
             }
         }
         false
+    }
+
+    /// The goal at the head of the list, for the step-limit message: a call
+    /// rendered with the query's variable names (the query stops, so building
+    /// it in the store is harmless), or the kind of goal.
+    fn describe_next_goal(&mut self) -> String {
+        let Some(node) = self.goals.clone() else {
+            return "an answer".to_string();
+        };
+        match &node.goal {
+            Goal::Pending {
+                frame,
+                goal: TGoal::Call(t),
+                ..
+            } => {
+                let frame = frame.clone();
+                match build_with(&mut self.store, t, &mut |_, i| frame[i as usize]) {
+                    Some(a) => format!("`{}`", self.render_one(a)),
+                    None => "a call".to_string(),
+                }
+            }
+            Goal::Pending { .. } => "a constraint or control goal".to_string(),
+            Goal::Resolve { call, .. } => format!("`{}`", self.render_one(*call)),
+            Goal::Commit { .. } => "a condition's commit".to_string(),
+            Goal::CollectOne { .. } => "a collected solution".to_string(),
+            Goal::TableOne { .. } => "a table answer".to_string(),
+        }
     }
 
     fn proof_len(&self) -> usize {
@@ -985,7 +1040,7 @@ impl<'p> Solutions<'p> {
     /// or the search is exhausted / stopped.
     fn run(&mut self) -> bool {
         loop {
-            if self.store.error.is_some() || self.check_interrupt() {
+            if self.store.error.is_some() || self.account_step() {
                 return false;
             }
             let Some(node) = self.goals.clone() else {
