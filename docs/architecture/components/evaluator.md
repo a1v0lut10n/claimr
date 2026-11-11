@@ -191,6 +191,35 @@ answers in solved form. Public surface (re-exported from `claimr`):
   `Solutions::derivation_steps` can turn the live arena into the closed
   `Step`s of `explain.rs`; nothing is allocated for it on the hot path
   beyond an `Rc` clone of a frame.
+  **The failure tree** (CLM-0031, decisions 2, 3 and 5 of
+  `2026-11-11-explanations-of-failure.md`): while explaining and before the
+  first answer, every failure the machine takes outside a table evaluation
+  and outside a condition or comprehension body (`enclosing_sub_search`)
+  is a *failed branch*: a call no candidate resolved (`try_clauses` from
+  position 0; a retry running out is the end of alternatives, not a new
+  derivation — head failures aggregate into one `no-clause` leaf with the
+  clause and candidate counts), a constraint goal or built-in the store
+  rejected (`unsatisfiable`, with the conflict set `explain::minimal_conflict`
+  finds over `derivation_steps` — every step cited and a note when a replay
+  cannot decide a subset, as a non-linear residue), the answer-time
+  `finalize` rejecting the store (the step `answer`), a negation whose
+  condition succeeded (`has-solution`, carrying the records since the
+  construct opened as the solution's proof — `Goal::Commit` keeps `under`
+  and `proof_at_open`), a tabled call whose complete table has no unifying
+  answer (`no-table-answer`), and an if-then-else without an else whose
+  condition failed (`no-solution`), observable only through
+  `Retry::FailNote`, a marker choice point pushed under the condition when
+  explaining, dropped by the commit, recorded when backtracking pops it, and
+  ignored by `may_continue`. `Solutions::fail` gates on recording, then on
+  `FAILURE_BUDGET` (64 branches; `omitted` counts the rest), appends a
+  `ProofKind::Failed` record under the failing goal's parent, renders the
+  whole arena with the branch's bindings and truncates the record away; the
+  failed node's citations are shallow copies of the cited records' nodes
+  (or a constraint fact's text), built in `render_proof`. An answer
+  discards the branches so far; `Solutions::failure()` returns the
+  `FailureTree` after a search that ended without an answer, error or
+  interrupt, which the CLI prints after `false` and the REPL after
+  `false.`, and `--json` writes as the `failure` field.
   **Tabling** (CLM-0027, design record
   `2026-11-10-tabling-for-recursive-rules.md`): a call to a predicate in
   `Program.tabled` goes through its table, keyed by the call's **variant**

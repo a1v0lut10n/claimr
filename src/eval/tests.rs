@@ -2285,7 +2285,7 @@ mod conflict_sets {
         let mut solutions = program.solve(&program.queries()[0]).with_explanations();
         let answer = solutions.next().expect("an answer");
         assert_eq!(answer.to_string(), "A = ab, N = 2");
-        let steps = solutions.derivation_steps();
+        let (steps, _) = solutions.derivation_steps();
         assert!(steps.iter().any(|s| matches!(s, Step::Fact(0))));
         assert!(steps.iter().any(|s| matches!(s, Step::Head { .. })));
         assert!(steps.iter().any(|s| matches!(s, Step::Tabled { .. })));
@@ -2298,7 +2298,7 @@ mod conflict_sets {
         let mut plain = program.solve(&program.queries()[0]);
         plain.next().expect("an answer");
         assert!(matches!(
-            plain.derivation_steps().as_slice(),
+            plain.derivation_steps().0.as_slice(),
             [Step::Fact(0)]
         ));
     }
@@ -2314,7 +2314,7 @@ mod conflict_sets {
             solutions.next().expect("an answer").to_string(),
             "age(bob) >= 18"
         );
-        let steps = solutions.derivation_steps();
+        let (steps, _) = solutions.derivation_steps();
         assert_eq!(steps.len(), 2, "the head and the constraint");
         let failing = age_bob(&program, RelOp::Lt, 18);
         let conflict = minimal_conflict(&program, &steps, &failing).expect("decided");
@@ -2332,7 +2332,7 @@ mod conflict_sets {
         ));
         let mut solutions = program.solve(&program.queries()[0]).with_explanations();
         solutions.next().expect("an answer");
-        let steps = solutions.derivation_steps();
+        let (steps, _) = solutions.derivation_steps();
         assert_eq!(steps.len(), 2, "the fact and the query's constraint");
         let failing = age_bob(&program, RelOp::Lt, 18);
         let conflict = minimal_conflict(&program, &steps, &failing).expect("decided");
@@ -2360,7 +2360,7 @@ mod conflict_sets {
         let program = install(compiled("?- { X > 5 }, { X > 7 }."));
         let mut solutions = program.solve(&program.queries()[0]).with_explanations();
         assert_eq!(solutions.next().expect("an answer").to_string(), "X > 7");
-        let steps = solutions.derivation_steps();
+        let (steps, _) = solutions.derivation_steps();
         let Step::Constraint { a, .. } = &steps[0] else {
             panic!("a constraint step");
         };
@@ -2410,5 +2410,201 @@ mod conflict_sets {
             err.to_string().ends_with("set:\n  { X > 3, X < 2 }.  fact"),
             "{err}"
         );
+    }
+}
+
+// --- explanations of failure, stage 2: the failure tree (CLM-0031) ----------
+
+mod failure_trees {
+    //! Under explanations, a query with no answer carries its failure tree
+    //! (`docs/design/2026-11-11-explanations-of-failure.md`, decisions 2, 3
+    //! and 5): the derivations tried, each ending at the goal that failed
+    //! and why, within a budget of branches.
+
+    use crate::{FailureTree, Program, parse_program, parse_program_spanned};
+
+    fn failure_of(src: &str) -> Option<FailureTree> {
+        let program = Program::compile_spanned(&parse_program_spanned(src).expect("parses"))
+            .expect("compiles");
+        let mut solutions = program.solve(&program.queries()[0]).with_explanations();
+        assert_eq!(
+            solutions.by_ref().count(),
+            0,
+            "the query must have no answer"
+        );
+        solutions.failure()
+    }
+
+    fn lines(src: &str) -> Vec<String> {
+        failure_of(src).expect("a failure tree").lines()
+    }
+
+    #[test]
+    fn the_records_example_line_for_line() {
+        assert_eq!(
+            lines("eligible(X) :- { age(X) >= 18 }.\n?- eligible(bob), { age(bob) < 18 }."),
+            [
+                "  eligible(bob)  rule 1:1  eligible(X) :- { age(X) >= 18 }.",
+                "    { age(bob) >= 18 }  constraint 1:1",
+                "  { age(bob) < 18 }  failed: unsatisfiable with",
+                "    eligible(bob)  rule 1:1",
+                "    { age(bob) >= 18 }  constraint 1:1",
+            ]
+        );
+    }
+
+    #[test]
+    fn several_branches_are_headed_and_each_cites_its_own_conflict() {
+        assert_eq!(
+            lines("p(1). p(2).\n?- p(X), { X > 5 }."),
+            [
+                "  branch 1",
+                "    p(1)  fact 1:1",
+                "    { 1 > 5 }  failed: unsatisfiable with",
+                "      p(1)  fact 1:1",
+                "  branch 2",
+                "    p(2)  fact 1:7",
+                "    { 2 > 5 }  failed: unsatisfiable with",
+                "      p(2)  fact 1:7",
+            ]
+        );
+    }
+
+    #[test]
+    fn no_clause_names_the_counts() {
+        assert_eq!(
+            lines("?- q(1)."),
+            ["  q(1)  failed: no clause (undefined predicate)"]
+        );
+        assert_eq!(
+            lines("k(c17, 5).\n?- k(c99, K)."),
+            ["  k(c99, K)  failed: no clause (the clause cannot match the first argument)"]
+        );
+        assert_eq!(
+            lines("k(c17, 5). k(c18, 2).\n?- k(c99, K)."),
+            ["  k(c99, K)  failed: no clause (none of 2 clauses can match the first argument)"]
+        );
+        assert_eq!(
+            lines("q(f(1)).\n?- q(f(3))."),
+            ["  q(f(3))  failed: no clause (the candidate does not unify)"]
+        );
+        // Head failures aggregate into the call's leaf: one leaf, not a
+        // branch per clause tried.
+        assert_eq!(
+            lines("q(f(1)). q(f(2)). q(g(1)).\n?- q(f(3))."),
+            ["  q(f(3))  failed: no clause (none of 2 candidates unifies)"]
+        );
+    }
+
+    #[test]
+    fn a_negation_with_a_solution_carries_its_proof() {
+        assert_eq!(
+            lines("claim(m1, residual_error, low).\n?- \\+ claim(m1, residual_error, _)."),
+            [
+                "  \\+ claim(m1, residual_error, _)  failed: has a solution",
+                "    claim(m1, residual_error, low)  fact 1:1",
+            ]
+        );
+    }
+
+    #[test]
+    fn failures_inside_a_condition_are_not_branches() {
+        // `p(3)` fails inside the negation: that is the condition's failure,
+        // which makes the negation succeed; the branch dies at `{ 1 > 2 }`,
+        // unsatisfiable on its own (an empty conflict set).
+        assert_eq!(
+            lines("p(1).\n?- \\+ p(3), { 1 > 2 }."),
+            [
+                "  \\+ p(3)  no-solution",
+                "  { 1 > 2 }  failed: unsatisfiable with"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tabled_call_with_no_answer() {
+        assert_eq!(
+            lines(":- table anc/2.\nparent(a, b).\nanc(X, Y) :- parent(X, Y).\n?- anc(b, Z)."),
+            ["  anc(b, Z)  failed: no table answer (0 in the table)"]
+        );
+    }
+
+    #[test]
+    fn an_if_then_else_without_else_whose_condition_fails() {
+        let src = "p(1). p(2).\nfirst(X) :- p(X) -> { X = 1 }.\n?- first(3).\n?- first(1).";
+        assert_eq!(
+            lines(src),
+            [
+                "  first(3)  rule 2:1  first(X) :- p(X) -> { X = 1 }.",
+                "    p(X) -> { X = 1 }  failed: no solution",
+            ]
+        );
+        // The marker the construct pushes resumes nothing: a committed
+        // condition leaves the answer final, as without explanations.
+        let program = Program::compile(&parse_program(src).expect("parses")).expect("compiles");
+        let mut explained = program.solve(&program.queries()[1]).with_explanations();
+        assert_eq!(explained.next().expect("an answer").to_string(), "true");
+        assert!(!explained.may_continue());
+        let mut plain = program.solve(&program.queries()[1]);
+        plain.next().expect("an answer");
+        assert!(!plain.may_continue());
+    }
+
+    #[test]
+    fn a_world_fact_is_cited_as_a_fact() {
+        assert_eq!(
+            lines("{ budget(acme) >= 1000 }.\n?- { budget(acme) < 500 }."),
+            [
+                "  { budget(acme) < 500 }  failed: unsatisfiable with",
+                "    { budget(acme) >= 1000 }  fact 1:1",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_budget_truncates_and_counts() {
+        let mut src = String::new();
+        for i in 1..=70 {
+            src.push_str(&format!("m({i}).\n"));
+        }
+        src.push_str("?- m(X), { X > 100 }.");
+        let tree = failure_of(&src).expect("a failure tree");
+        assert_eq!(tree.branches.len(), 64);
+        assert_eq!(tree.omitted, 6);
+        let lines = tree.lines();
+        assert_eq!(lines[0], "  branch 1");
+        assert_eq!(lines[lines.len() - 1], "  … and 6 more failed branches");
+    }
+
+    #[test]
+    fn branches_are_discarded_when_an_answer_arrives() {
+        let program =
+            Program::compile(&parse_program("p(1). p(7).\n?- p(X), { X > 5 }.").expect("parses"))
+                .expect("compiles");
+        let mut solutions = program.solve(&program.queries()[0]).with_explanations();
+        assert_eq!(solutions.next().expect("an answer").to_string(), "X = 7");
+        assert!(solutions.next().is_none());
+        assert!(
+            solutions.failure().is_none(),
+            "an answered query has no failure tree"
+        );
+        // Without explanations nothing is recorded.
+        let mut plain = program.solve(&program.queries()[0]);
+        assert_eq!(plain.by_ref().count(), 1);
+        assert!(plain.failure().is_none());
+    }
+
+    #[test]
+    fn a_stopped_search_has_no_failure_tree() {
+        let program =
+            Program::compile(&parse_program("loop(X) :- loop(X).\n?- loop(X).").expect("parses"))
+                .expect("compiles");
+        let mut solutions = program
+            .solve(&program.queries()[0])
+            .with_explanations()
+            .with_step_limit(100);
+        assert!(solutions.next().is_none());
+        assert!(solutions.error().is_some());
+        assert!(solutions.failure().is_none());
     }
 }

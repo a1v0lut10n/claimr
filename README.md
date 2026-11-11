@@ -47,7 +47,11 @@ declarative programs.
 - **Explanations** (`claimr --explain`, `:explain` in the REPL): each
   answer with its proof tree — the clauses, by position and text, and the
   constraint instances that derived it
-  ([`docs/design/2026-11-09-explanations-of-answers.md`](docs/design/2026-11-09-explanations-of-answers.md))
+  ([`docs/design/2026-11-09-explanations-of-answers.md`](docs/design/2026-11-09-explanations-of-answers.md));
+  and, when a query has no answer, why — every derivation tried and the
+  goal it failed at, with the minimal set of steps a failed constraint
+  conflicts with
+  ([`docs/design/2026-11-11-explanations-of-failure.md`](docs/design/2026-11-11-explanations-of-failure.md))
 - **Tabling** (`:- table ancestor/2.`): declared predicates memoise their
   ground answers, so transitive closures terminate on cyclic data in either
   direction of recursion and give each answer once

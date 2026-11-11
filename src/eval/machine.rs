@@ -27,7 +27,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::answer::{Answer, ProofNode, Resolution, render_answer, render_terms};
+use super::answer::{
+    Answer, Failure, FailureTree, ProofNode, Reason, Resolution, render_answer, render_terms,
+};
 use super::compile::{
     ANONYMOUS, ArgKey, Builtin, CondCheck, PredKey, Program, Query, TGoal, TTerm, build_with,
 };
@@ -101,6 +103,11 @@ enum Goal<'p> {
         /// The construct as written (CLM-0027: named when a table under
         /// evaluation is consumed inside it).
         text: &'p str,
+        /// CLM-0031: the record the construct belongs under, and the arena's
+        /// length when it opened — the records since are the condition's
+        /// proof, which a failed negation carries.
+        under: Under,
+        proof_at_open: usize,
     },
     /// CLM-0025: a solution of a comprehension's body has been reached.
     /// Reaching it finalizes the store, copies the instance of the template
@@ -196,6 +203,11 @@ enum Retry<'p> {
         goals: Goals<'p>,
         note: Option<(Under, &'p str)>,
     },
+    /// CLM-0031: a marker under the condition of an if-then-else without an
+    /// else, pushed only when explaining: the commit drops it when the
+    /// condition succeeds; backtracking pops it when the condition had no
+    /// solution, which is a failed branch to record. Never resumes anything.
+    FailNote { under: Under, text: &'p str },
     /// CLM-0025: the body of a comprehension is exhausted — build the list
     /// from the accumulated copies, unify it with the comprehension's
     /// variable and continue.
@@ -291,7 +303,54 @@ enum ProofKind<'p> {
         idx: usize,
         src: CallRef<'p>,
     },
+    /// CLM-0031: the goal at which the branch died, and why. Recorded only
+    /// to render the branch, then truncated away.
+    Failed(Failed<'p>),
 }
+
+/// CLM-0031: a failed goal and why.
+struct Failed<'p> {
+    goal: FailedGoal<'p>,
+    detail: FailDetail,
+}
+
+#[derive(Clone, Copy)]
+enum FailedGoal<'p> {
+    Call(Addr),
+    Constraint(Addr, &'static str, Addr),
+    /// A construct as written.
+    Text(&'p str),
+    /// The answer-time finalize.
+    Answer,
+}
+
+enum FailDetail {
+    /// The step's store effect had no solution: the steps that conflict with
+    /// it, minimal unless `note` says why not.
+    Unsatisfiable {
+        conflict: Vec<Origin>,
+        note: Option<String>,
+    },
+    NoClause {
+        clauses: usize,
+        candidates: usize,
+    },
+    /// A negation whose condition succeeded: the solution's proof.
+    HasSolution(Vec<ProofNode>),
+    NoTableAnswer(usize),
+    NoSolution,
+}
+
+/// Where a step of [`Solutions::derivation_steps`] came from: a constraint
+/// fact of the program, or a record of the arena.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Origin {
+    Fact(usize),
+    Record(usize),
+}
+
+/// CLM-0031: failed branches kept per query; the rest are counted.
+const FAILURE_BUDGET: usize = 64;
 
 /// The solutions of one query, produced lazily; each `next()` resumes the
 /// search where the previous answer left it. If the search stops on a
@@ -316,6 +375,12 @@ pub struct Solutions<'p> {
     proof: Option<Vec<ProofRec<'p>>>,
     /// CLM-0027: the table evaluations in progress, innermost last.
     eval_stack: Vec<EvalFrame>,
+    /// CLM-0031: the failed branches kept (up to `FAILURE_BUDGET`), the
+    /// number omitted, and whether failures are still recorded — from
+    /// `with_explanations` until the first answer.
+    failures: Vec<Vec<ProofNode>>,
+    omitted: usize,
+    record_failures: bool,
 }
 
 impl<'p> Solutions<'p> {
@@ -355,6 +420,9 @@ impl<'p> Solutions<'p> {
             step_limit: None,
             proof: None,
             eval_stack: Vec::new(),
+            failures: Vec::new(),
+            omitted: 0,
+            record_failures: false,
         }
     }
 
@@ -389,6 +457,7 @@ impl<'p> Solutions<'p> {
     /// alive until backtracking discards them.
     pub fn with_explanations(mut self) -> Self {
         self.proof = Some(Vec::new());
+        self.record_failures = true;
         self
     }
 
@@ -401,7 +470,26 @@ impl<'p> Solutions<'p> {
     /// has untried alternatives. False after exhaustion or when the last
     /// answer left no choice point (it was final).
     pub fn may_continue(&self) -> bool {
-        !self.exhausted && !self.choice_points.is_empty()
+        // A CLM-0031 marker resumes nothing.
+        !self.exhausted
+            && self
+                .choice_points
+                .iter()
+                .any(|cp| !matches!(cp.retry, Retry::FailNote { .. }))
+    }
+
+    /// CLM-0031: why the query had no answer — its failure tree, present
+    /// after a search that was asked for explanations and ended without an
+    /// answer, an error or an interrupt.
+    pub fn failure(&self) -> Option<FailureTree> {
+        if self.record_failures && self.exhausted && self.error.is_none() && !self.interrupted {
+            Some(FailureTree {
+                branches: self.failures.clone(),
+                omitted: self.omitted,
+            })
+        } else {
+            None
+        }
     }
 
     /// One resolution step is about to be taken: count it against the budget
@@ -565,6 +653,11 @@ impl<'p> Solutions<'p> {
                     self.goals = goals;
                     return true;
                 }
+                Retry::FailNote { under, text } => {
+                    // CLM-0031: the condition had no solution and there is no
+                    // else: the branch fails here. Keep backtracking.
+                    self.fail_unchecked(under, FailedGoal::Text(text), |_| FailDetail::NoSolution);
+                }
                 Retry::Finish {
                     rest,
                     frame,
@@ -658,7 +751,7 @@ impl<'p> Solutions<'p> {
         let vkey = Rc::new(vkey);
         let state = self.program.tables.borrow().state(&vkey);
         match state {
-            Some(TableState::Complete) => self.consume(vkey, 0, call, rest, under),
+            Some(TableState::Complete) => self.consume_or_fail(vkey, call, rest, under),
             Some(TableState::Evaluating(d)) => {
                 // A recursive variant call: every frame above `d` now depends
                 // on `d`, which must iterate; the call consumes what is there.
@@ -819,7 +912,7 @@ impl<'p> Solutions<'p> {
                 }
             }
         }
-        self.consume(key, 0, call, rest, under)
+        self.consume_or_fail(key, call, rest, under)
     }
 
     /// Unify `call` with the answers of its table from `from` on, as with a
@@ -1008,7 +1101,19 @@ impl<'p> Solutions<'p> {
                         },
                         mark,
                     );
+                } else if self.recording_failures(&rest) {
+                    // CLM-0031: no else — a condition without a solution
+                    // fails the branch, which only this marker can observe.
+                    let mark = self.store.mark();
+                    self.push_choice_point(
+                        Retry::FailNote {
+                            under,
+                            text: check.construct.as_str(),
+                        },
+                        mark,
+                    );
                 }
+                let proof_at_open = self.proof_len();
                 // The condition's proofs go under the committed node; the
                 // then branch's follow as siblings of the construct.
                 let node = self.record(
@@ -1025,6 +1130,8 @@ impl<'p> Solutions<'p> {
                         under,
                     },
                     text: check.construct.as_str(),
+                    under,
+                    proof_at_open,
                 };
                 self.goals = prepend(cond, frame, node, cons(commit, rest));
             }
@@ -1045,6 +1152,8 @@ impl<'p> Solutions<'p> {
                     height,
                     then: Then::Fail,
                     text: check.construct.as_str(),
+                    under,
+                    proof_at_open: self.proof_len(),
                 };
                 // A succeeding condition fails the negation, so its records
                 // never survive; they go under the clause's record meanwhile.
@@ -1100,8 +1209,14 @@ impl<'p> Solutions<'p> {
                 if self.store.finalize() {
                     return true;
                 }
-                if self.store.error.is_some() || self.store.nonlinear.is_some() || !self.backtrack()
-                {
+                if self.store.error.is_some() || self.store.nonlinear.is_some() {
+                    return false;
+                }
+                // CLM-0031: the answer-time check is a step that can fail.
+                self.fail(None, &None, FailedGoal::Answer, |s| {
+                    s.conflict_for(Step::Answer)
+                });
+                if !self.backtrack() {
                     return false;
                 }
                 continue;
@@ -1109,7 +1224,13 @@ impl<'p> Solutions<'p> {
             let rest = node.next.clone();
             // A pending body goal is built now, from its clause's frame.
             let (goal, under, tgoal, frame) = match &node.goal {
-                Goal::Commit { height, then, .. } => {
+                Goal::Commit {
+                    height,
+                    then,
+                    text,
+                    under: cunder,
+                    proof_at_open,
+                } => {
                     if !self.store.finalize() {
                         // Not a solution after all: the condition's next
                         // alternative, if any.
@@ -1124,6 +1245,17 @@ impl<'p> Solutions<'p> {
                     self.choice_points.truncate(*height);
                     match then {
                         Then::Fail => {
+                            // CLM-0031: the negation fails because its
+                            // condition has a solution — the records since the
+                            // construct opened are that solution's proof.
+                            let (cunder, at, text) = (*cunder, *proof_at_open, *text);
+                            self.fail(cunder, &rest, FailedGoal::Text(text), |s| {
+                                let solution = s.render_proof(at).1;
+                                if let Some(arena) = s.proof.as_mut() {
+                                    arena.truncate(at);
+                                }
+                                FailDetail::HasSolution(solution)
+                            });
                             if !self.backtrack() {
                                 return false;
                             }
@@ -1274,7 +1406,7 @@ impl<'p> Solutions<'p> {
                     };
                     match self.program.builtins.get(&key).copied() {
                         Some(b) => {
-                            self.goals = rest;
+                            self.goals = rest.clone();
                             let ok = run_builtin(&mut self.store, b, call);
                             if ok {
                                 self.record(
@@ -1283,9 +1415,16 @@ impl<'p> Solutions<'p> {
                                         call,
                                         builtin: b,
                                         tpl,
-                                        frame,
+                                        frame: frame.clone(),
                                     },
                                 );
+                            } else if self.store.error.is_none() {
+                                self.fail(under, &rest, FailedGoal::Call(call), |s| {
+                                    s.conflict_for(Step::Builtin {
+                                        builtin: b,
+                                        call: explain::close(tpl, &frame),
+                                    })
+                                });
                             }
                             ok
                         }
@@ -1293,39 +1432,63 @@ impl<'p> Solutions<'p> {
                             let src = CallRef {
                                 addr: call,
                                 tpl: Tpl::Prog(tpl),
-                                frame,
+                                frame: frame.clone(),
                             };
                             if self.program.tabled.contains(&key) {
-                                self.tabled_call(src, rest, under)
+                                self.tabled_call(src, rest.clone(), under)
                             } else {
                                 let first = first_arg_key(&self.store, call);
                                 let candidates = self.program.candidates(&key, first.as_ref());
-                                self.try_clauses(key, candidates, 0, src, rest, under)
+                                let ok =
+                                    self.try_clauses(key, candidates, 0, src, rest.clone(), under);
+                                if !ok && self.store.error.is_none() {
+                                    // CLM-0031: no candidate resolved the call
+                                    // (head failures aggregate here).
+                                    let clauses = self.program.clauses(&key).len();
+                                    let n = candidates.len();
+                                    self.fail(under, &rest, FailedGoal::Call(call), |_| {
+                                        FailDetail::NoClause {
+                                            clauses,
+                                            candidates: n,
+                                        }
+                                    });
+                                }
+                                ok
                             }
                         }
                     }
                 }
                 RtGoal::Eq(a, b) => {
-                    self.goals = rest;
-                    self.constraint(under, a, "=", b, (tgoal, frame), |s| s.post_eq_goal(a, b))
+                    self.goals = rest.clone();
+                    self.constraint(under, a, "=", b, (tgoal, frame.clone()), |s| {
+                        s.post_eq_goal(a, b)
+                    })
                 }
                 RtGoal::Dif(a, b) => {
-                    self.goals = rest;
-                    self.constraint(under, a, "!=", b, (tgoal, frame), |s| s.post_dif_goal(a, b))
+                    self.goals = rest.clone();
+                    self.constraint(under, a, "!=", b, (tgoal, frame.clone()), |s| {
+                        s.post_dif_goal(a, b)
+                    })
                 }
                 RtGoal::Rel(op, a, b) => {
-                    self.goals = rest;
-                    let text = match op {
-                        RelOp::Eq => "=",
-                        RelOp::Neq => "!=",
-                        RelOp::Lt => "<",
-                        RelOp::Gt => ">",
-                        RelOp::Le => "<=",
-                        RelOp::Ge => ">=",
-                    };
-                    self.constraint(under, a, text, b, (tgoal, frame), |s| s.post_rel(op, a, b))
+                    self.goals = rest.clone();
+                    self.constraint(under, a, rel_text(op), b, (tgoal, frame.clone()), |s| {
+                        s.post_rel(op, a, b)
+                    })
                 }
             };
+            if !ok && self.store.error.is_none() {
+                // CLM-0031: a constraint goal the store rejected.
+                if let Some(step) = constraint_step(tgoal, &frame) {
+                    let failed = match goal {
+                        RtGoal::Eq(a, b) => FailedGoal::Constraint(a, "=", b),
+                        RtGoal::Dif(a, b) => FailedGoal::Constraint(a, "!=", b),
+                        RtGoal::Rel(op, a, b) => FailedGoal::Constraint(a, rel_text(op), b),
+                        RtGoal::Call(call) => FailedGoal::Call(call),
+                    };
+                    self.fail(under, &rest, failed, |s| s.conflict_for(step));
+                }
+            }
             if !ok && (self.store.error.is_some() || !self.backtrack()) {
                 return false;
             }
@@ -1359,25 +1522,109 @@ impl<'p> Solutions<'p> {
         ok
     }
 
+    // --- failure (CLM-0031) ------------------------------------------------
+
+    /// Are failures being recorded here: explaining, no answer yet, not inside
+    /// a table evaluation, not inside a condition or a comprehension body
+    /// (whose failures are the sub-search's, not the query's)?
+    fn recording_failures(&self, rest: &Goals<'p>) -> bool {
+        self.record_failures
+            && self.proof.is_some()
+            && self.eval_stack.is_empty()
+            && enclosing_sub_search(rest).is_none()
+    }
+
+    /// A derivation failed at `goal`, recorded under `under` if failures are
+    /// recorded here (see `recording_failures`) and the budget allows;
+    /// `detail` is computed only then — it may run the minimiser.
+    fn fail(
+        &mut self,
+        under: Under,
+        rest: &Goals<'p>,
+        goal: FailedGoal<'p>,
+        detail: impl FnOnce(&mut Self) -> FailDetail,
+    ) {
+        if self.recording_failures(rest) {
+            self.fail_unchecked(under, goal, detail);
+        }
+    }
+
+    /// `fail` for a site whose recording was decided when its marker was
+    /// pushed. The branch is the whole live arena plus the failed goal,
+    /// rendered with the branch's bindings before anything is undone; the
+    /// failed record is then truncated away.
+    fn fail_unchecked(
+        &mut self,
+        under: Under,
+        goal: FailedGoal<'p>,
+        detail: impl FnOnce(&mut Self) -> FailDetail,
+    ) {
+        if self.failures.len() >= FAILURE_BUDGET {
+            self.omitted += 1;
+            return;
+        }
+        let detail = detail(self);
+        let len = self.proof_len();
+        self.record(under, ProofKind::Failed(Failed { goal, detail }));
+        let (_, roots) = self.render_proof(0);
+        self.failures.push(roots);
+        if let Some(arena) = self.proof.as_mut() {
+            arena.truncate(len);
+        }
+    }
+
+    /// The conflict set of a step the store rejected: a minimal subset of
+    /// the derivation's steps (decision 1 of the record). When the replay
+    /// cannot decide a subset — a non-linear residue it leaves pending —
+    /// every step is cited and the note says why.
+    fn conflict_for(&mut self, failing: Step) -> FailDetail {
+        let (steps, origins) = self.derivation_steps();
+        match explain::minimal_conflict(self.program, &steps, &failing) {
+            Ok(idx) => FailDetail::Unsatisfiable {
+                conflict: idx.iter().map(|&i| origins[i]).collect(),
+                note: None,
+            },
+            Err(e) => FailDetail::Unsatisfiable {
+                conflict: origins,
+                note: Some(e.to_string()),
+            },
+        }
+    }
+
+    /// Consume a table from its first answer for a call that has just
+    /// reached it; no unifying answer is a failed branch (CLM-0031).
+    fn consume_or_fail(
+        &mut self,
+        key: Rc<TTerm>,
+        call: CallRef<'p>,
+        rest: Goals<'p>,
+        under: Under,
+    ) -> bool {
+        let ok = self.consume(key.clone(), 0, call.clone(), rest.clone(), under);
+        if !ok && self.store.error.is_none() {
+            let answers = self.program.tables.borrow().len(&key);
+            self.fail(under, &rest, FailedGoal::Call(call.addr), |_| {
+                FailDetail::NoTableAnswer(answers)
+            });
+        }
+        ok
+    }
+
     /// CLM-0030: the current derivation as closed steps — the program's
     /// constraint facts in order, then the arena's records in order (the
     /// arena holds exactly the live derivation's successful steps, since
-    /// backtracking truncates it). Facts only when explanations are off.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "closed and replayed by the failure tree of CLM-0031; until then only the tests ask for a derivation's steps"
-        )
-    )]
-    pub(crate) fn derivation_steps(&mut self) -> Vec<Step> {
-        let mut steps: Vec<Step> = (0..self.program.initial.len()).map(Step::Fact).collect();
+    /// backtracking truncates it) — each with its origin, for citation
+    /// (CLM-0031). Facts only when explanations are off.
+    pub(crate) fn derivation_steps(&mut self) -> (Vec<Step>, Vec<Origin>) {
+        let facts = self.program.initial.len();
+        let mut steps: Vec<Step> = (0..facts).map(Step::Fact).collect();
+        let mut origins: Vec<Origin> = (0..facts).map(Origin::Fact).collect();
         let Some(arena) = &self.proof else {
-            return steps;
+            return (steps, origins);
         };
         let program = self.program;
-        for rec in arena {
-            match &rec.kind {
+        for (i, rec) in arena.iter().enumerate() {
+            let step = match &rec.kind {
                 ProofKind::Clause {
                     key,
                     idx,
@@ -1385,58 +1632,45 @@ impl<'p> Solutions<'p> {
                     src,
                 } => {
                     let c = &program.clauses(key)[*idx];
-                    steps.push(Step::Head {
+                    Some(Step::Head {
                         head: explain::close(&c.head, frame),
                         call: explain::close(src.tpl.get(), &src.frame),
-                    });
+                    })
                 }
-                ProofKind::Constraint { goal, frame, .. } => {
-                    let (op, a, b) = match goal {
-                        TGoal::Eq(a, b) => (ConstraintOp::Eq, a, b),
-                        TGoal::Dif(a, b) => (ConstraintOp::Dif, a, b),
-                        TGoal::Rel(op, a, b) => (ConstraintOp::Rel(*op), a, b),
-                        _ => continue,
-                    };
-                    steps.push(Step::Constraint {
-                        op,
-                        a: explain::close(a, frame),
-                        b: explain::close(b, frame),
-                    });
-                }
+                ProofKind::Constraint { goal, frame, .. } => constraint_step(goal, frame),
                 ProofKind::Builtin {
                     builtin,
                     tpl,
                     frame,
                     ..
-                } => steps.push(Step::Builtin {
+                } => Some(Step::Builtin {
                     builtin: *builtin,
                     call: explain::close(tpl, frame),
                 }),
-                ProofKind::Tabled { key, idx, src } => {
-                    let answer = program
-                        .tables
-                        .borrow()
-                        .answer(key, *idx)
-                        .map(|(a, _)| a.clone());
-                    if let Some(answer) = answer {
-                        steps.push(Step::Tabled {
-                            call: explain::close(src.tpl.get(), &src.frame),
-                            answer,
-                        });
-                    }
-                }
+                ProofKind::Tabled { key, idx, src } => program
+                    .tables
+                    .borrow()
+                    .answer(key, *idx)
+                    .map(|(a, _)| Step::Tabled {
+                        call: explain::close(src.tpl.get(), &src.frame),
+                        answer: a.clone(),
+                    }),
                 ProofKind::Collected { into, .. } => {
-                    if let Some(list) = self.store.snapshot(*into) {
-                        steps.push(Step::Collected {
-                            into: TTerm::Var(explain::var_id(*into)),
-                            list,
-                        });
-                    }
+                    self.store.snapshot(*into).map(|list| Step::Collected {
+                        into: TTerm::Var(explain::var_id(*into)),
+                        list,
+                    })
                 }
-                ProofKind::Committed { .. } | ProofKind::NoSolution { .. } => {}
+                ProofKind::Committed { .. }
+                | ProofKind::NoSolution { .. }
+                | ProofKind::Failed(_) => None,
+            };
+            if let Some(step) = step {
+                steps.push(step);
+                origins.push(Origin::Record(i));
             }
         }
-        steps
+        (steps, origins)
     }
 
     /// The answer, with its explanation when recording (CLM-0023): the
@@ -1474,6 +1708,14 @@ impl<'p> Solutions<'p> {
                 }
                 ProofKind::Collected { into, .. } => addrs.push(*into),
                 ProofKind::Committed { .. } | ProofKind::NoSolution { .. } => {}
+                ProofKind::Failed(f) => match f.goal {
+                    FailedGoal::Call(a) => addrs.push(a),
+                    FailedGoal::Constraint(a, _, b) => {
+                        addrs.push(a);
+                        addrs.push(b);
+                    }
+                    FailedGoal::Text(_) | FailedGoal::Answer => {}
+                },
             }
         }
         let (answer, rendered) = render_answer(&self.store, self.names(), &addrs);
@@ -1488,6 +1730,9 @@ impl<'p> Solutions<'p> {
             Some((c.span, c.text.as_str()))
         };
         let mut nodes: Vec<ProofNode> = Vec::with_capacity(arena.len());
+        // CLM-0031: the failed records, whose detail is filled in once every
+        // node is rendered (a conflict cites other records).
+        let mut failed: Vec<(usize, &FailDetail)> = Vec::new();
         for rec in arena.iter() {
             let mut subgoals = Vec::new();
             let (goal, by, cite, clause) = match &rec.kind {
@@ -1549,6 +1794,23 @@ impl<'p> Solutions<'p> {
                         None,
                     )
                 }
+                ProofKind::Failed(f) => {
+                    let goal = match f.goal {
+                        FailedGoal::Call(_) => rendered.next().unwrap_or_default(),
+                        FailedGoal::Constraint(_, op, _) => {
+                            let a = rendered.next().unwrap_or_default();
+                            let b = rendered.next().unwrap_or_default();
+                            format!("{{ {a} {op} {b} }}")
+                        }
+                        FailedGoal::Text(t) => t.to_string(),
+                        FailedGoal::Answer => "answer".to_string(),
+                    };
+                    if let FailDetail::HasSolution(solution) = &f.detail {
+                        subgoals = solution.clone();
+                    }
+                    failed.push((nodes.len(), &f.detail));
+                    (goal, Resolution::Failed, None, None)
+                }
             };
             nodes.push(ProofNode {
                 goal,
@@ -1557,7 +1819,39 @@ impl<'p> Solutions<'p> {
                 column: cite.map(|s| s.column),
                 clause,
                 subgoals,
+                failure: None,
             });
+        }
+        for (i, detail) in failed {
+            let mut failure = empty_failure(Reason::NoSolution);
+            match detail {
+                FailDetail::Unsatisfiable { conflict, note } => {
+                    failure.reason = Reason::Unsatisfiable;
+                    failure.note = note.clone();
+                    failure.conflict = conflict
+                        .iter()
+                        .filter_map(|o| match *o {
+                            Origin::Record(r) => r.checked_sub(from).map(|k| shallow(&nodes[k])),
+                            Origin::Fact(j) => Some(fact_node(self.program, j)),
+                        })
+                        .collect();
+                }
+                FailDetail::NoClause {
+                    clauses,
+                    candidates,
+                } => {
+                    failure.reason = Reason::NoClause;
+                    failure.clauses = Some(*clauses);
+                    failure.candidates = Some(*candidates);
+                }
+                FailDetail::HasSolution(_) => failure.reason = Reason::HasSolution,
+                FailDetail::NoTableAnswer(n) => {
+                    failure.reason = Reason::NoTableAnswer;
+                    failure.answers = Some(*n);
+                }
+                FailDetail::NoSolution => {}
+            }
+            nodes[i].failure = Some(Box::new(failure));
         }
         // Attach children to parents, last to first, so each node is complete
         // before it is moved into its parent.
@@ -1607,6 +1901,11 @@ impl Iterator for Solutions<'_> {
         }
         self.started = true;
         if self.run() {
+            // CLM-0031: an answer — the branches that failed before it are
+            // not the query's failure.
+            self.record_failures = false;
+            self.failures.clear();
+            self.omitted = 0;
             Some(self.answer())
         } else {
             self.exhausted = true;
@@ -1701,5 +2000,72 @@ pub(super) fn run_builtin(store: &mut Store, b: Builtin, call: Addr) -> bool {
         Builtin::Atom => store.post_type(args[0], TypeKind::Atom),
         Builtin::List => store.post_type(args[0], TypeKind::List),
         Builtin::Sum => store.post_sum(args[0], args[1]),
+    }
+}
+
+/// The spelling of a relation in a constraint goal.
+fn rel_text(op: RelOp) -> &'static str {
+    match op {
+        RelOp::Eq => "=",
+        RelOp::Neq => "!=",
+        RelOp::Lt => "<",
+        RelOp::Gt => ">",
+        RelOp::Le => "<=",
+        RelOp::Ge => ">=",
+    }
+}
+
+/// A constraint goal as a closed step (CLM-0030); `None` for a call or a
+/// construct.
+fn constraint_step(goal: &TGoal, frame: &[Addr]) -> Option<Step> {
+    let (op, a, b) = match goal {
+        TGoal::Eq(a, b) => (ConstraintOp::Eq, a, b),
+        TGoal::Dif(a, b) => (ConstraintOp::Dif, a, b),
+        TGoal::Rel(op, a, b) => (ConstraintOp::Rel(*op), a, b),
+        _ => return None,
+    };
+    Some(Step::Constraint {
+        op,
+        a: explain::close(a, frame),
+        b: explain::close(b, frame),
+    })
+}
+
+/// CLM-0031: a `Failure` with nothing filled in but the reason.
+fn empty_failure(reason: Reason) -> Failure {
+    Failure {
+        reason,
+        conflict: Vec::new(),
+        note: None,
+        clauses: None,
+        candidates: None,
+        answers: None,
+    }
+}
+
+/// CLM-0031: a citation of a rendered node — the node without its subgoals.
+fn shallow(n: &ProofNode) -> ProofNode {
+    ProofNode {
+        goal: n.goal.clone(),
+        by: n.by,
+        line: n.line,
+        column: n.column,
+        clause: n.clause.clone(),
+        subgoals: Vec::new(),
+        failure: None,
+    }
+}
+
+/// CLM-0031: a citation of constraint fact `j` of the program.
+fn fact_node(program: &Program, j: usize) -> ProofNode {
+    let f = &program.initial[j];
+    ProofNode {
+        goal: f.text.trim_end_matches('.').to_string(),
+        by: Resolution::Fact,
+        line: f.span.map(|s| s.line),
+        column: f.span.map(|s| s.column),
+        clause: Some(f.text.clone()),
+        subgoals: Vec::new(),
+        failure: None,
     }
 }

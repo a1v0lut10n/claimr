@@ -447,6 +447,12 @@ impl Repl {
                         eprintln!("in `{}`: {e}", q.text());
                     } else if count == 0 || !all {
                         println!("false.");
+                        // CLM-0031: under :explain, why.
+                        if let Some(tree) = sols.failure() {
+                            for line in tree.lines() {
+                                println!("{line}");
+                            }
+                        }
                     }
                     break;
                 }

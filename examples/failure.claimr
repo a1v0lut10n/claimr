@@ -1,0 +1,33 @@
+% Explanations of failure (CLM-0031,
+% docs/design/2026-11-11-explanations-of-failure.md): under --explain (the
+% sibling failure.args passes it to the golden run) `false` is followed by
+% the failure tree — every derivation the search tried, as a branch ending
+% at the goal that failed and why: unsatisfiable, with the minimal set of
+% earlier steps it conflicts with; no clause, with the candidates counted;
+% a negation whose goal has a solution, with that solution's proof; a
+% tabled call with no answer in its table. Facts of an integrity check:
+eligible(X) :- { age(X) >= 18 }.
+{ budget(acme) >= 1000 }.
+k(c17, 5). k(c18, 2).
+n(c17, 3). n(c18, 4).
+violation(C) :- k(C, K), n(C, N), { K > N }.
+claim(m1, residual_error, low).
+p(1). p(2).
+q(f(1)). q(f(2)). q(g(1)).
+:- table anc/2.
+parent(a, b).
+anc(X, Y) :- parent(X, Y).
+anc(X, Z) :- anc(X, Y), parent(Y, Z).
+first(X) :- p(X) -> { X = 1 }.
+
+?- eligible(bob), { age(bob) < 18 }.
+?- violation(c18).
+?- { budget(acme) < 500 }.
+?- k(c99, K).
+?- q(f(3)).
+?- p(X), { X > 5 }.
+?- \+ claim(m1, residual_error, _).
+?- \+ p(3), { 1 > 2 }.
+?- anc(b, Z).
+?- first(3).
+?- violation(c17).

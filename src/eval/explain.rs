@@ -47,6 +47,9 @@ pub(crate) enum Step {
     Collected { into: TTerm, list: TTerm },
     /// Constraint fact `idx` of the program, over its own variables.
     Fact(usize),
+    /// The answer-time finalize (CLM-0031: the step at which a derivation
+    /// whose goals all succeeded can still fail).
+    Answer,
 }
 
 /// The operator of a constraint step: `=` and `!=` are decided numeric or
@@ -175,6 +178,7 @@ impl Replay {
                 _ => false,
             },
             Step::Fact(idx) => program.post_fact(&mut self.store, *idx),
+            Step::Answer => self.store.finalize(),
         };
         self.check_error()?;
         Ok(ok)

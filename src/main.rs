@@ -223,7 +223,10 @@ fn main() -> ExitCode {
                 );
                 return ExitCode::FAILURE;
             }
-            println!("{}", json_out::query_document(query.text(), &answers));
+            println!(
+                "{}",
+                json_out::query_document(query.text(), &answers, solutions.failure().as_ref())
+            );
         }
         return ExitCode::SUCCESS;
     }
@@ -254,6 +257,12 @@ fn main() -> ExitCode {
         }
         if count == 0 {
             println!("false");
+            // CLM-0031: under --explain, why.
+            if let Some(tree) = solutions.failure() {
+                for line in tree.lines() {
+                    println!("{line}");
+                }
+            }
         }
     }
     ExitCode::SUCCESS
