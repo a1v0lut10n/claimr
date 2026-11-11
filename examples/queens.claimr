@@ -1,0 +1,35 @@
+% N queens (CLM-0034): place N queens on an N×N board, one per row, so that
+% no two share a column or a diagonal. The columns are N unknowns; every
+% pair of rows is constrained *before* any value is chosen, and the search
+% only picks values — the store rejects a value the moment it contradicts a
+% constraint already posted. Claimr has no integer domains and no
+% propagation (docs/incubation/2026-11-11-integer-domains-and-propagation.md),
+% so this is backtracking with constraint checking: a dozen queens, not a
+% hundred. The sizes here run in well under a second in a debug build; the
+% larger ones are the benchmark (tests/benchmarks.rs, docs/reference/benchmarks.md).
+queens(N, Qs) :- { |Qs| = N }, range(1, N, Values), safe(Qs), place(Qs, Values).
+
+% Rows i < j attack each other if their columns are equal or differ by j - i.
+safe(<>).
+safe(<Q> . Qs) :- no_attack(Q, Qs, 1), safe(Qs).
+no_attack(_, <>, _).
+no_attack(Q, <Q1> . Qs, D) :-
+    { Q != Q1, Q != Q1 + D, Q != Q1 - D, D1 = D + 1 },
+    no_attack(Q, Qs, D1).
+
+% The search. A value is assigned through a constraint goal rather than by
+% unifying the queen with the list element, so that under --explain a value
+% the store rejects shows as the constraint it breaks.
+place(<>, _).
+place(<Q> . Qs, Values) :- member(V, Values), { Q = V }, place(Qs, Values).
+
+member(X, <X> . _).
+member(X, <_> . T) :- member(X, T).
+
+range(N, N, <N>).
+range(I, N, <I> . Rest) :- { I < N, J = I + 1 }, range(J, N, Rest).
+
+?- queens(4, Qs).
+?- queens(5, Qs).
+?- queens(6, Qs).
+?- queens(3, Qs).

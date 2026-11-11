@@ -2,6 +2,8 @@
 
 Durable, distilled, topical knowledge; mutate-in-place.
 
+- [`benchmarks.md`](benchmarks.md) — the benchmark programs, how to run
+  them and the numbers recorded per version (CLM-0034).
 - [`builtins.md`](builtins.md) — the four built-in predicates
   (`atom_chars/2`, `number/1`, `atom/1`, `list/1`), what each decides and
   when it waits (CLM-0017).

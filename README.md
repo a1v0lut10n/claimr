@@ -160,6 +160,67 @@ average(X, Y, (X + Y) / 2).
 ?- eligible(alice), { age(alice) >= 18 }.
 ```
 
+### N queens
+
+The constraint-programming showcase, [`examples/queens.claimr`](examples/queens.claimr):
+the N columns are unknowns, every pair of rows is constrained before any
+value is chosen, and the search only picks values.
+
+```claimr
+queens(N, Qs) :- { |Qs| = N }, range(1, N, Values), safe(Qs), place(Qs, Values).
+
+% Rows i < j attack each other if their columns are equal or differ by j - i.
+safe(<>).
+safe(<Q> . Qs) :- no_attack(Q, Qs, 1), safe(Qs).
+no_attack(_, <>, _).
+no_attack(Q, <Q1> . Qs, D) :-
+    { Q != Q1, Q != Q1 + D, Q != Q1 - D, D1 = D + 1 },
+    no_attack(Q, Qs, D1).
+
+% The search: each queen takes a value; the store rejects it the moment it
+% contradicts a constraint already posted.
+place(<>, _).
+place(<Q> . Qs, Values) :- member(V, Values), { Q = V }, place(Qs, Values).
+
+member(X, <X> . _).
+member(X, <_> . T) :- member(X, T).
+
+range(N, N, <N>).
+range(I, N, <I> . Rest) :- { I < N, J = I + 1 }, range(J, N, Rest).
+
+?- queens(4, Qs).
+```
+
+```text
+?- queens(4, Qs).
+Qs = <2, 4, 1, 3>
+Qs = <3, 1, 4, 2>
+```
+
+Three queens have no solution, and under `--explain` the failure tree says
+why each attempt died — here, the second queen cannot take column 1
+because the first queen holds it:
+
+```text
+?- queens(3, Qs).
+false
+  branch 1
+    …
+          { _1 = 1 }  failed: unsatisfiable with
+            no_attack(1, <_1, _2>, 1)  rule 16:1
+            { 1 != _1 }  constraint 16:1
+            …
+```
+
+What this is not: claimr has no integer domains and no propagation. The
+store rejects a value the moment it contradicts a constraint, but never
+prunes a domain ahead of the search, so this is backtracking with
+constraint checking — a dozen queens in well under a second
+([`docs/reference/benchmarks.md`](docs/reference/benchmarks.md)), not the
+hundreds a finite-domain solver handles. That gap is the one
+[`docs/incubation/2026-11-11-integer-domains-and-propagation.md`](docs/incubation/2026-11-11-integer-domains-and-propagation.md)
+starts from.
+
 ## Installation
 
 ### Prerequisites
