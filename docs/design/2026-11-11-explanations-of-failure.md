@@ -1,7 +1,7 @@
 ---
 date: 2026-11-11
 type: design
-status: proposed
+status: accepted
 components: [evaluator, solver, cli]
 aspects: [answer-soundness]
 tags: [explanations, failure, minimal-conflict, unsat-core, provenance, json-output, integrity-checker]
