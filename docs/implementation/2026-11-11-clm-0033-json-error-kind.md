@@ -1,7 +1,7 @@
 ---
 date: 2026-11-11
 type: task
-status: in-progress
+status: done
 affects:
   - docs/reference/json-output.md
   - docs/architecture/components/evaluator.md
@@ -68,12 +68,26 @@ unchanged, stdout silent on a file-level failure.
 
 ## Findings
 
-(filled in as the work proceeds)
+- **Four tests pinned the message's position.** The JSON suite asserted
+  `"error":{"message":…` as a prefix for a groundness error, a step
+  limit, a tabling error and the two file documents; with `kind`, `class`
+  and the data now ahead of `message`, those prefixes moved. Key order is
+  not part of the contract a JSON consumer relies on, and `message` itself
+  is byte-identical, which the new test checks against the human-mode
+  text.
+- **`arity` is a count.** `ReservedBuiltin::arity` is a `usize`; it rides
+  as `ErrorValue::Count(u64)` like `steps`, so a consumer sees a JSON
+  number for both.
+- **The REPL is untouched** — it has no JSON mode — and so is every human
+  diagnostic; the `message` string is `EvalError`'s `Display`, as before.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test`; human-mode goldens byte-identical.
-- [ ] Every existing JSON field keeps its name, value and place; exit codes
-      unchanged.
-- [ ] `aivolution lint .` clean; the two `affects` docs current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` (one unit test over every variant, the writer's tests, one
+      new integration test; four prefix assertions updated); human-mode
+      goldens byte-identical.
+- [x] Every existing JSON field keeps its name, value and place (`message`
+      compared byte for byte with the human diagnostic); exit codes
+      unchanged (the diagnostics test).
+- [x] `aivolution lint .` clean; the two `affects` docs current.

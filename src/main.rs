@@ -142,7 +142,15 @@ fn main() -> ExitCode {
             if opts.json {
                 eprintln!(
                     "{}",
-                    json_out::error_document(path, None, None, &format!("cannot read: {e}"))
+                    json_out::error_document(
+                        path,
+                        None,
+                        None,
+                        "read",
+                        claimr::ErrorClass::Io,
+                        &[],
+                        &format!("cannot read: {e}")
+                    )
                 );
             } else {
                 eprintln!("claimr: cannot read {path}: {e}");
@@ -157,7 +165,15 @@ fn main() -> ExitCode {
             if opts.json {
                 eprintln!(
                     "{}",
-                    json_out::error_document(path, e.line, e.column, &e.message)
+                    json_out::error_document(
+                        path,
+                        e.line,
+                        e.column,
+                        "syntax",
+                        claimr::ErrorClass::Syntax,
+                        &[],
+                        &e.message
+                    )
                 );
             } else {
                 eprintln!("{path}:{e}");
@@ -185,6 +201,9 @@ fn main() -> ExitCode {
                         path,
                         span.map(|s| s.line),
                         span.map(|s| s.column),
+                        e.kind(),
+                        e.class(),
+                        &e.fields(),
                         &e.to_string(),
                     )
                 );
@@ -217,10 +236,7 @@ fn main() -> ExitCode {
                 }
             }
             if let Some(e) = solutions.error() {
-                println!(
-                    "{}",
-                    json_out::query_error_document(query.text(), &e.to_string())
-                );
+                println!("{}", json_out::query_error_document(query.text(), e));
                 return ExitCode::FAILURE;
             }
             println!(

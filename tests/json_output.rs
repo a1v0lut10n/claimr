@@ -116,7 +116,7 @@ fn diagnostics_are_structured_and_exit_codes_hold() {
     assert!(stdout.is_empty(), "{stdout}");
     assert!(
         stderr.starts_with(&format!(
-            r#"{{"error":{{"file":"{path_str}","line":2,"column":1,"#
+            r#"{{"error":{{"file":"{path_str}","line":2,"column":1,"kind":"syntax","class":"syntax","message":"#
         )),
         "{stderr}"
     );
@@ -124,7 +124,9 @@ fn diagnostics_are_structured_and_exit_codes_hold() {
     let (_, stderr, code) = run(&["--json", "/no/such/file.claimr"]);
     assert_eq!(code, Some(2));
     assert!(
-        stderr.contains(r#"{"error":{"file":"/no/such/file.claimr","message":"cannot read"#),
+        stderr.contains(
+            r#"{"error":{"file":"/no/such/file.claimr","kind":"read","class":"io","message":"cannot read"#
+        ),
         "{stderr}"
     );
     // --json guards: REPL and --parse forms refuse with usage.
@@ -158,7 +160,11 @@ fn a_non_ground_condition_is_a_query_error_document() {
     std::fs::remove_file(&path).ok();
     assert_eq!(code, Some(1));
     assert!(
-        stdout.starts_with(r#"{"query":"?- \\+ p(X), p(X).","outcome":"error","error":{"message":"condition `\\+ p(X)` reached with `X` unbound"#),
+        stdout.starts_with(r#"{"query":"?- \\+ p(X), p(X).","outcome":"error","error":{"kind":"non-ground-condition","class":"program","construct":"\\+ p(X)","variable":"X","clause":"#),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(r#","message":"condition `\\+ p(X)` reached with `X` unbound"#),
         "{stdout}"
     );
 }
@@ -243,7 +249,7 @@ fn tabled_calls_in_the_json_vocabulary() {
     std::fs::remove_file(&path).ok();
     assert_eq!(code, Some(1));
     assert!(
-        stdout.starts_with(r#"{"query":"?- n(X).","outcome":"error","error":{"message":"a solution of the tabled predicate `n/1` is `n(_1)`"#),
+        stdout.starts_with(r#"{"query":"?- n(X).","outcome":"error","error":{"kind":"non-ground-tabled-answer","class":"program","predicate":"n/1","instance":"n(_1)","message":"a solution of the tabled predicate `n/1` is `n(_1)`"#),
         "{stdout}"
     );
 }
@@ -266,7 +272,7 @@ fn a_step_limit_is_a_query_error_document() {
         r#"{"query":"?- par(a, X).","outcome":"solutions","answers":[{"equations":["X = b"],"disequations":[],"constraints":[]}]}"#
     );
     assert!(
-        lines[1].starts_with(r#"{"query":"?- anc(a, X).","outcome":"error","error":{"message":"step limit of 1000 reached at `anc(a, _1)`;"#),
+        lines[1].starts_with(r#"{"query":"?- anc(a, X).","outcome":"error","error":{"kind":"step-limit","class":"resource","steps":1000,"goal":"`anc(a, _1)`","message":"step limit of 1000 reached at `anc(a, _1)`;"#),
         "{}",
         lines[1]
     );
@@ -303,4 +309,48 @@ fn a_failed_query_explains_itself_in_json() {
         "{\"query\":\"?- k(c17, K), { K > 7 }.\",\"outcome\":\"none\",\"answers\":[]}\n\
          {\"query\":\"?- k(c99, K).\",\"outcome\":\"none\",\"answers\":[]}\n"
     );
+}
+
+/// CLM-0033: an error object carries `kind`, `class` and the error's data
+/// beside its unchanged `message`, in both documents; the message is the
+/// text human mode prints.
+#[test]
+fn error_objects_carry_kind_class_and_data() {
+    // Unsatisfiable facts: a file-level failure with the cited clauses.
+    let src = "{ age(bob) >= 18 }.\n{ price(x) > 0 }.\n{ age(bob) < 10 }.\np(1).\n";
+    let path = write_temp("kind-facts", src);
+    let (stdout, stderr, code) = run(&["--json", path.to_str().unwrap()]);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(1));
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains(
+            r#""kind":"unsatisfiable-facts","class":"program","conflict":[{"line":1,"column":1,"clause":"{ age(bob) >= 18 }."},{"line":3,"column":1,"clause":"{ age(bob) < 10 }."}],"message":"the program's constraint facts are unsatisfiable (no models); a minimal conflicting set:\n"#
+        ),
+        "{stderr}"
+    );
+    // A non-linear residue: unsupported, with the constraint as data; the
+    // message is byte for byte the human-mode diagnostic.
+    let src = "?- { Y = X * Z }.\n";
+    let path = write_temp("kind-nonlinear", src);
+    let (stdout, _, code) = run(&["--json", path.to_str().unwrap()]);
+    let (_, human, _) = run(&[path.to_str().unwrap()]);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(1));
+    let line = stdout.lines().next().unwrap_or_default();
+    assert!(
+        line.starts_with(r#"{"query":"?- { Y = X * Z }.","outcome":"error","error":{"kind":"non-linear","class":"unsupported","constraint":"X * Z","message":""#),
+        "{line}"
+    );
+    let message = line
+        .split(r#""message":""#)
+        .nth(1)
+        .and_then(|rest| rest.strip_suffix("\"}}"))
+        .expect("a message field closes the document");
+    let human_message = human
+        .trim_end()
+        .split(": in `?- { Y = X * Z }.`: ")
+        .nth(1)
+        .expect("the human diagnostic names the query");
+    assert_eq!(message, human_message);
 }

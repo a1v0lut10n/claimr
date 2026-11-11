@@ -14,12 +14,14 @@
 //!   "constraints": […]}, …]}` — a proof with no bindings is one
 //!   answer with three empty lists (the human mode's `true`).
 //! - a query that fails at runtime: `{"query": "?- ….",
-//!   "outcome": "error", "error": {"message": "…"}}`.
+//!   "outcome": "error", "error": {"kind", "class", …fields,
+//!   "message"}}` (CLM-0033: `kind` names the error, `class` says what
+//!   the caller should do, the error's data follow as fields).
 //! - a file that never runs (read, parse, compile): on stderr,
-//!   `{"error": {"file": "…", "line": N?, "column": N?,
-//!   "message": "…"}}` — line/column only when known.
+//!   `{"error": {"file": "…", "line": N?, "column": N?, "kind",
+//!   "class", …fields, "message": "…"}}` — line/column only when known.
 
-use claimr::{Answer, FailureTree, ProofNode, Reason};
+use claimr::{Answer, ErrorClass, ErrorValue, EvalError, FailureTree, ProofNode, Reason};
 
 /// JSON string escaping per RFC 8259: `"`, `\`, and control
 /// characters; the common controls get their short forms.
@@ -176,32 +178,82 @@ pub fn query_document(
     out
 }
 
-/// The runtime-failure document for one query.
-pub fn query_error_document(query_text: &str, message: &str) -> String {
+/// CLM-0033: the tail every error object shares — `kind`, `class`, the
+/// error's data as fields, then the unchanged `message`.
+fn error_tail(
+    kind: &str,
+    class: ErrorClass,
+    fields: &[(&str, ErrorValue)],
+    message: &str,
+) -> Vec<String> {
+    let mut out = vec![
+        format!("\"kind\":\"{}\"", escape(kind)),
+        format!("\"class\":\"{}\"", class.as_str()),
+    ];
+    for (name, value) in fields {
+        let rendered = match value {
+            ErrorValue::Text(s) => format!("\"{}\"", escape(s)),
+            ErrorValue::Count(n) => n.to_string(),
+            ErrorValue::Clauses(clauses) => {
+                let items: Vec<String> = clauses
+                    .iter()
+                    .map(|(span, text)| {
+                        let mut f = Vec::new();
+                        if let Some(s) = span {
+                            f.push(format!("\"line\":{}", s.line));
+                            f.push(format!("\"column\":{}", s.column));
+                        }
+                        f.push(format!("\"clause\":\"{}\"", escape(text)));
+                        format!("{{{}}}", f.join(","))
+                    })
+                    .collect();
+                format!("[{}]", items.join(","))
+            }
+        };
+        out.push(format!("\"{}\":{rendered}", escape(name)));
+    }
+    out.push(format!("\"message\":\"{}\"", escape(message)));
+    out
+}
+
+/// The runtime-failure document for one query: the error's kind, class and
+/// data (CLM-0033) and its message.
+pub fn query_error_document(query_text: &str, error: &EvalError) -> String {
+    let tail = error_tail(
+        error.kind(),
+        error.class(),
+        &error.fields(),
+        &error.to_string(),
+    );
     format!(
-        "{{\"query\":\"{}\",\"outcome\":\"error\",\"error\":{{\"message\":\"{}\"}}}}",
+        "{{\"query\":\"{}\",\"outcome\":\"error\",\"error\":{{{}}}}}",
         escape(query_text),
-        escape(message),
+        tail.join(","),
     )
 }
 
 /// The file-level diagnostic (read, parse, or compile failure), for
-/// stderr. `line`/`column` appear only when known.
+/// stderr. `line`/`column` appear only when known; `kind`, `class` and
+/// `fields` are the CLI's for a read or parse failure and the error's own
+/// for a compile failure (CLM-0033).
 pub fn error_document(
     file: &str,
     line: Option<usize>,
     column: Option<usize>,
+    kind: &str,
+    class: ErrorClass,
+    fields: &[(&str, ErrorValue)],
     message: &str,
 ) -> String {
-    let mut fields = vec![format!("\"file\":\"{}\"", escape(file))];
+    let mut out = vec![format!("\"file\":\"{}\"", escape(file))];
     if let Some(line) = line {
-        fields.push(format!("\"line\":{line}"));
+        out.push(format!("\"line\":{line}"));
     }
     if let Some(column) = column {
-        fields.push(format!("\"column\":{column}"));
+        out.push(format!("\"column\":{column}"));
     }
-    fields.push(format!("\"message\":\"{}\"", escape(message)));
-    format!("{{\"error\":{{{}}}}}", fields.join(","))
+    out.extend(error_tail(kind, class, fields, message));
+    format!("{{\"error\":{{{}}}}}", out.join(","))
 }
 
 #[cfg(test)]
@@ -280,17 +332,65 @@ mod tests {
             query_document("?- violation(C).", &[explained], None),
             r#"{"query":"?- violation(C).","outcome":"solutions","answers":[{"equations":["C = c17"],"disequations":[],"constraints":[],"explanation":[{"goal":"violation(c17)","by":"rule","line":2,"column":1,"clause":"violation(C) :- k(C, K), { K > 3 }.","subgoals":[{"goal":"k(c17, 5)","by":"fact","line":1,"column":1,"clause":"k(c17, 5).","subgoals":[]},{"goal":"{ 5 > 3 }","by":"constraint","line":2,"column":1,"subgoals":[]}]}]}]}"#
         );
+        // CLM-0033: kind, class and the error's data precede the message.
+        let limit = EvalError::StepLimit {
+            steps: 3,
+            goal: "`q(X)`".to_string(),
+        };
         assert_eq!(
-            query_error_document("?- q(X).", "boom"),
-            r#"{"query":"?- q(X).","outcome":"error","error":{"message":"boom"}}"#
+            query_error_document("?- q(X).", &limit),
+            format!(
+                r#"{{"query":"?- q(X).","outcome":"error","error":{{"kind":"step-limit","class":"resource","steps":3,"goal":"`q(X)`","message":"{limit}"}}}}"#
+            )
         );
         assert_eq!(
-            error_document("f.claimr", Some(2), Some(1), "Expected Dot."),
-            r#"{"error":{"file":"f.claimr","line":2,"column":1,"message":"Expected Dot."}}"#
+            error_document(
+                "f.claimr",
+                Some(2),
+                Some(1),
+                "syntax",
+                ErrorClass::Syntax,
+                &[],
+                "Expected Dot."
+            ),
+            r#"{"error":{"file":"f.claimr","line":2,"column":1,"kind":"syntax","class":"syntax","message":"Expected Dot."}}"#
         );
         assert_eq!(
-            error_document("f.claimr", None, None, "cannot read"),
-            r#"{"error":{"file":"f.claimr","message":"cannot read"}}"#
+            error_document(
+                "f.claimr",
+                None,
+                None,
+                "read",
+                ErrorClass::Io,
+                &[],
+                "cannot read"
+            ),
+            r#"{"error":{"file":"f.claimr","kind":"read","class":"io","message":"cannot read"}}"#
+        );
+        let facts = EvalError::InitialStoreUnsatisfiable {
+            conflict: vec![
+                (
+                    Some(claimr::Span {
+                        line: 1,
+                        column: 1,
+                        offset: 0,
+                    }),
+                    "{ a != a }.".to_string(),
+                ),
+                (None, "{ b = b }.".to_string()),
+            ],
+        };
+        assert_eq!(
+            error_document(
+                "f.claimr",
+                None,
+                None,
+                facts.kind(),
+                facts.class(),
+                &facts.fields(),
+                "no models"
+            ),
+            r#"{"error":{"file":"f.claimr","kind":"unsatisfiable-facts","class":"program","conflict":[{"line":1,"column":1,"clause":"{ a != a }."},{"clause":"{ b = b }."}],"message":"no models"}}"#
         );
     }
 }

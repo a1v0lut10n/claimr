@@ -24,7 +24,12 @@ answers in solved form. Public surface (re-exported from `claimr`):
 `Program::compile` / `Program::compile_spanned`, `Program::queries`,
 `Program::solve` → `Solutions` (a lazy iterator of `Answer`s;
 `with_explanations()` makes each answer carry its proof tree, CLM-0023),
-`Answer`, `ProofNode`, `Resolution`, `EvalError`.
+`Answer`, `ProofNode`, `Resolution`, `EvalError` — which since CLM-0033
+(`2026-11-11-json-error-kind-and-class.md`) classifies itself for the
+`--json` error object: `kind()` a stable name per variant, `class()` one of
+the closed `ErrorClass` set (`syntax`, `program`, `unsupported`, `resource`,
+`io`, `internal`), `fields()` the variant's data as named `ErrorValue`s;
+each an exhaustive `match`, so a new variant cannot compile without them.
 
 ## Current state (evaluator stages 2–4 — CLM-0005, CLM-0006, CLM-0007)
 
