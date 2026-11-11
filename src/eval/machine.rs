@@ -32,6 +32,7 @@ use super::compile::{
     ANONYMOUS, ArgKey, Builtin, CondCheck, PredKey, Program, Query, TGoal, TTerm, build_with,
 };
 use super::error::EvalError;
+use super::explain::{self, ConstraintOp, Step};
 use super::store::{Addr, Cell, Mark, Store, TypeKind};
 use super::symbol::LIST;
 use super::table::TableState;
@@ -52,6 +53,32 @@ type Frame = Rc<[Addr]>;
 /// The proof record a goal's own record goes under (CLM-0023): `None` for a
 /// query goal (a root) and whenever explanations are off.
 type Under = Option<usize>;
+
+/// A call with its source (CLM-0030): the template it was built from and
+/// the frame that template's variables index, so the step can be closed for
+/// replay. The template is a clause body goal's (or the query's), or a
+/// table's variant key for the abstract call of an evaluation.
+#[derive(Debug, Clone)]
+struct CallRef<'p> {
+    addr: Addr,
+    tpl: Tpl<'p>,
+    frame: Frame,
+}
+
+#[derive(Debug, Clone)]
+enum Tpl<'p> {
+    Prog(&'p TTerm),
+    Key(Rc<TTerm>),
+}
+
+impl Tpl<'_> {
+    fn get(&self) -> &TTerm {
+        match self {
+            Tpl::Prog(t) => t,
+            Tpl::Key(t) => t,
+        }
+    }
+}
 
 /// A goal in the list: a body goal still to be built from its clause's
 /// frame when it is reached (query goals too, since CLM-0022: the query's
@@ -89,7 +116,7 @@ enum Goal<'p> {
     /// CLM-0027: an already-built call to resolve against its clauses — the
     /// abstract call of a table evaluation, which must not consult the
     /// table it is computing.
-    Resolve { call: Addr, under: Under },
+    Resolve { call: CallRef<'p>, under: Under },
     /// CLM-0027: a solution of a table evaluation has been reached.
     /// Reaching it finalizes the store, records the call's instance as an
     /// answer of the table (an error if it is not a finite ground term) and
@@ -153,7 +180,7 @@ enum Retry<'p> {
     Clauses {
         /// Goals remaining after the call being retried.
         rest: Goals<'p>,
-        call: Addr,
+        call: CallRef<'p>,
         key: PredKey,
         /// The clauses that can match the call (CLM-0021), as positions in
         /// program order, and the next one to try.
@@ -186,7 +213,7 @@ enum Retry<'p> {
     TableFinish {
         key: Rc<TTerm>,
         rest: Goals<'p>,
-        call: Addr,
+        call: CallRef<'p>,
         under: Under,
     },
     /// CLM-0027: the next answer of a table for a call.
@@ -194,7 +221,7 @@ enum Retry<'p> {
         key: Rc<TTerm>,
         next: usize,
         rest: Goals<'p>,
-        call: Addr,
+        call: CallRef<'p>,
         under: Under,
     },
 }
@@ -208,7 +235,7 @@ struct EvalFrame {
     /// The abstract call, built on the evaluation's store before its mark,
     /// and its variables (the key's, in index order).
     abstract_call: Addr,
-    abstract_vars: Vec<Addr>,
+    abstract_vars: Frame,
     /// The lowest frame this evaluation's answers depend on — its own depth
     /// when none: a recursive variant call to a lower frame lowers it.
     leader_min: usize,
@@ -233,35 +260,36 @@ enum ProofKind<'p> {
     Clause {
         key: PredKey,
         idx: usize,
-        call: Addr,
+        /// The clause's frame and the call's source (CLM-0030), to close the
+        /// step for replay.
+        frame: Frame,
+        src: CallRef<'p>,
     },
-    /// A constraint goal, as posted.
+    /// A constraint goal, as posted, with its template and frame.
     Constraint {
         a: Addr,
         op: &'static str,
         b: Addr,
+        goal: &'p TGoal,
+        frame: Frame,
     },
     Builtin {
         call: Addr,
+        builtin: Builtin,
+        tpl: &'p TTerm,
+        frame: Frame,
     },
     /// An if-then-else whose condition succeeded; its proofs go under it.
-    Committed {
-        text: &'p str,
-    },
+    Committed { text: &'p str },
     /// A condition that had no solution (an else branch or a negation taken).
-    NoSolution {
-        text: &'p str,
-    },
+    NoSolution { text: &'p str },
     /// A comprehension (CLM-0025) and the list it produced.
-    Collected {
-        text: &'p str,
-        into: Addr,
-    },
+    Collected { text: &'p str, into: Addr },
     /// A tabled call (CLM-0027) answered by answer `idx` of its table.
     Tabled {
         key: Rc<TTerm>,
         idx: usize,
-        call: Addr,
+        src: CallRef<'p>,
     },
 }
 
@@ -420,7 +448,7 @@ impl<'p> Solutions<'p> {
                 }
             }
             Goal::Pending { .. } => "a constraint or control goal".to_string(),
-            Goal::Resolve { call, .. } => format!("`{}`", self.render_one(*call)),
+            Goal::Resolve { call, .. } => format!("`{}`", self.render_one(call.addr)),
             Goal::Commit { .. } => "a condition's commit".to_string(),
             Goal::CollectOne { .. } => "a collected solution".to_string(),
             Goal::TableOne { .. } => "a table answer".to_string(),
@@ -456,7 +484,7 @@ impl<'p> Solutions<'p> {
         key: PredKey,
         candidates: &'p [usize],
         from: usize,
-        call: Addr,
+        call: CallRef<'p>,
         rest: Goals<'p>,
         under: Under,
     ) -> bool {
@@ -474,7 +502,7 @@ impl<'p> Solutions<'p> {
                 }
                 continue;
             };
-            if !self.store.post_eq(head, call) {
+            if !self.store.post_eq(head, call.addr) {
                 self.store.undo_to(&mark);
                 continue;
             }
@@ -482,7 +510,7 @@ impl<'p> Solutions<'p> {
                 self.push_choice_point(
                     Retry::Clauses {
                         rest: rest.clone(),
-                        call,
+                        call: call.clone(),
                         key,
                         candidates,
                         next: j + 1,
@@ -496,7 +524,8 @@ impl<'p> Solutions<'p> {
                 ProofKind::Clause {
                     key,
                     idx: candidates[j],
-                    call,
+                    frame: frame.clone(),
+                    src: call,
                 },
             );
             self.goals = prepend(&clause.body, &frame, node, rest);
@@ -619,10 +648,10 @@ impl<'p> Solutions<'p> {
     }
 
     /// A call to a tabled predicate: consume its table, or compute it first.
-    fn tabled_call(&mut self, call: Addr, rest: Goals<'p>, under: Under) -> bool {
-        let Some(vkey) = self.store.variant_key(call) else {
+    fn tabled_call(&mut self, call: CallRef<'p>, rest: Goals<'p>, under: Under) -> bool {
+        let Some(vkey) = self.store.variant_key(call.addr) else {
             self.store.error = Some(EvalError::CyclicTabledCall {
-                call: self.render_one(call),
+                call: self.render_one(call.addr),
             });
             return false;
         };
@@ -647,7 +676,13 @@ impl<'p> Solutions<'p> {
     /// Start evaluating the table of `vkey`: park the caller's store, run on
     /// a clone of the world, resolve the abstract call against the clauses
     /// with a `TableOne` after it and a `TableFinish` choice point below.
-    fn evaluate(&mut self, vkey: Rc<TTerm>, call: Addr, rest: Goals<'p>, under: Under) -> bool {
+    fn evaluate(
+        &mut self,
+        vkey: Rc<TTerm>,
+        call: CallRef<'p>,
+        rest: Goals<'p>,
+        under: Under,
+    ) -> bool {
         let depth = self.eval_stack.len();
         let total = {
             let mut tables = self.program.tables.borrow_mut();
@@ -678,7 +713,12 @@ impl<'p> Solutions<'p> {
             });
             return false;
         };
-        let abstract_vars: Vec<Addr> = vars.into_iter().flatten().collect();
+        let abstract_vars: Frame = vars.into_iter().flatten().collect();
+        let abstract_ref = CallRef {
+            addr: abstract_call,
+            tpl: Tpl::Key(vkey.clone()),
+            frame: abstract_vars.clone(),
+        };
         self.eval_stack.push(EvalFrame {
             parked,
             abstract_call,
@@ -689,17 +729,17 @@ impl<'p> Solutions<'p> {
             dependents: Vec::new(),
             proof_start: self.proof_len(),
         });
-        self.start_pass(vkey, call, rest, under, abstract_call);
+        self.start_pass(vkey, call, rest, under, abstract_ref);
         true
     }
 
     fn start_pass(
         &mut self,
         vkey: Rc<TTerm>,
-        call: Addr,
+        call: CallRef<'p>,
         rest: Goals<'p>,
         under: Under,
-        abstract_call: Addr,
+        abstract_call: CallRef<'p>,
     ) {
         let mark = self.store.mark();
         self.push_choice_point(
@@ -713,6 +753,7 @@ impl<'p> Solutions<'p> {
         );
         // The evaluation's own goal list: it never empties, since `TableOne`
         // always fails (or stops the query).
+        let addr = abstract_call.addr;
         self.goals = cons(
             Goal::Resolve {
                 call: abstract_call,
@@ -721,7 +762,7 @@ impl<'p> Solutions<'p> {
             cons(
                 Goal::TableOne {
                     key: vkey,
-                    call: abstract_call,
+                    call: addr,
                 },
                 None,
             ),
@@ -736,7 +777,7 @@ impl<'p> Solutions<'p> {
     fn finish_evaluation(
         &mut self,
         key: Rc<TTerm>,
-        call: Addr,
+        call: CallRef<'p>,
         rest: Goals<'p>,
         under: Under,
     ) -> bool {
@@ -749,7 +790,11 @@ impl<'p> Solutions<'p> {
         let depth = self.eval_stack.len();
         let total = self.program.tables.borrow().total;
         if frame.looping && frame.leader_min == depth && total > frame.total_at_start {
-            let abstract_call = frame.abstract_call;
+            let abstract_call = CallRef {
+                addr: frame.abstract_call,
+                tpl: Tpl::Key(key.clone()),
+                frame: frame.abstract_vars.clone(),
+            };
             self.eval_stack.push(EvalFrame {
                 looping: false,
                 total_at_start: total,
@@ -785,7 +830,7 @@ impl<'p> Solutions<'p> {
         &mut self,
         key: Rc<TTerm>,
         from: usize,
-        call: Addr,
+        call: CallRef<'p>,
         rest: Goals<'p>,
         under: Under,
     ) -> bool {
@@ -798,7 +843,7 @@ impl<'p> Solutions<'p> {
         };
         if !complete {
             if let Some(construct) = enclosing_sub_search(&rest) {
-                let predicate = self.pred_name(pred_key(&self.store, call));
+                let predicate = self.pred_name(pred_key(&self.store, call.addr));
                 self.store.error = Some(EvalError::IncompleteTable {
                     predicate,
                     construct,
@@ -823,7 +868,7 @@ impl<'p> Solutions<'p> {
                 self.store.undo_to(&mark);
                 continue;
             };
-            if !self.store.post_eq(call, built) {
+            if !self.store.post_eq(call.addr, built) {
                 self.store.undo_to(&mark);
                 continue;
             }
@@ -833,13 +878,20 @@ impl<'p> Solutions<'p> {
                         key: key.clone(),
                         next: i + 1,
                         rest: rest.clone(),
-                        call,
+                        call: call.clone(),
                         under,
                     },
                     mark,
                 );
             }
-            self.record(under, ProofKind::Tabled { key, idx: i, call });
+            self.record(
+                under,
+                ProofKind::Tabled {
+                    key,
+                    idx: i,
+                    src: call,
+                },
+            );
             self.goals = rest;
             return true;
         }
@@ -1056,7 +1108,7 @@ impl<'p> Solutions<'p> {
             };
             let rest = node.next.clone();
             // A pending body goal is built now, from its clause's frame.
-            let (goal, under) = match &node.goal {
+            let (goal, under, tgoal, frame) = match &node.goal {
                 Goal::Commit { height, then, .. } => {
                     if !self.store.finalize() {
                         // Not a solution after all: the condition's next
@@ -1174,9 +1226,9 @@ impl<'p> Solutions<'p> {
                     }
                 }
                 Goal::Resolve { call, under } => {
-                    let (call, under) = (*call, *under);
-                    let key = pred_key(&self.store, call);
-                    let first = first_arg_key(&self.store, call);
+                    let (call, under) = (call.clone(), *under);
+                    let key = pred_key(&self.store, call.addr);
+                    let first = first_arg_key(&self.store, call.addr);
                     let candidates = self.program.candidates(&key, first.as_ref());
                     let ok = self.try_clauses(key, candidates, 0, call, rest, under);
                     if !ok && (self.store.error.is_some() || !self.backtrack()) {
@@ -1203,7 +1255,7 @@ impl<'p> Solutions<'p> {
                     let built =
                         instantiate_goal(&mut self.store, goal, &mut |_, i| frame[i as usize]);
                     match built {
-                        Some(g) => (g, *under),
+                        Some(g) => (g, *under, *goal, frame),
                         None => {
                             if self.store.error.is_some() || !self.backtrack() {
                                 return false;
@@ -1216,32 +1268,50 @@ impl<'p> Solutions<'p> {
             let ok = match goal {
                 RtGoal::Call(call) => {
                     let key = pred_key(&self.store, call);
+                    let tpl = match tgoal {
+                        TGoal::Call(t) => t,
+                        _ => unreachable!("a call is instantiated from a call template"),
+                    };
                     match self.program.builtins.get(&key).copied() {
                         Some(b) => {
                             self.goals = rest;
-                            let ok = self.run_builtin(b, call);
+                            let ok = run_builtin(&mut self.store, b, call);
                             if ok {
-                                self.record(under, ProofKind::Builtin { call });
+                                self.record(
+                                    under,
+                                    ProofKind::Builtin {
+                                        call,
+                                        builtin: b,
+                                        tpl,
+                                        frame,
+                                    },
+                                );
                             }
                             ok
                         }
-                        None if self.program.tabled.contains(&key) => {
-                            self.tabled_call(call, rest, under)
-                        }
                         None => {
-                            let first = first_arg_key(&self.store, call);
-                            let candidates = self.program.candidates(&key, first.as_ref());
-                            self.try_clauses(key, candidates, 0, call, rest, under)
+                            let src = CallRef {
+                                addr: call,
+                                tpl: Tpl::Prog(tpl),
+                                frame,
+                            };
+                            if self.program.tabled.contains(&key) {
+                                self.tabled_call(src, rest, under)
+                            } else {
+                                let first = first_arg_key(&self.store, call);
+                                let candidates = self.program.candidates(&key, first.as_ref());
+                                self.try_clauses(key, candidates, 0, src, rest, under)
+                            }
                         }
                     }
                 }
                 RtGoal::Eq(a, b) => {
                     self.goals = rest;
-                    self.constraint(under, a, "=", b, |s| s.post_eq_goal(a, b))
+                    self.constraint(under, a, "=", b, (tgoal, frame), |s| s.post_eq_goal(a, b))
                 }
                 RtGoal::Dif(a, b) => {
                     self.goals = rest;
-                    self.constraint(under, a, "!=", b, |s| s.post_dif_goal(a, b))
+                    self.constraint(under, a, "!=", b, (tgoal, frame), |s| s.post_dif_goal(a, b))
                 }
                 RtGoal::Rel(op, a, b) => {
                     self.goals = rest;
@@ -1253,7 +1323,7 @@ impl<'p> Solutions<'p> {
                         RelOp::Le => "<=",
                         RelOp::Ge => ">=",
                     };
-                    self.constraint(under, a, text, b, |s| s.post_rel(op, a, b))
+                    self.constraint(under, a, text, b, (tgoal, frame), |s| s.post_rel(op, a, b))
                 }
             };
             if !ok && (self.store.error.is_some() || !self.backtrack()) {
@@ -1269,28 +1339,104 @@ impl<'p> Solutions<'p> {
         a: Addr,
         op: &'static str,
         b: Addr,
+        src: (&'p TGoal, Frame),
         post: impl FnOnce(&mut Store) -> bool,
     ) -> bool {
         let ok = post(&mut self.store);
         if ok {
-            self.record(under, ProofKind::Constraint { a, op, b });
+            let (goal, frame) = src;
+            self.record(
+                under,
+                ProofKind::Constraint {
+                    a,
+                    op,
+                    b,
+                    goal,
+                    frame,
+                },
+            );
         }
         ok
     }
 
-    /// A built-in predicate (CLM-0017): posts its constraint, deterministic.
-    fn run_builtin(&mut self, b: Builtin, call: Addr) -> bool {
-        let d = self.store.deref(call);
-        let Cell::Struct(_, args) = self.store.cell(d).clone() else {
-            return false;
+    /// CLM-0030: the current derivation as closed steps — the program's
+    /// constraint facts in order, then the arena's records in order (the
+    /// arena holds exactly the live derivation's successful steps, since
+    /// backtracking truncates it). Facts only when explanations are off.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "closed and replayed by the failure tree of CLM-0031; until then only the tests ask for a derivation's steps"
+        )
+    )]
+    pub(crate) fn derivation_steps(&mut self) -> Vec<Step> {
+        let mut steps: Vec<Step> = (0..self.program.initial.len()).map(Step::Fact).collect();
+        let Some(arena) = &self.proof else {
+            return steps;
         };
-        match b {
-            Builtin::AtomChars => self.store.post_atom_chars(args[0], args[1]),
-            Builtin::Number => self.store.post_number(args[0]),
-            Builtin::Atom => self.store.post_type(args[0], TypeKind::Atom),
-            Builtin::List => self.store.post_type(args[0], TypeKind::List),
-            Builtin::Sum => self.store.post_sum(args[0], args[1]),
+        let program = self.program;
+        for rec in arena {
+            match &rec.kind {
+                ProofKind::Clause {
+                    key,
+                    idx,
+                    frame,
+                    src,
+                } => {
+                    let c = &program.clauses(key)[*idx];
+                    steps.push(Step::Head {
+                        head: explain::close(&c.head, frame),
+                        call: explain::close(src.tpl.get(), &src.frame),
+                    });
+                }
+                ProofKind::Constraint { goal, frame, .. } => {
+                    let (op, a, b) = match goal {
+                        TGoal::Eq(a, b) => (ConstraintOp::Eq, a, b),
+                        TGoal::Dif(a, b) => (ConstraintOp::Dif, a, b),
+                        TGoal::Rel(op, a, b) => (ConstraintOp::Rel(*op), a, b),
+                        _ => continue,
+                    };
+                    steps.push(Step::Constraint {
+                        op,
+                        a: explain::close(a, frame),
+                        b: explain::close(b, frame),
+                    });
+                }
+                ProofKind::Builtin {
+                    builtin,
+                    tpl,
+                    frame,
+                    ..
+                } => steps.push(Step::Builtin {
+                    builtin: *builtin,
+                    call: explain::close(tpl, frame),
+                }),
+                ProofKind::Tabled { key, idx, src } => {
+                    let answer = program
+                        .tables
+                        .borrow()
+                        .answer(key, *idx)
+                        .map(|(a, _)| a.clone());
+                    if let Some(answer) = answer {
+                        steps.push(Step::Tabled {
+                            call: explain::close(src.tpl.get(), &src.frame),
+                            answer,
+                        });
+                    }
+                }
+                ProofKind::Collected { into, .. } => {
+                    if let Some(list) = self.store.snapshot(*into) {
+                        steps.push(Step::Collected {
+                            into: TTerm::Var(explain::var_id(*into)),
+                            list,
+                        });
+                    }
+                }
+                ProofKind::Committed { .. } | ProofKind::NoSolution { .. } => {}
+            }
         }
+        steps
     }
 
     /// The answer, with its explanation when recording (CLM-0023): the
@@ -1318,9 +1464,10 @@ impl<'p> Solutions<'p> {
         let mut addrs = Vec::new();
         for rec in arena {
             match &rec.kind {
-                ProofKind::Clause { call, .. }
-                | ProofKind::Builtin { call }
-                | ProofKind::Tabled { call, .. } => addrs.push(*call),
+                ProofKind::Clause { src, .. } | ProofKind::Tabled { src, .. } => {
+                    addrs.push(src.addr)
+                }
+                ProofKind::Builtin { call, .. } => addrs.push(*call),
                 ProofKind::Constraint { a, b, .. } => {
                     addrs.push(*a);
                     addrs.push(*b);
@@ -1538,5 +1685,21 @@ fn pred_key(store: &Store, call: Addr) -> PredKey {
         Cell::Struct(f, args) => (*f, args.len()),
         Cell::Const(c) => (*c, 0),
         other => unreachable!("call goals are atoms, got {other:?}"),
+    }
+}
+
+/// A built-in predicate (CLM-0017): posts its constraint, deterministic.
+/// A free function since CLM-0030, shared with the replay of steps.
+pub(super) fn run_builtin(store: &mut Store, b: Builtin, call: Addr) -> bool {
+    let d = store.deref(call);
+    let Cell::Struct(_, args) = store.cell(d).clone() else {
+        return false;
+    };
+    match b {
+        Builtin::AtomChars => store.post_atom_chars(args[0], args[1]),
+        Builtin::Number => store.post_number(args[0]),
+        Builtin::Atom => store.post_type(args[0], TypeKind::Atom),
+        Builtin::List => store.post_type(args[0], TypeKind::List),
+        Builtin::Sum => store.post_sum(args[0], args[1]),
     }
 }

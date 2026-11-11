@@ -1,7 +1,7 @@
 ---
 date: 2026-11-11
 type: task
-status: in-progress
+status: done
 affects:
   - docs/architecture/components/evaluator.md
   - docs/architecture/aspects/answer-soundness.md
@@ -111,11 +111,36 @@ A minimiser error falls back to the bare message.
 
 ## Findings
 
-(filled in as the work proceeds)
+- **`#[expect(dead_code)]` for the slice boundary.** Outside tests nothing
+  asks for a derivation's steps until CLM-0031, so rustc reports the arena's
+  new fields, `CallRef`, `Tpl`, `close` and the `Step` variants as dead. One
+  marker on `derivation_steps`, `#[cfg_attr(not(test), expect(dead_code,
+  reason = …))]`, covers them all: an item with an allowed or expected
+  dead-code lint counts as a live root, so everything it reaches is live.
+  Markers on the reached items were "unfulfilled" and had to go. `expect`
+  rather than `allow` so that CLM-0031, which uses the method, is forced to
+  remove the marker.
+- **`abstract` is a reserved word.** The abstract call's `CallRef` is
+  `abstract_ref`.
+- **Replay re-reads `=` and `!=`.** `post_eq_goal` / `post_dif_goal` decide
+  numeric or tree by what the operands denote when posted (CLM-0026); a
+  subset replay may reach a goal in a different state than the derivation
+  did, so the subset's system is claimr's operational reading of those
+  steps in that order. The property tested is exactly the record's: the
+  reported set replays unsatisfiable, each proper subset satisfiable.
+- **The head step is part of a conflict.** `eligible(bob)` against
+  `{ age(bob) < 18 }` cites the rule's head *and* its body constraint:
+  without the head, `age(X) >= 18` is about another unknown. The record's
+  "three constraints" for the integrity checker will usually be a head and
+  two constraints, which is what a reader needs to see.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test`; existing golden files byte-identical.
-- [ ] A query's output is unchanged with and without `--explain`.
-- [ ] `aivolution lint .` clean; the three `affects` docs current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` (146 unit tests, six new in `conflict_sets`; the batch and
+      REPL load-error assertions extended); existing golden files
+      byte-identical.
+- [x] A query's output is unchanged with and without `--explain` (the
+      golden runs, `explain.claimr` included, and the REPL suite pass
+      unchanged).
+- [x] `aivolution lint .` clean; the three `affects` docs current.

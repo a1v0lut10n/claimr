@@ -12,6 +12,7 @@
 mod answer;
 mod compile;
 mod error;
+mod explain;
 mod machine;
 mod project;
 mod store;

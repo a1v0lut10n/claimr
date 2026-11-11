@@ -17,6 +17,7 @@ use crate::ast::{self, ArithOp, Clause, Expr, Goal, RelOp};
 use crate::number::Number;
 
 use super::error::EvalError;
+use super::explain::{self, Step};
 use super::machine::Solutions;
 use super::store::{Addr, Store};
 use super::symbol::{LIST_LABEL, Symbol, Symbols};
@@ -324,6 +325,16 @@ pub(crate) struct TClause {
     pub text: String,
 }
 
+/// A constraint fact `{ … }.` of the program: the initial store's content,
+/// cited by position and text when the facts conflict (CLM-0030).
+#[derive(Debug, Clone)]
+pub(crate) struct Fact {
+    pub goals: Vec<TGoal>,
+    pub nvars: u32,
+    pub span: Option<Span>,
+    pub text: String,
+}
+
 /// Predicate key: functor and arity.
 pub(crate) type PredKey = (Symbol, usize);
 
@@ -464,8 +475,9 @@ pub struct Program {
     preds: HashMap<PredKey, Pred>,
     /// The built-in predicates by key (CLM-0017).
     pub(crate) builtins: HashMap<PredKey, Builtin>,
-    /// Constraint facts, each with its variable count: the initial store.
-    pub(crate) initial: Vec<(Vec<TGoal>, u32)>,
+    /// Constraint facts — the initial store — with position and text for
+    /// the load-time conflict set (CLM-0030).
+    pub(crate) initial: Vec<Fact>,
     queries: Vec<Query>,
     /// CLM-0027: the predicates declared `:- table`.
     pub(crate) tabled: HashSet<PredKey>,
@@ -844,7 +856,12 @@ impl Program {
                         .map(|c| lw.constraint(c))
                         .collect::<Result<Vec<_>, _>>()?;
                     lw.no_collects(span)?;
-                    initial.push((goals, lw.vars.names.len() as u32));
+                    initial.push(Fact {
+                        goals,
+                        nvars: lw.vars.names.len() as u32,
+                        span,
+                        text: clause.to_string(),
+                    });
                 }
                 Clause::Query(body) => {
                     let mut goals = lw.body(body)?;
@@ -900,8 +917,25 @@ impl Program {
         };
         // The initial store must be satisfiable, or the program has no models.
         let mut store = Store::with_symbols(Rc::clone(&program.symbols));
-        if !program.post_initial(&mut store) {
-            return Err(EvalError::InitialStoreUnsatisfiable);
+        if let Some(k) = program.post_initial(&mut store) {
+            // CLM-0030: a minimal conflicting set among the facts up to the
+            // first the store rejects, cited by position and text. The
+            // replay cannot fail where the facts themselves loaded; should
+            // it, the error stays the bare one.
+            let candidates: Vec<Step> = (0..k).map(Step::Fact).collect();
+            let conflict = match explain::minimal_conflict(&program, &candidates, &Step::Fact(k)) {
+                Ok(mut set) => {
+                    set.push(k);
+                    set.iter()
+                        .map(|&i| {
+                            let f = &program.initial[i];
+                            (f.span, f.text.clone())
+                        })
+                        .collect()
+                }
+                Err(_) => Vec::new(),
+            };
+            return Err(EvalError::InitialStoreUnsatisfiable { conflict });
         }
         store.set_baseline();
         program.world = store;
@@ -936,41 +970,45 @@ impl Program {
             .unwrap_or(&[])
     }
 
-    /// Post the constraint facts into a fresh store. False if unsatisfiable.
-    pub(crate) fn post_initial(&self, store: &mut Store) -> bool {
-        for (goals, nvars) in &self.initial {
-            let mut vars = vec![None; *nvars as usize];
-            for g in goals {
-                let ok = match g {
-                    TGoal::Eq(a, b) => {
-                        match (build(store, a, &mut vars), build(store, b, &mut vars)) {
-                            (Some(a), Some(b)) => store.post_eq_goal(a, b),
-                            _ => false,
-                        }
+    /// Post the constraint facts into a fresh store: the index of the first
+    /// fact the store rejects, `None` when all hold.
+    pub(crate) fn post_initial(&self, store: &mut Store) -> Option<usize> {
+        (0..self.initial.len()).find(|&i| !self.post_fact(store, i))
+    }
+
+    /// Post constraint fact `idx` on a fresh frame of its own (CLM-0030: one
+    /// replay step). False if the store rejects it.
+    pub(crate) fn post_fact(&self, store: &mut Store, idx: usize) -> bool {
+        let fact = &self.initial[idx];
+        let mut vars = vec![None; fact.nvars as usize];
+        for g in &fact.goals {
+            let ok = match g {
+                TGoal::Eq(a, b) => match (build(store, a, &mut vars), build(store, b, &mut vars)) {
+                    (Some(a), Some(b)) => store.post_eq_goal(a, b),
+                    _ => false,
+                },
+                TGoal::Dif(a, b) => {
+                    match (build(store, a, &mut vars), build(store, b, &mut vars)) {
+                        (Some(a), Some(b)) => store.post_dif_goal(a, b),
+                        _ => false,
                     }
-                    TGoal::Dif(a, b) => {
-                        match (build(store, a, &mut vars), build(store, b, &mut vars)) {
-                            (Some(a), Some(b)) => store.post_dif_goal(a, b),
-                            _ => false,
-                        }
-                    }
-                    TGoal::Rel(op, a, b) => {
-                        match (build(store, a, &mut vars), build(store, b, &mut vars)) {
-                            (Some(a), Some(b)) => store.post_rel(*op, a, b),
-                            _ => false,
-                        }
-                    }
-                    TGoal::Call(_)
-                    | TGoal::Or(..)
-                    | TGoal::IfThenElse { .. }
-                    | TGoal::Not { .. }
-                    | TGoal::Collect { .. } => {
-                        unreachable!("constraint facts hold constraints only")
-                    }
-                };
-                if !ok {
-                    return false;
                 }
+                TGoal::Rel(op, a, b) => {
+                    match (build(store, a, &mut vars), build(store, b, &mut vars)) {
+                        (Some(a), Some(b)) => store.post_rel(*op, a, b),
+                        _ => false,
+                    }
+                }
+                TGoal::Call(_)
+                | TGoal::Or(..)
+                | TGoal::IfThenElse { .. }
+                | TGoal::Not { .. }
+                | TGoal::Collect { .. } => {
+                    unreachable!("constraint facts hold constraints only")
+                }
+            };
+            if !ok {
+                return false;
             }
         }
         true
