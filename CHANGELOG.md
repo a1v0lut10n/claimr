@@ -8,6 +8,44 @@ minor versions may change the language. Each entry names the ticket
 journal entry under `docs/journal/` carry the detail, and the design record
 under `docs/design/` that decided it.
 
+## [0.5.0] — 2026-11-11
+
+Explanations of failure: a query that has no answer can say why, and a
+program whose constraint facts conflict says which. Programs written for
+0.4.0 run unchanged and print the same without `--explain`.
+
+### Added
+
+- **Explanations of failure** (CLM-0030, CLM-0031;
+  `docs/design/2026-11-11-explanations-of-failure.md`). Under
+  `claimr --explain` and `:explain`, `false` is followed by the failure
+  tree: every derivation the search tried, as a branch ending at the goal
+  that failed and why — `unsatisfiable`, with a minimal set of earlier
+  steps the goal conflicts with, found by replaying the steps into a fresh
+  store and verified by the same exact check an answer passes; `no clause`,
+  with the candidates counted; `has a solution`, for a negation, with that
+  solution's proof; `no table answer`; `no solution`, for an if-then-else
+  without an else. At most 64 branches are kept and the rest counted.
+  Under `--json`, an `"outcome": "none"` document gains a `failure` field
+  (`docs/reference/json-output.md`).
+- **The load error names the conflicting facts** (CLM-0030). A program
+  whose `{ … }.` facts have no model fails as before, and the message now
+  lists a minimal conflicting set of them by position and text, in human
+  and `--json` mode alike.
+
+### Changed
+
+- **A constraint goal in an explanation renders as written** (CLM-0032):
+  with the derivation's bindings for its variables and its arithmetic,
+  lengths and lists in source form — `{ Z = X + 1 }`, `{ 3 = |<a, b, c>| }`
+  — where a lowered numeric variable (`{ Z = _1 }`) or a folded value
+  (`{ 3 = 3 }`) printed before.
+- **API.** `EvalError::InitialStoreUnsatisfiable` gains the `conflict`
+  field; `ProofNode` gains `failure`, `Resolution` the `Failed` variant;
+  new `Failure`, `Reason`, `FailureTree` and `Solutions::failure()`.
+- Cargo.lock: clipboard-win 5.4.1 (yanked) → 5.4.3, a Windows-only
+  transitive dependency of rustyline.
+
 ## [0.4.0] — 2026-11-11
 
 The language grows from facts, rules and linear constraints over numbers
@@ -138,6 +176,7 @@ form projected onto the query), the exact linear constraint solver
 (Dutertre–de Moura simplex over arbitrary-precision rationals, attribute
 terms, numeric disequations, delayed products) and the REPL.
 
+[0.5.0]: https://github.com/a1v0lut10n/claimr/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/a1v0lut10n/claimr/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/a1v0lut10n/claimr/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/a1v0lut10n/claimr/compare/v0.1.0...v0.2.0

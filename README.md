@@ -70,10 +70,10 @@ Current status: the **parser** (`src/parser/`), the **evaluator**
 (`src/eval/`: SLD resolution over rational trees with first-argument
 indexing and tabling, `=`/`!=` on terms, lists, strings, control
 constructs, comprehensions, answers in solved form projected onto the
-query, explanations), the **linear constraint solver** (`src/solver/`:
-exact rational simplex, attribute terms such as `age(X)`, list lengths,
-delayed non-linear products), and the **REPL** are implemented. Open:
-non-linear and finite-domain constraints, explanations of failure. The
+query, explanations of answers and of failure), the **linear constraint
+solver** (`src/solver/`: exact rational simplex, attribute terms such as
+`age(X)`, list lengths, delayed non-linear products), and the **REPL** are
+implemented. Open: non-linear and finite-domain constraints. The
 [changelog](CHANGELOG.md) lists what each release added.
 
 ## Grammar
@@ -298,7 +298,7 @@ claimr/
 │   │   ├── claimr.rustemo       # THE grammar (authoritative)
 │   │   ├── claimr_actions.rs    # semantic actions: productions -> ast
 │   │   └── mod.rs               # includes the generated parser (OUT_DIR)
-│   ├── eval/            # evaluator: store (heap, trail, dif, numeric glue), compile, SLD machine, tables, projection, answers
+│   ├── eval/            # evaluator: store (heap, trail, dif, numeric glue), compile, SLD machine, tables, projection, answers, explanations
 │   ├── solver/          # exact linear solver: delta-rationals, linear expressions, simplex
 │   ├── highlight.rs     # error-tolerant line lexer for editors and UIs
 │   ├── json_out.rs      # the --json output writer (pinned contract)
