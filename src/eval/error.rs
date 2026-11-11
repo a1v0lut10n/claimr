@@ -230,3 +230,161 @@ impl EvalError {
         }
     }
 }
+
+/// CLM-0033 (`docs/design/2026-11-11-json-error-kind-and-class.md`): what a
+/// caller should do about an error — the **closed** set of classes a JSON
+/// error object carries beside its open `kind`. The set changes only by a
+/// design record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorClass {
+    /// The text is not a program.
+    Syntax,
+    /// The program or query breaks a rule of the language, at load or at run.
+    Program,
+    /// Claimr declines to decide this; it never approximates.
+    Unsupported,
+    /// A budget the caller set ran out.
+    Resource,
+    /// The file could not be read.
+    Io,
+    /// An invariant of the evaluator failed: a bug to report.
+    Internal,
+}
+
+impl ErrorClass {
+    /// The JSON spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ErrorClass::Syntax => "syntax",
+            ErrorClass::Program => "program",
+            ErrorClass::Unsupported => "unsupported",
+            ErrorClass::Resource => "resource",
+            ErrorClass::Io => "io",
+            ErrorClass::Internal => "internal",
+        }
+    }
+}
+
+/// CLM-0033: a datum an error carries, as the JSON error object writes it
+/// beside `kind`, `class` and `message`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorValue {
+    Text(String),
+    Count(u64),
+    /// Cited clauses: the conflicting constraint facts of
+    /// `unsatisfiable-facts`, each with its position when known.
+    Clauses(Vec<(Option<Span>, String)>),
+}
+
+impl EvalError {
+    /// CLM-0033: the stable name of this error on a JSON error object, one
+    /// per variant. Exhaustive: a new variant needs a kind to compile.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            EvalError::InitialStoreUnsatisfiable { .. } => "unsatisfiable-facts",
+            EvalError::NonLinear { .. } => "non-linear",
+            EvalError::CyclicAttributeTerm { .. } => "cyclic-attribute-term",
+            EvalError::ReservedName { .. } => "reserved-name",
+            EvalError::ReservedBuiltin { .. } => "reserved-builtin",
+            EvalError::NonGroundCondition { .. } => "non-ground-condition",
+            EvalError::ComprehensionInHead { .. } => "comprehension-in-head",
+            EvalError::NonGroundSolution { .. } => "non-ground-solution",
+            EvalError::BadDirective { .. } => "bad-directive",
+            EvalError::NonGroundTabledAnswer { .. } => "non-ground-tabled-answer",
+            EvalError::ConstrainedTabledAnswer { .. } => "constrained-tabled-answer",
+            EvalError::IncompleteTable { .. } => "incomplete-table",
+            EvalError::CyclicTabledCall { .. } => "cyclic-tabled-call",
+            EvalError::StepLimit { .. } => "step-limit",
+            EvalError::InternalInvariant { .. } => "internal",
+        }
+    }
+
+    /// CLM-0033: what a caller should do about this error.
+    pub fn class(&self) -> ErrorClass {
+        match self {
+            EvalError::InitialStoreUnsatisfiable { .. }
+            | EvalError::ReservedName { .. }
+            | EvalError::ReservedBuiltin { .. }
+            | EvalError::NonGroundCondition { .. }
+            | EvalError::ComprehensionInHead { .. }
+            | EvalError::NonGroundSolution { .. }
+            | EvalError::BadDirective { .. }
+            | EvalError::NonGroundTabledAnswer { .. }
+            | EvalError::ConstrainedTabledAnswer { .. }
+            | EvalError::IncompleteTable { .. }
+            | EvalError::CyclicTabledCall { .. } => ErrorClass::Program,
+            EvalError::NonLinear { .. } | EvalError::CyclicAttributeTerm { .. } => {
+                ErrorClass::Unsupported
+            }
+            EvalError::StepLimit { .. } => ErrorClass::Resource,
+            EvalError::InternalInvariant { .. } => ErrorClass::Internal,
+        }
+    }
+
+    /// CLM-0033: the error's data as named values, in the variant's order —
+    /// what the message says, as fields a consumer reads instead of prose.
+    /// A variant whose message carries nothing but its text has none.
+    pub fn fields(&self) -> Vec<(&'static str, ErrorValue)> {
+        use ErrorValue::{Clauses, Count, Text};
+        match self {
+            EvalError::InitialStoreUnsatisfiable { conflict } => {
+                vec![("conflict", Clauses(conflict.clone()))]
+            }
+            EvalError::NonLinear { constraint } => vec![("constraint", Text(constraint.clone()))],
+            EvalError::CyclicAttributeTerm { term } => vec![("term", Text(term.clone()))],
+            EvalError::ReservedName { name, .. } => vec![("name", Text(name.clone()))],
+            EvalError::ReservedBuiltin { name, arity, .. } => {
+                vec![
+                    ("name", Text(name.clone())),
+                    ("arity", Count(*arity as u64)),
+                ]
+            }
+            EvalError::NonGroundCondition {
+                construct,
+                variable,
+                clause,
+            } => vec![
+                ("construct", Text(construct.clone())),
+                ("variable", Text(variable.clone())),
+                ("clause", Text(clause.clone())),
+            ],
+            EvalError::ComprehensionInHead { .. }
+            | EvalError::BadDirective { .. }
+            | EvalError::InternalInvariant { .. } => Vec::new(),
+            EvalError::NonGroundSolution {
+                construct,
+                instance,
+            } => vec![
+                ("construct", Text(construct.clone())),
+                ("instance", Text(instance.clone())),
+            ],
+            EvalError::NonGroundTabledAnswer {
+                predicate,
+                instance,
+            } => vec![
+                ("predicate", Text(predicate.clone())),
+                ("instance", Text(instance.clone())),
+            ],
+            EvalError::ConstrainedTabledAnswer {
+                predicate,
+                instance,
+                residual,
+            } => vec![
+                ("predicate", Text(predicate.clone())),
+                ("instance", Text(instance.clone())),
+                ("residual", Text(residual.clone())),
+            ],
+            EvalError::IncompleteTable {
+                predicate,
+                construct,
+            } => vec![
+                ("predicate", Text(predicate.clone())),
+                ("construct", Text(construct.clone())),
+            ],
+            EvalError::CyclicTabledCall { call } => vec![("call", Text(call.clone()))],
+            EvalError::StepLimit { steps, goal } => {
+                vec![("steps", Count(*steps)), ("goal", Text(goal.clone()))]
+            }
+        }
+    }
+}

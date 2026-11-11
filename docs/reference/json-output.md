@@ -123,28 +123,77 @@ the document is byte-identical to the shapes above.
 ## A query that fails at runtime
 
 ```json
-{"query": "?- q(X).", "outcome": "error", "error": {"message": "…"}}
+{"query": "?- anc(a, X).", "outcome": "error",
+ "error": {"kind": "step-limit", "class": "resource", "steps": 1000, "goal": "`anc(a, _1)`",
+           "message": "step limit of 1000 reached at `anc(a, _1)`; the query may not terminate …"}}
 ```
 
 Printed for the failing query (stdout), then the run stops — exit 1,
-as in human mode. A query that exceeds the budget given with `--steps N`
-(CLM-0029) is such a failure; its message opens with a fixed phrase,
-`step limit of N reached at GOAL; …`, and the document shape is unchanged.
+as in human mode. Since CLM-0033
+(`docs/design/2026-11-11-json-error-kind-and-class.md`) the error object
+says what kind of error it is, in both this document and the file-level
+one below:
+
+- `kind` — a stable kebab-case name for the precise error, one per row of
+  the table; new kinds may be added over time;
+- `class` — what the caller should do about it, from a **closed** set that
+  changes only by a design record: `syntax` (the text is not a program),
+  `program` (the program or query breaks a rule of the language, at load
+  or at run), `unsupported` (claimr declines to decide this; it never
+  approximates), `resource` (a budget the caller set ran out), `io` (the
+  file could not be read), `internal` (an invariant failed; a bug to
+  report). A consumer routes on `class` and is never stranded by a kind it
+  has not seen;
+- the error's **data as fields**, named as in the table, so a consumer
+  reads values instead of parsing the message;
+- `message` — the human diagnostic, unchanged: the same text human mode
+  prints.
+
+| `kind` | `class` | fields | where |
+|---|---|---|---|
+| `syntax` | `syntax` | — | file |
+| `read` | `io` | — | file |
+| `reserved-name` | `program` | `name` | file |
+| `reserved-builtin` | `program` | `name`, `arity` | file |
+| `bad-directive` | `program` | — | file |
+| `comprehension-in-head` | `program` | — | file |
+| `unsatisfiable-facts` | `program` | `conflict`: `[{"line"?, "column"?, "clause"}]`, a minimal conflicting set of constraint facts (CLM-0030) | file |
+| `non-ground-condition` | `program` | `construct`, `variable`, `clause` | query |
+| `non-ground-solution` | `program` | `construct`, `instance` | query |
+| `non-ground-tabled-answer` | `program` | `predicate`, `instance` | query |
+| `constrained-tabled-answer` | `program` | `predicate`, `instance`, `residual` | query |
+| `incomplete-table` | `program` | `predicate`, `construct` | query |
+| `cyclic-tabled-call` | `program` | `call` | query |
+| `non-linear` | `unsupported` | `constraint` | query |
+| `cyclic-attribute-term` | `unsupported` | `term` | query |
+| `step-limit` | `resource` | `steps` (a number), `goal` | query |
+| `internal` | `internal` | — | query |
+
+Field order after the positional fields is `kind`, `class`, the data,
+`message`. A consumer written against the earlier contract, which read
+only `message`, sees no change.
 
 ## A file that never runs
 
 Read, parse, and compile failures emit one document on **stderr**:
 
 ```json
-{"error": {"file": "f.claimr", "line": 2, "column": 1, "message": "Expected one of …"}}
+{"error": {"file": "f.claimr", "line": 2, "column": 1, "kind": "syntax", "class": "syntax",
+           "message": "Expected one of …"}}
 ```
 
 `line` and `column` (1-based) appear only when known. A program whose
-constraint facts are unsatisfiable is such a failure; since CLM-0030 its
-`message` continues after `the program's constraint facts are
-unsatisfiable (no models)` with `; a minimal conflicting set:` and one line
-per fact, `  { age(bob) >= 18 }.  fact 3:1` — the shape is unchanged, the
-message carries the lines.
+constraint facts are unsatisfiable is such a failure:
+
+```json
+{"error": {"file": "f.claimr", "kind": "unsatisfiable-facts", "class": "program",
+           "conflict": [{"line": 1, "column": 1, "clause": "{ age(bob) >= 18 }."},
+                        {"line": 3, "column": 1, "clause": "{ age(bob) < 10 }."}],
+           "message": "the program's constraint facts are unsatisfiable (no models); a minimal conflicting set:\n  { age(bob) >= 18 }.  fact 1:1\n  { age(bob) < 10 }.  fact 3:1"}}
+```
+
+The `message` still carries the cited facts as lines, as human mode prints
+them; `conflict` carries them as records.
 
 ## Exit codes
 

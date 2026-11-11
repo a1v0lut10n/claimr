@@ -25,8 +25,8 @@ pub mod solver;
 
 pub use ast::*;
 pub use eval::{
-    Answer, EvalError, Failure, FailureTree, Program, ProofNode, Query, Reason, Resolution,
-    Solutions,
+    Answer, ErrorClass, ErrorValue, EvalError, Failure, FailureTree, Program, ProofNode, Query,
+    Reason, Resolution, Solutions,
 };
 pub use number::{Number, ParseNumberError};
 

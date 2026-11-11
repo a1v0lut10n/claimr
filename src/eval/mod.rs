@@ -24,5 +24,5 @@ mod tests;
 
 pub use answer::{Answer, Failure, FailureTree, ProofNode, Reason, Resolution};
 pub use compile::{Program, Query};
-pub use error::EvalError;
+pub use error::{ErrorClass, ErrorValue, EvalError};
 pub use machine::Solutions;

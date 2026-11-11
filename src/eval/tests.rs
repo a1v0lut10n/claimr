@@ -2672,3 +2672,149 @@ mod constraints_as_written {
         );
     }
 }
+
+// --- kind, class and fields on every error (CLM-0033) -----------------------
+
+#[test]
+fn every_error_has_a_kind_a_class_and_its_fields() {
+    use crate::eval::ErrorClass::{Internal, Program, Resource, Unsupported};
+    use crate::{ErrorClass, EvalError, Span};
+    let s = |t: &str| t.to_string();
+    let span = Some(Span {
+        line: 1,
+        column: 1,
+        offset: 0,
+    });
+    let cases: Vec<(EvalError, &str, ErrorClass, Vec<&str>)> = vec![
+        (
+            EvalError::InitialStoreUnsatisfiable {
+                conflict: vec![(span, s("{ a != a }."))],
+            },
+            "unsatisfiable-facts",
+            Program,
+            vec!["conflict"],
+        ),
+        (
+            EvalError::NonLinear {
+                constraint: s("X * Z"),
+            },
+            "non-linear",
+            Unsupported,
+            vec!["constraint"],
+        ),
+        (
+            EvalError::CyclicAttributeTerm { term: s("f(X)") },
+            "cyclic-attribute-term",
+            Unsupported,
+            vec!["term"],
+        ),
+        (
+            EvalError::ReservedName {
+                name: s("<>"),
+                span,
+            },
+            "reserved-name",
+            Program,
+            vec!["name"],
+        ),
+        (
+            EvalError::ReservedBuiltin {
+                name: s("sum"),
+                arity: 2,
+                span,
+            },
+            "reserved-builtin",
+            Program,
+            vec!["name", "arity"],
+        ),
+        (
+            EvalError::NonGroundCondition {
+                construct: s("\\+ p(X)"),
+                variable: s("X"),
+                clause: s("q :- \\+ p(X)."),
+            },
+            "non-ground-condition",
+            Program,
+            vec!["construct", "variable", "clause"],
+        ),
+        (
+            EvalError::ComprehensionInHead { span },
+            "comprehension-in-head",
+            Program,
+            vec![],
+        ),
+        (
+            EvalError::NonGroundSolution {
+                construct: s("<X | p(X)>"),
+                instance: s("_1"),
+            },
+            "non-ground-solution",
+            Program,
+            vec!["construct", "instance"],
+        ),
+        (
+            EvalError::BadDirective {
+                message: s("unknown directive"),
+                span,
+            },
+            "bad-directive",
+            Program,
+            vec![],
+        ),
+        (
+            EvalError::NonGroundTabledAnswer {
+                predicate: s("p/1"),
+                instance: s("p(_1)"),
+            },
+            "non-ground-tabled-answer",
+            Program,
+            vec!["predicate", "instance"],
+        ),
+        (
+            EvalError::ConstrainedTabledAnswer {
+                predicate: s("p/1"),
+                instance: s("p(a)"),
+                residual: s("age(a) > 3"),
+            },
+            "constrained-tabled-answer",
+            Program,
+            vec!["predicate", "instance", "residual"],
+        ),
+        (
+            EvalError::IncompleteTable {
+                predicate: s("p/1"),
+                construct: s("\\+ p(X)"),
+            },
+            "incomplete-table",
+            Program,
+            vec!["predicate", "construct"],
+        ),
+        (
+            EvalError::CyclicTabledCall { call: s("p(X)") },
+            "cyclic-tabled-call",
+            Program,
+            vec!["call"],
+        ),
+        (
+            EvalError::StepLimit {
+                steps: 7,
+                goal: s("`p(X)`"),
+            },
+            "step-limit",
+            Resource,
+            vec!["steps", "goal"],
+        ),
+        (
+            EvalError::InternalInvariant { what: s("x") },
+            "internal",
+            Internal,
+            vec![],
+        ),
+    ];
+    for (error, kind, class, fields) in cases {
+        assert_eq!(error.kind(), kind);
+        assert_eq!(error.class(), class, "{kind}");
+        let names: Vec<&str> = error.fields().iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, fields, "{kind}");
+    }
+}
