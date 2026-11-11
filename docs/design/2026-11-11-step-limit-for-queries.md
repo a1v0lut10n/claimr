@@ -1,7 +1,7 @@
 ---
 date: 2026-11-11
 type: design
-status: proposed
+status: accepted
 components: [evaluator, cli]
 aspects: [answer-soundness]
 tags: [step-limit, termination, resource-bound, non-termination, inference-limit, cli, repl, prolog-iii]
