@@ -8,6 +8,49 @@ minor versions may change the language. Each entry names the ticket
 journal entry under `docs/journal/` carry the detail, and the design record
 under `docs/design/` that decided it.
 
+## [0.7.0] — 2026-11-15
+
+A relation read in either direction. A predicate is indexed on whichever
+argument a call binds, so a rule can walk a relation against its direction
+or join two records on a shared value without the relation being stated a
+second time. Programs written for 0.6.0 run unchanged and print the same
+answers, in the same order.
+
+### Added
+
+- **Indexing on arguments other than the first** (CLM-0035;
+  `docs/design/2026-11-15-indexing-on-other-arguments.md`). A predicate
+  keeps an index per argument position after the first, built the first
+  time a call needs it. A call takes the shortest list its bound arguments
+  give, in program order, and consults a further argument only while more
+  than one candidate remains; predicates under eight clauses are indexed
+  on the first argument only. A join through a second argument, which was
+  quadratic in the number of facts, is linear: 0.55 s, 2.20 s and 8.41 s
+  at 1 820, 3 640 and 7 280 facts become 0.01 s, 0.03 s and 0.05 s
+  (`docs/reference/benchmarks.md`). Calls bound on the first argument cost
+  what they did.
+- **`argument` on a `no-clause` failure** under `--json --explain`
+  (`docs/reference/json-output.md`): the 1-based position of the argument
+  whose index narrowed the candidates, present whenever `candidates` is
+  smaller than `clauses` — the first argument included — and absent when
+  every clause was a candidate.
+- `examples/directions.claimr`: a relation read forwards and backwards, a
+  tabled closure over the backwards walk, and a join on a shared value.
+  `tests/benchmarks.rs` gains the second-argument join.
+
+### Changed
+
+- **A failed call names the argument that ruled the clauses out.** Under
+  `--explain`, a call no clause can match for a later argument reads
+  `none of N clauses can match argument 2`; the sentences for the first
+  argument are unchanged. The candidate count a failure reports
+  (`none of N candidates unifies`, and `candidates` in JSON) can be
+  smaller than on 0.6.0 for a call bound beyond its first argument.
+- **Existing `--json --explain` documents gain a field.** A `no-clause`
+  reason narrowed by the first argument now carries `"argument":1`. Every
+  existing field keeps its name, value and place.
+- **API.** `Failure` gains the public field `argument`.
+
 ## [0.6.0] — 2026-11-11
 
 Errors a program can route on, and the constraint-programming showcase.
@@ -210,6 +253,7 @@ form projected onto the query), the exact linear constraint solver
 (Dutertre–de Moura simplex over arbitrary-precision rationals, attribute
 terms, numeric disequations, delayed products) and the REPL.
 
+[0.7.0]: https://github.com/a1v0lut10n/claimr/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/a1v0lut10n/claimr/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/a1v0lut10n/claimr/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/a1v0lut10n/claimr/compare/v0.3.0...v0.4.0
