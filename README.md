@@ -136,6 +136,11 @@ from a table of its ground answers, computed once over the program, so
 `ancestor(X, Z) :- ancestor(X, Y), parent(Y, Z).` terminates on a cyclic
 `parent` graph and answers each ancestor once
 ([`examples/tabling.claimr`](examples/tabling.claimr)).
+A predicate is indexed on whichever argument a call binds — the first when
+the program is compiled, any other the first time a call needs it — so a
+rule reads a relation in either direction, and a join on a shared value is
+linear in the facts, without the relation being stated twice
+([`examples/directions.claimr`](examples/directions.claimr)).
 
 ## Examples
 
