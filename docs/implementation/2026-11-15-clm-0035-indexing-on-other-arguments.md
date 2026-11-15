@@ -24,7 +24,7 @@ of facts (0.54 s, 2.18 s, 8.34 s at 1 820, 3 640 and 7 280 facts on
 argument position, built the first time a call needs it; the call takes
 the shortest list its bound arguments give; predicates under eight clauses
 are left alone; and a failed call's explanation names the argument that
-ruled the clauses out. **This task starts once the record is accepted.**
+ruled the clauses out. The record was accepted on 2026-11-15.
 
 The spike (`spike/other-argument-indexing`, a local scratch branch, not
 merged) implements the index and the lookup and is the starting point: 91
