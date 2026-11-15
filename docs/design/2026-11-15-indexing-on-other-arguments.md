@@ -1,7 +1,7 @@
 ---
 date: 2026-11-15
 type: design
-status: proposed
+status: accepted
 components: [evaluator]
 aspects: [answer-soundness]
 tags: [indexing, machine, performance, explanations, json]
