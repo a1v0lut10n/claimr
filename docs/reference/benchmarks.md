@@ -43,3 +43,29 @@ queens, as the backtracking search grows; all 92 solutions of 8 queens
 visit the whole search space and cost about eighteen times the first. Both
 are the shape of backtracking with constraint checking, and both are what
 propagation over integer domains would change.
+
+## A join through the second argument
+
+**What it measures.** `n(Id, Value)` facts, one per id with a distinct
+value, joined with themselves on the value:
+`same_n(A, B) :- n(A, N), n(B, N).` The second call binds its second
+argument only. Without an index on that argument each of the F calls
+tries all F clauses; with one (CLM-0035,
+`docs/design/2026-11-15-indexing-on-other-arguments.md`) each call visits
+the one clause that can match. The test is
+`join_through_the_second_argument` in `tests/benchmarks.rs`; it takes one
+unmeasured run first, since a freshly built binary's first start is slow.
+
+| version | 1 820 facts | 3 640 facts | 7 280 facts |
+|---|---|---|---|
+| 0.6.0 (2026-11-15) | 0.55 s | 2.20 s | 8.41 s |
+| 0.6.0 + CLM-0035 (2026-11-15) | 0.03 s | 0.03 s | 0.06 s |
+
+Machine for both rows: Apple M4 Pro, macOS 27.2.1, rustc 1.100.0, release
+profile; two serial runs agreed within 0.01 s. The 0.6.0 row was timed on
+the binary directly, the other through the test; each figure includes the
+process start and the parse, which is most of the second row.
+
+**Reading the rows.** The first row quadruples as the facts double; the
+second is flat within the process start, and reaches 0.22 s at 29 120
+facts. Answer files are identical between the two at every size.

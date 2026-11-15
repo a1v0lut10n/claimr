@@ -1,6 +1,6 @@
 ---
 type: architecture-component
-last-verified: 2026-11-11
+last-verified: 2026-11-15
 decisions:
   - docs/design/2026-08-17-evaluator.md
   - docs/design/2026-08-17-arithmetic-in-terms.md
@@ -74,7 +74,12 @@ each an exhaustive `match`, so a new variant cannot compile without them.
   (CLM-0021): the principal functor of a clause's first argument — a
   constant, a number, a functor with its arity — maps to the positions of
   the clauses with that key merged with the variable-first clauses, in
-  program order; `{c} => head.` desugars to `head :- {c}.`; constraint
+  program order — and a slot per **further argument position** for an index
+  of the same shape (CLM-0035,
+  `docs/design/2026-11-15-indexing-on-other-arguments.md`), empty until a
+  call needs it and then built once in a pass over the predicate's clauses
+  (a `OnceCell` per position; a predicate under eight clauses never fills
+  one); `{c} => head.` desugars to `head :- {c}.`; constraint
   facts form the **initial store**, validated satisfiable at compile time;
   `?-` clauses become `Query`s in source order. Arithmetic stays in the
   templates (`TTerm::Neg` / `TTerm::Arith`) and is lowered at instantiation
@@ -132,7 +137,14 @@ each an exhaustive `match`, so a new variant cannot compile without them.
   admits (CLM-0021; an unbound first argument, numeric or not, means all
   clauses), and a choice point holds that candidate list and the next
   position — none is pushed when one candidate remains. A join over fact
-  tables keyed by an id is therefore linear in the facts.
+  tables keyed by an id is therefore linear in the facts. While more than
+  one candidate remains, each further bound argument is consulted, left to
+  right, and the shortest list is taken (CLM-0035; a tie keeps the earlier
+  position, and an index is built the first time its position is
+  consulted), so a join through any argument of a large predicate is linear
+  too. Every list is in program order and a superset of the clauses that
+  can unify, so the choice changes no answer; a failed call records the
+  position whose index narrowed its candidates.
   A call whose key is a **built-in** (`Program.builtins`: `atom_chars/2`,
   `number/1`, `atom/1`, `list/1`, CLM-0017) posts its constraint through
   the store and takes no choice point; every other call looks up clauses.
@@ -370,8 +382,8 @@ small; an incremental compile is a later optimisation).
 
 Non-linear constraints beyond delayed products; integer/finite-domain
 constraints; further built-ins; a delayed (`freeze`-style) goal, which would
-let a negation wait for its external variables; indexing on other arguments;
-heap and tableau garbage collection beyond trail-driven undo; tail-call
+let a negation wait for its external variables; indexing by range or below
+an argument's principal functor; heap and tableau garbage collection beyond trail-driven undo; tail-call
 optimisation. The cut is deliberately absent: if-then-else and negation
 cover its uses without its non-local effect (the design record of
 CLM-0022).

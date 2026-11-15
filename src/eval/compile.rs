@@ -8,7 +8,7 @@
 //! each becomes a fresh numeric variable plus a linear constraint posted to
 //! the store (design record `2026-08-17-arithmetic-in-terms.md`).
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
@@ -364,7 +364,59 @@ pub(crate) struct Pred {
     /// term, whose value is not known statically): the candidates for a key
     /// no clause has.
     var_only: Vec<usize>,
+    /// An index per argument position after the first (CLM-0035,
+    /// docs/design/2026-11-15-indexing-on-other-arguments.md): slot `i` is
+    /// position `i + 1`, empty until a call needs it and then built once.
+    others: Vec<OnceCell<ArgIndex>>,
 }
+
+/// The index of one argument position after the first (CLM-0035): the
+/// same shape as the first-argument index, built in one pass on first use.
+#[derive(Debug, Clone, Default)]
+struct ArgIndex {
+    /// Per key: the clauses with that key at the position merged with the
+    /// clauses whose argument there is a variable, in program order.
+    by_key: HashMap<ArgKey, Vec<usize>>,
+    /// The clauses whose argument at the position is a variable (or an
+    /// arithmetic term): the candidates for a key no clause has.
+    var_only: Vec<usize>,
+}
+
+impl ArgIndex {
+    fn build(clauses: &[TClause], pos: usize) -> Self {
+        let mut by_key: HashMap<ArgKey, Vec<usize>> = HashMap::new();
+        let mut var_only = Vec::new();
+        for (i, clause) in clauses.iter().enumerate() {
+            let key = match &clause.head {
+                TTerm::Compound(_, args) => args.get(pos).and_then(arg_key),
+                _ => None,
+            };
+            match key {
+                Some(k) => by_key.entry(k).or_default().push(i),
+                None => var_only.push(i),
+            }
+        }
+        if !var_only.is_empty() {
+            for list in by_key.values_mut() {
+                list.extend(var_only.iter().copied());
+                list.sort_unstable();
+            }
+        }
+        ArgIndex { by_key, var_only }
+    }
+
+    fn candidates(&self, key: &ArgKey) -> &[usize] {
+        self.by_key
+            .get(key)
+            .map(Vec::as_slice)
+            .unwrap_or(&self.var_only)
+    }
+}
+
+/// A predicate with fewer clauses than this is indexed on its first
+/// argument only (CLM-0035): scanning a handful of clauses is cheaper than
+/// hashing. A tuning constant; it has no effect on answers.
+const OTHER_ARG_MIN_CLAUSES: usize = 8;
 
 impl Pred {
     fn push(&mut self, clause: TClause) {
@@ -396,6 +448,44 @@ impl Pred {
             list.sort_unstable();
             list.dedup();
         }
+        let arity = match self.clauses.first().map(|c| &c.head) {
+            Some(TTerm::Compound(_, args)) => args.len(),
+            _ => 0,
+        };
+        self.others = (1..arity).map(|_| OnceCell::new()).collect();
+    }
+
+    /// The candidates of a call (CLM-0035): the shortest list its bound
+    /// arguments give, with the position (0-based) of the argument whose
+    /// index gave it — `None` when no bound argument was indexed and the
+    /// list is every clause. `key_of` yields the call's key at a position
+    /// (`None`: unbound). Starts from the first-argument list and, while
+    /// more than one candidate remains, consults each further bound
+    /// position left to right, building its index on first use; a tie
+    /// keeps the earlier position. Every list is in program order and a
+    /// superset of the clauses that can unify, so the choice changes no
+    /// answer.
+    fn candidates_by(&self, key_of: &dyn Fn(usize) -> Option<ArgKey>) -> (&[usize], Option<usize>) {
+        let first = key_of(0);
+        let mut best = self.candidates(first.as_ref());
+        let mut from = first.map(|_| 0);
+        if self.clauses.len() < OTHER_ARG_MIN_CLAUSES {
+            return (best, from);
+        }
+        for (slot, cell) in self.others.iter().enumerate() {
+            if best.len() <= 1 {
+                break;
+            }
+            let pos = slot + 1;
+            let Some(key) = key_of(pos) else { continue };
+            let index = cell.get_or_init(|| ArgIndex::build(&self.clauses, pos));
+            let list = index.candidates(&key);
+            if list.len() < best.len() {
+                best = list;
+                from = Some(pos);
+            }
+        }
+        (best, from)
     }
 
     /// The clauses that can match a call whose first argument has `key`
@@ -963,11 +1053,26 @@ impl Program {
     /// The positions of the clauses of `key` that can match a call whose
     /// first argument has `first` (`None`: unbound), in program order
     /// (CLM-0021).
-    pub(crate) fn candidates(&self, key: &PredKey, first: Option<&ArgKey>) -> &[usize] {
+    pub(crate) fn candidates(
+        &self,
+        key: &PredKey,
+        key_of: &dyn Fn(usize) -> Option<ArgKey>,
+    ) -> (&[usize], Option<usize>) {
         self.preds
             .get(key)
-            .map(|p| p.candidates(first))
-            .unwrap_or(&[])
+            .map(|p| p.candidates_by(key_of))
+            .unwrap_or((&[], None))
+    }
+
+    /// How many argument positions after the first have a built index for
+    /// `key` (CLM-0035): what the laziness tests observe.
+    #[cfg(test)]
+    pub(crate) fn built_indexes(&self, name: &str, arity: usize) -> usize {
+        let key = (self.symbols.borrow_mut().intern(name), arity);
+        self.preds
+            .get(&key)
+            .map(|p| p.others.iter().filter(|c| c.get().is_some()).count())
+            .unwrap_or(0)
     }
 
     /// Post the constraint facts into a fresh store: the index of the first

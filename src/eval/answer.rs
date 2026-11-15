@@ -69,10 +69,14 @@ pub struct Failure {
     /// `Unsatisfiable`: why the set could not be minimised (every step is
     /// then cited).
     pub note: Option<String>,
-    /// `NoClause`: the predicate's clauses, and the candidates the
-    /// first-argument index admitted.
+    /// `NoClause`: the predicate's clauses, and the candidates the indexes
+    /// admitted.
     pub clauses: Option<usize>,
     pub candidates: Option<usize>,
+    /// `NoClause`: the 1-based position of the argument whose index
+    /// narrowed the candidates (CLM-0035); `None` when every clause was a
+    /// candidate.
+    pub argument: Option<usize>,
     /// `NoTableAnswer`: the answers in the table.
     pub answers: Option<usize>,
 }
@@ -117,12 +121,18 @@ impl Failure {
             Reason::NoClause => {
                 let clauses = self.clauses.unwrap_or(0);
                 let candidates = self.candidates.unwrap_or(0);
+                // CLM-0035: the argument that ruled the clauses out; the
+                // first keeps the wording it has had since CLM-0031.
+                let which = match self.argument {
+                    None | Some(1) => "the first argument".to_string(),
+                    Some(n) => format!("argument {n}"),
+                };
                 let why = if clauses == 0 {
                     "undefined predicate".to_string()
                 } else if candidates == 0 && clauses == 1 {
-                    "the clause cannot match the first argument".to_string()
+                    format!("the clause cannot match {which}")
                 } else if candidates == 0 {
-                    format!("none of {clauses} clauses can match the first argument")
+                    format!("none of {clauses} clauses can match {which}")
                 } else if candidates == 1 {
                     "the candidate does not unify".to_string()
                 } else {

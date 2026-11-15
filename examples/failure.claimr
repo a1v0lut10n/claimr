@@ -19,6 +19,10 @@ parent(a, b).
 anc(X, Y) :- parent(X, Y).
 anc(X, Z) :- anc(X, Y), parent(Y, Z).
 first(X) :- p(X) -> { X = 1 }.
+% A call that no clause can match names the argument that ruled the clauses
+% out (CLM-0035): here the second, on a predicate of eight clauses.
+owner(c11, ann). owner(c12, bob). owner(c13, ann). owner(c14, cy).
+owner(c15, bob). owner(c16, ann). owner(c17, cy). owner(c18, bob).
 
 ?- eligible(bob), { age(bob) < 18 }.
 ?- violation(c18).
@@ -31,3 +35,4 @@ first(X) :- p(X) -> { X = 1 }.
 ?- anc(b, Z).
 ?- first(3).
 ?- violation(c17).
+?- owner(C, dee).

@@ -2818,3 +2818,216 @@ fn every_error_has_a_kind_a_class_and_its_fields() {
         assert_eq!(names, fields, "{kind}");
     }
 }
+
+// --- indexing on arguments other than the first (CLM-0035) ------------------
+
+mod other_argument_indexing {
+    //! A predicate is indexed on an argument after the first the first time
+    //! a call needs it (`docs/design/2026-11-15-indexing-on-other-arguments.md`):
+    //! the call takes the shortest list its bound arguments give, in program
+    //! order, so answers and their order are those of trying every clause.
+    //! Every expectation of answers below was read off 0.6.0, which has no
+    //! such index.
+
+    use super::answers;
+    use crate::{Failure, Program, parse_program};
+
+    fn compiled(src: &str) -> Program {
+        Program::compile(&parse_program(src).expect("parses")).expect("compiles")
+    }
+
+    /// Run query `i` to exhaustion with explanations on and return the
+    /// failure at the leaf of its one failed branch.
+    fn failure_of(program: &Program, i: usize) -> Failure {
+        let mut solutions = program.solve(&program.queries()[i]).with_explanations();
+        assert_eq!(solutions.by_ref().count(), 0, "the query must fail");
+        let tree = solutions.failure().expect("a failure tree");
+        assert_eq!(tree.branches.len(), 1, "one failed branch");
+        let leaf = tree.branches[0].last().expect("a leaf");
+        *leaf.failure.clone().expect("the leaf failed")
+    }
+
+    /// Nine clauses, at the threshold and over it, mixing constants,
+    /// numbers, compounds and variables at the second and third positions.
+    const T: &str = "t(1, a, x). t(2, V, y). t(3, b, x). t(4, a, z). t(5, f(Q), x).
+                     t(6, 1/2, y). t(7, f(Q, R), z). t(8, b, W). t(9, a, x).";
+
+    #[test]
+    fn answers_and_clause_order_are_those_of_trying_every_clause() {
+        let out = answers(&format!(
+            "{T}
+             ?- t(N, a, Z).
+             ?- t(N, b, Z).
+             ?- t(N, c, Z).
+             ?- t(N, f(q), Z).
+             ?- t(N, f(q, r), Z).
+             ?- t(N, 0.5, Z).
+             ?- t(N, M, x).
+             ?- t(N, a, x).
+             ?- {{ V = 1/2 }}, t(N, V, Z).
+             ?- t(3, b, Z).
+             ?- t(N, M, w)."
+        ));
+        // The variable-at-the-position clause is a candidate for every key,
+        // in its place in program order.
+        assert_eq!(
+            out[0],
+            vec![
+                "N = 1, Z = x",
+                "N = 2, Z = y",
+                "N = 4, Z = z",
+                "N = 9, Z = x"
+            ]
+        );
+        assert_eq!(out[1], vec!["N = 2, Z = y", "N = 3, Z = x", "N = 8"]);
+        // A key no clause has: the variable clause alone.
+        assert_eq!(out[2], vec!["N = 2, Z = y"]);
+        // A compound keys by functor and arity.
+        assert_eq!(out[3], vec!["N = 2, Z = y", "N = 5, Z = x"]);
+        assert_eq!(out[4], vec!["N = 2, Z = y", "N = 7, Z = z"]);
+        // Numbers key exactly: 0.5 is 1/2.
+        assert_eq!(out[5], vec!["N = 2, Z = y", "N = 6, Z = y"]);
+        // The third position, with its own variable clause (t(8, b, W)).
+        assert_eq!(
+            out[6],
+            vec![
+                "N = 1, M = a",
+                "N = 3, M = b",
+                "N = 5, M = f(_1)",
+                "N = 8, M = b",
+                "N = 9, M = a"
+            ]
+        );
+        // Two bound positions: whichever list is taken, the same answers.
+        assert_eq!(out[7], vec!["N = 1", "N = 9"]);
+        // A determined numeric variable is bound to its number (CLM-0026).
+        assert_eq!(
+            out[8],
+            vec!["V = 1/2, N = 2, Z = y", "V = 1/2, N = 6, Z = y"]
+        );
+        // The first argument still decides alone when it leaves one clause.
+        assert_eq!(out[9], vec!["Z = x"]);
+        assert_eq!(out[10], vec!["N = 8, M = b"]);
+    }
+
+    #[test]
+    fn an_index_is_built_only_when_a_call_needs_it() {
+        let program = compiled(&format!(
+            "{T}
+             ?- t(3, b, Z).
+             ?- t(N, a, Z).
+             ?- t(N, M, x).
+             ?- t(N, a, Z)."
+        ));
+        let run = |i: usize| program.solve(&program.queries()[i]).count();
+        assert_eq!(program.built_indexes("t", 3), 0, "nothing at compile time");
+        // The first argument leaves one candidate: no later position is
+        // consulted, although the second is bound.
+        assert_eq!(run(0), 1);
+        assert_eq!(program.built_indexes("t", 3), 0);
+        // Only the second argument is bound: its index is built.
+        assert_eq!(run(1), 4);
+        assert_eq!(program.built_indexes("t", 3), 1);
+        // Then the third.
+        assert_eq!(run(2), 5);
+        assert_eq!(program.built_indexes("t", 3), 2);
+        // A second call reuses what is built.
+        assert_eq!(run(3), 4);
+        assert_eq!(program.built_indexes("t", 3), 2);
+    }
+
+    #[test]
+    fn a_small_predicate_is_indexed_on_its_first_argument_only() {
+        // Seven clauses: under the threshold of eight.
+        let program = compiled(
+            "s(a1, b1). s(a2, b2). s(a3, b3). s(a4, b4). s(a5, b5). s(a6, b6). s(a7, b7).
+             ?- s(X, b3).
+             ?- s(X, zz).",
+        );
+        assert_eq!(
+            program
+                .solve(&program.queries()[0])
+                .map(|a| a.to_string())
+                .collect::<Vec<_>>(),
+            vec!["X = a3"]
+        );
+        assert_eq!(program.built_indexes("s", 2), 0);
+        // Every clause was a candidate, so no argument is named.
+        let failure = failure_of(&program, 1);
+        assert_eq!(failure.clauses, Some(7));
+        assert_eq!(failure.candidates, Some(7));
+        assert_eq!(failure.argument, None);
+    }
+
+    #[test]
+    fn a_failed_call_names_the_argument_that_narrowed_the_candidates() {
+        let program = compiled(
+            "e(a1, b1). e(a2, b2). e(a3, b3). e(a4, b4). e(a5, b5).
+             e(a6, b6). e(a7, b7). e(a8, b8). e(a9, b9).
+             r(1, u, p). r(2, u, q). r(3, w, v). r(4, w, s).
+             r(5, m, k). r(6, m, k2). r(7, o, k3). r(8, o, k4).
+             q(1, u, v1). q(2, u, v2). q(3, w, v). q(4, w, v).
+             q(5, m, k). q(6, m, k2). q(7, o, k3). q(8, o, k4).
+             ?- e(X, zz).
+             ?- e(zz, Y).
+             ?- e(a1, b2).
+             ?- r(X, u, v).
+             ?- q(X, u, v).",
+        );
+        // (clauses, candidates, argument, the sentence)
+        let cases = [
+            // The second argument rules every clause out.
+            (
+                9,
+                0,
+                Some(2),
+                "no clause (none of 9 clauses can match argument 2)",
+            ),
+            // The first does: the wording it has had since CLM-0031.
+            (
+                9,
+                0,
+                Some(1),
+                "no clause (none of 9 clauses can match the first argument)",
+            ),
+            // The first leaves one candidate; the second is never consulted.
+            (9, 1, Some(1), "no clause (the candidate does not unify)"),
+            // The shorter list wins: `u` gives two clauses, `v` one.
+            (8, 1, Some(3), "no clause (the candidate does not unify)"),
+            // A tie keeps the earlier position: `u` and `v` give two each.
+            (8, 2, Some(2), "no clause (none of 2 candidates unifies)"),
+        ];
+        for (i, (clauses, candidates, argument, text)) in cases.into_iter().enumerate() {
+            let failure = failure_of(&program, i);
+            assert_eq!(failure.clauses, Some(clauses), "query {i}");
+            assert_eq!(failure.candidates, Some(candidates), "query {i}");
+            assert_eq!(failure.argument, argument, "query {i}");
+            assert_eq!(failure.describe(), text, "query {i}");
+        }
+    }
+
+    #[test]
+    fn a_tabled_closure_walks_a_relation_against_its_direction() {
+        // `back` reads `edge` with its second argument bound; the graph has
+        // a cycle (n9 back to n3). The table is that of 0.6.0, answer for
+        // answer.
+        let out = answers(
+            ":- table reach/2.
+             edge(n1, n2). edge(n2, n3). edge(n3, n4). edge(n4, n5). edge(n5, n6).
+             edge(n6, n7). edge(n7, n8). edge(n8, n9). edge(n9, n3).
+             back(Y, X) :- edge(X, Y).
+             reach(X, Y) :- back(X, Y).
+             reach(X, Z) :- reach(X, Y), back(Y, Z).
+             ?- reach(n4, X).
+             ?- reach(n1, X).",
+        );
+        assert_eq!(
+            out[0],
+            vec![
+                "X = n3", "X = n2", "X = n9", "X = n1", "X = n8", "X = n7", "X = n6", "X = n5",
+                "X = n4"
+            ]
+        );
+        assert!(out[1].is_empty());
+    }
+}

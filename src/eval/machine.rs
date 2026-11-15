@@ -336,6 +336,9 @@ enum FailDetail {
     NoClause {
         clauses: usize,
         candidates: usize,
+        /// CLM-0035: the 1-based position of the argument whose index
+        /// narrowed the candidates; `None` when every clause was one.
+        argument: Option<usize>,
     },
     /// A negation whose condition succeeded: the solution's proof.
     HasSolution(Vec<ProofNode>),
@@ -1362,8 +1365,11 @@ impl<'p> Solutions<'p> {
                 Goal::Resolve { call, under } => {
                     let (call, under) = (call.clone(), *under);
                     let key = pred_key(&self.store, call.addr);
-                    let first = first_arg_key(&self.store, call.addr);
-                    let candidates = self.program.candidates(&key, first.as_ref());
+                    let (candidates, _) = {
+                        let (store, addr) = (&self.store, call.addr);
+                        self.program
+                            .candidates(&key, &|i| arg_key_at(store, addr, i))
+                    };
                     let ok = self.try_clauses(key, candidates, 0, call, rest, under);
                     if !ok && (self.store.error.is_some() || !self.backtrack()) {
                         return false;
@@ -1439,8 +1445,11 @@ impl<'p> Solutions<'p> {
                             if self.program.tabled.contains(&key) {
                                 self.tabled_call(src, rest.clone(), under)
                             } else {
-                                let first = first_arg_key(&self.store, call);
-                                let candidates = self.program.candidates(&key, first.as_ref());
+                                let (candidates, from) = {
+                                    let store = &self.store;
+                                    self.program
+                                        .candidates(&key, &|i| arg_key_at(store, call, i))
+                                };
                                 let ok =
                                     self.try_clauses(key, candidates, 0, src, rest.clone(), under);
                                 if !ok && self.store.error.is_none() {
@@ -1448,10 +1457,14 @@ impl<'p> Solutions<'p> {
                                     // (head failures aggregate here).
                                     let clauses = self.program.clauses(&key).len();
                                     let n = candidates.len();
+                                    // CLM-0035: the argument whose index
+                                    // narrowed the candidates, 1-based.
+                                    let argument = from.filter(|_| n < clauses).map(|pos| pos + 1);
                                     self.fail(under, &rest, FailedGoal::Call(call), |_| {
                                         FailDetail::NoClause {
                                             clauses,
                                             candidates: n,
+                                            argument,
                                         }
                                     });
                                 }
@@ -1840,10 +1853,12 @@ impl<'p> Solutions<'p> {
                 FailDetail::NoClause {
                     clauses,
                     candidates,
+                    argument,
                 } => {
                     failure.reason = Reason::NoClause;
                     failure.clauses = Some(*clauses);
                     failure.candidates = Some(*candidates);
+                    failure.argument = *argument;
                 }
                 FailDetail::HasSolution(_) => failure.reason = Reason::HasSolution,
                 FailDetail::NoTableAnswer(n) => {
@@ -1963,15 +1978,15 @@ fn enclosing_sub_search(rest: &Goals<'_>) -> Option<String> {
     None
 }
 
-/// The index key of a call's first argument (CLM-0021): `None` when the
-/// call is nullary or the argument is an unbound variable — numeric or not,
-/// since a determined numeric variable is still a `Var` cell and may unify
-/// with a number.
-fn first_arg_key(store: &Store, call: Addr) -> Option<ArgKey> {
+/// The index key of a call's argument at `pos` (CLM-0021 for the first,
+/// CLM-0035 for the others): `None` when the call has no such argument or
+/// it is an unbound variable — numeric or not, since a determined numeric
+/// variable is still a `Var` cell and may unify with a number.
+fn arg_key_at(store: &Store, call: Addr, pos: usize) -> Option<ArgKey> {
     let Cell::Struct(_, args) = store.cell(store.deref(call)) else {
         return None;
     };
-    let a = store.deref(*args.first()?);
+    let a = store.deref(*args.get(pos)?);
     match store.cell(a) {
         Cell::Const(c) => Some(ArgKey::Const(*c)),
         Cell::Num(n) => Some(ArgKey::Num(n.clone())),
@@ -2040,6 +2055,7 @@ fn empty_failure(reason: Reason) -> Failure {
         note: None,
         clauses: None,
         candidates: None,
+        argument: None,
         answers: None,
     }
 }

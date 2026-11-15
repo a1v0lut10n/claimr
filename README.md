@@ -68,7 +68,7 @@ declarative programs.
   lexing in claimr's own vocabulary, for editors and UIs
 
 Current status: the **parser** (`src/parser/`), the **evaluator**
-(`src/eval/`: SLD resolution over rational trees with first-argument
+(`src/eval/`: SLD resolution over rational trees with argument
 indexing and tabling, `=`/`!=` on terms, lists, strings, control
 constructs, comprehensions, answers in solved form projected onto the
 query, explanations of answers and of failure), the **linear constraint

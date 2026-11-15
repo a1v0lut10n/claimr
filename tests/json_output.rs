@@ -297,7 +297,7 @@ fn a_failed_query_explains_itself_in_json() {
             "],\"subgoals\":[]}]],\"omitted\":0}}\n",
             "{\"query\":\"?- k(c99, K).\",\"outcome\":\"none\",\"answers\":[],",
             "\"failure\":{\"branches\":[[",
-            "{\"goal\":\"k(c99, K)\",\"by\":\"failed\",\"reason\":\"no-clause\",\"clauses\":1,\"candidates\":0,\"subgoals\":[]}",
+            "{\"goal\":\"k(c99, K)\",\"by\":\"failed\",\"reason\":\"no-clause\",\"clauses\":1,\"candidates\":0,\"argument\":1,\"subgoals\":[]}",
             "]],\"omitted\":0}}\n",
         )
     );
@@ -353,4 +353,37 @@ fn error_objects_carry_kind_class_and_data() {
         .nth(1)
         .expect("the human diagnostic names the query");
     assert_eq!(message, human_message);
+}
+
+/// CLM-0035: a `no-clause` reason names the argument whose index narrowed
+/// the candidates — the first as well as a later one — and carries no
+/// `argument` when every clause was a candidate.
+#[test]
+fn a_no_clause_failure_names_the_narrowing_argument() {
+    let src = concat!(
+        "e(a1, b1). e(a2, b2). e(a3, b3). e(a4, b4). e(a5, b5).\n",
+        "e(a6, b6). e(a7, b7). e(a8, b8). e(a9, b9).\n",
+        "s(a1, b1). s(a2, b2).\n",
+        "?- e(X, zz).\n?- e(zz, Y).\n?- s(X, zz).\n",
+    );
+    let path = write_temp("argument", src);
+    let (stdout, _, code) = run(&["--json", "--explain", path.to_str().unwrap()]);
+    assert_eq!(code, Some(0));
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 3);
+    assert!(
+        lines[0].contains(r#""reason":"no-clause","clauses":9,"candidates":0,"argument":2,"#),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[1].contains(r#""reason":"no-clause","clauses":9,"candidates":0,"argument":1,"#),
+        "{}",
+        lines[1]
+    );
+    assert!(
+        lines[2].contains(r#""reason":"no-clause","clauses":2,"candidates":2,"subgoals""#),
+        "{}",
+        lines[2]
+    );
 }
