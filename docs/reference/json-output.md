@@ -110,7 +110,10 @@ With `--explain` a query with `"outcome": "none"` carries one more field,
   it conflicts with as shallow nodes, a minimal set, or every step with a
   `note` saying why it could not be minimised), `no-clause` (no candidate
   clause resolved the call; `clauses` is the predicate's clause count,
-  `candidates` the number the first-argument index admitted), `has-solution`
+  `candidates` the number the argument indexes admitted, and `argument`
+  the 1-based position of the argument whose index narrowed them — present
+  whenever `candidates` is smaller than `clauses`, the first argument
+  included, and absent when every clause was a candidate; CLM-0035), `has-solution`
   (a negation whose goal succeeded; the solution's proof is the node's
   `subgoals`), `no-table-answer` (a tabled call; `answers` is the table's
   size), `no-solution` (an if-then-else without an else whose condition

@@ -54,3 +54,6 @@ true
     k(c17, 5)  fact 11:1
     n(c17, 3)  fact 12:1
     { 5 > 3 }  constraint 13:1
+?- owner(C, dee).
+false
+  owner(C, dee)  failed: no clause (none of 8 clauses can match argument 2)

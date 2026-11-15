@@ -1,7 +1,7 @@
 ---
 date: 2026-11-15
 type: task
-status: planned
+status: done
 affects:
   - docs/architecture/components/evaluator.md
   - docs/reference/json-output.md
@@ -80,22 +80,62 @@ on a `no-clause` reason whenever an index narrowed the candidates.
 4. An example: a relation read in both directions in `examples/`, with
    its `.answers` file, so the golden run covers a later-argument lookup;
    a failing query in `examples/failure.claimr` for the new sentence.
+   **Done:** `examples/directions.claimr` (a backwards walk, a tabled
+   closure over it, and a join on a shared value); `owner/2` and
+   `?- owner(C, dee).` in the failure example.
 5. Benchmark: the second-argument join in `tests/benchmarks.rs` (ignored
    by default, asserting only the answer count), and its row in
    `docs/reference/benchmarks.md` for 0.6.0 and for this change.
 6. Docs: `evaluator.md` (the per-position indexes, the lookup, *Not yet*
    without "indexing on other arguments"); `json-output.md` (`candidates`
    redefined, `argument` added); the README if it describes indexing;
-   `CHANGELOG.md` under the next version.
+   `CHANGELOG.md` under the next version. **Done**, except the changelog:
+   this repository writes its entry in the release commit, so the entry
+   waits for the next release.
+
+Items 1, 2, 3 and 5 are done as written.
+
+## Findings
+
+- **The spike landed almost unchanged.** The index and the lookup are the
+  spike's; the task added the position returned beside the list, which is
+  all the explanation needed.
+- **`argument` means "narrowed", not "consulted".** It is reported only
+  when the candidates are fewer than the clauses. A bound first argument
+  that every clause could match (all variable-first clauses, say) reports
+  none, which is what the record's "present whenever an index narrowed
+  them" says.
+- **One existing expectation moved, as decided.** The JSON failure
+  document of `tests/json_output.rs` for `?- k(c99, K).` gained
+  `"argument":1`. No human-mode line changed.
+- **A golden file cites line numbers.** A comment added at the head of
+  `examples/failure.claimr` renumbered every cited clause in its answers
+  file; the note sits beside the new facts instead, after the existing
+  clauses, so the file gains three lines and changes none.
+- **Only the leaf call site reports.** The machine has two places that
+  look up candidates; the failure detail is built at one of them, and the
+  other discards the position.
+- **The first run of a new binary is slow.** The benchmark's first
+  process took 262 ms where the same program then took 30 ms, the
+  operating system's first-start cost; the test takes one unmeasured run
+  first.
+- **Left for later, as the record says:** a compact form for
+  single-clause lists (the worst case measured about 260 bytes per
+  clause), lookups by range, and keys below the principal functor.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test`; every existing golden file byte-identical.
-- [ ] The join is linear: the benchmark's times at 1 820, 3 640 and 7 280
-      facts within a few hundredths of a second of the spike's (0.01 s,
-      0.03 s, 0.05 s).
-- [ ] No regression where the first argument is bound: the four-rule
-      integrity check and `examples/queens.claimr` within noise of 0.6.0.
-- [ ] Answer files identical to 0.6.0's on the join at every size run.
-- [ ] `aivolution lint .` clean; the three `affects` docs current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` (165 unit tests, five new; one new JSON test); every
+      existing golden line byte-identical — `failure.answers` gains the
+      three lines of its new query, `directions.answers` is new.
+- [x] The join is linear: 0.01 s, 0.03 s and 0.05 s at 1 820, 3 640 and
+      7 280 facts on the binary (0.55 s, 2.20 s, 8.41 s on 0.6.0), and
+      0.22 s at 29 120.
+- [x] No regression where the first argument is bound: four integrity
+      rules over 104 728 and 418 912 facts take 0.63 s and 2.53 s against
+      0.64 s and 2.56 s on 0.6.0; the queens benchmark is unchanged.
+- [x] Answers identical to 0.6.0's on the join at every size run, on the
+      integrity rules, and on every example that 0.6.0 also has except
+      `failure.claimr`, which has a new query.
+- [x] `aivolution lint .` clean; the three `affects` docs current.

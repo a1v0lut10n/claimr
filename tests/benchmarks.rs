@@ -52,7 +52,7 @@ fn run(program: &str, args: &[&str]) -> (Vec<String>, std::time::Duration) {
     );
     let answers = String::from_utf8_lossy(&out.stdout)
         .lines()
-        .filter(|l| l.starts_with("Qs = "))
+        .filter(|l| l.starts_with("Qs = ") || l.starts_with("A = "))
         .map(str::to_string)
         .collect();
     (answers, elapsed)
@@ -74,4 +74,31 @@ fn queens_all_solutions_of_eight() {
     let (answers, elapsed) = run(&queens_program(8), &[]);
     assert_eq!(answers.len(), 92, "8 queens has 92 solutions");
     println!("queens(8) all 92 solutions: {} ms", elapsed.as_millis());
+}
+
+/// A join through the second argument (CLM-0035): `n` facts, one per id,
+/// each with a distinct value, joined with themselves on the value.
+fn second_argument_join(facts: usize) -> String {
+    let mut program = String::new();
+    for i in 1..=facts {
+        program.push_str(&format!("n(c{i}, {i}).\n"));
+    }
+    program.push_str("same_n(A, B) :- n(A, N), n(B, N).\n?- same_n(A, B).\n");
+    program
+}
+
+#[test]
+#[ignore = "a benchmark: run with --release --ignored --nocapture"]
+fn join_through_the_second_argument() {
+    // The first run of a freshly built binary pays the operating system's
+    // start-up cost; take it before the measured runs.
+    run(&second_argument_join(8), &[]);
+    for facts in [1820, 3640, 7280] {
+        let (answers, elapsed) = run(&second_argument_join(facts), &[]);
+        assert_eq!(answers.len(), facts, "each fact joins itself only");
+        println!(
+            "second-argument join over {facts} facts: {} ms",
+            elapsed.as_millis()
+        );
+    }
 }

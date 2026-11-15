@@ -1,0 +1,20 @@
+?- before(publish, E).
+E = approve
+?- next(publish, L).
+L = announce
+L = archive
+?- next(retire, L).
+false
+?- downstream(approve, L).
+L = publish
+L = announce
+L = archive
+L = retire
+?- did(Who, publish).
+Who = cy
+?- handed_to(ann, To).
+To = bob
+To = bob
+?- handed_to(From, cy).
+From = bob
+From = bob

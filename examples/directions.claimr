@@ -1,0 +1,44 @@
+% A relation read in both directions (CLM-0035,
+% docs/design/2026-11-15-indexing-on-other-arguments.md). A predicate is
+% indexed on its first argument when the program is compiled, and on any
+% other argument the first time a call binds it: a call visits only the
+% clauses that can match its bound arguments, in program order, so the
+% answers and their order are those of trying every clause. A rule can
+% therefore walk a relation against its direction, or join two records on
+% a shared value, without the relation being stated a second time.
+
+% Steps of a piece of work, each with the step it follows.
+follows(draft, idea).
+follows(review, draft).
+follows(revise, review).
+follows(approve, revise).
+follows(publish, approve).
+follows(announce, publish).
+follows(archive, publish).
+follows(retire, archive).
+
+% Who did what.
+did(ann, idea). did(bob, draft). did(ann, review). did(bob, revise).
+did(cy, approve). did(cy, publish). did(ann, announce). did(bob, archive).
+did(cy, retire).
+
+% Forwards: what a step follows (first argument bound).
+before(Step, Earlier) :- follows(Step, Earlier).
+% Backwards: what follows a step (second argument bound).
+next(Step, Later) :- follows(Later, Step).
+
+% Everything downstream of a step, by the backwards walk.
+:- table downstream/2.
+downstream(Step, Later) :- next(Step, Later).
+downstream(Step, Later) :- downstream(Step, Mid), next(Mid, Later).
+
+% A join on a shared value: who handed work to whom.
+handed_to(From, To) :- did(From, Step), next(Step, Later), did(To, Later), { From != To }.
+
+?- before(publish, E).
+?- next(publish, L).
+?- next(retire, L).
+?- downstream(approve, L).
+?- did(Who, publish).
+?- handed_to(ann, To).
+?- handed_to(From, cy).

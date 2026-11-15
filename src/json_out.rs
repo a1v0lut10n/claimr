@@ -138,6 +138,9 @@ fn proof_object(node: &ProofNode, children: &[String]) -> String {
         if let Some(n) = failure.candidates {
             fields.push(format!("\"candidates\":{n}"));
         }
+        if let Some(n) = failure.argument {
+            fields.push(format!("\"argument\":{n}"));
+        }
         if let Some(n) = failure.answers {
             fields.push(format!("\"answers\":{n}"));
         }
