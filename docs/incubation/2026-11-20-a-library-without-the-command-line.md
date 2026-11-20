@@ -14,8 +14,7 @@ The idea: a default feature, say `cli`, that owns `rustyline` and
 `ctrlc` and is required by the binary (`required-features`), so that
 `claimr = { version = "…", default-features = false }` is the engine
 alone. `cargo install claimr` keeps working unchanged, since the
-feature is on by default. `highlight` is used by the REPL only and
-could go under the same feature.
+feature is on by default.
 
 The alternative is two crates, an engine and a command line. It gives
 the same result with a second crate to publish and version.
