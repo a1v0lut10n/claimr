@@ -332,9 +332,18 @@ let program = Program::compile(&clauses)?;
 for query in program.queries() {
     for answer in program.solve(query) {
         println!("{answer}"); // W = socrates
+        if let Some(claimr::Term::Atom(who)) = answer.binding("W") {
+            assert_eq!(who, "socrates"); // the value, not the text
+        }
     }
 }
 ```
+
+An answer carries its bindings as values beside the text: `Term` is an
+atom (its name as content, unquoted), an exact number, a variable by its
+display name, a compound, or a list with an optional improper tail; a
+variable that is unbound or only constrained has no binding, and a cyclic
+term is its equations, `X = f(X)` as a compound containing `Var("X")`.
 
 Diagnostics are GCC-style `file:line:column: message` for syntax errors
 (structured JSON objects under `--json`); a call to a predicate no clause

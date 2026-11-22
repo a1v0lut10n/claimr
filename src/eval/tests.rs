@@ -3166,3 +3166,202 @@ mod undefined_calls {
         assert_eq!(reach(3), ["?- nosuch(X)."], "the query's own call");
     }
 }
+
+// --- CLM-0037: answers as values ----------------------------------------------
+
+mod bindings {
+    use crate::{Answer, Binding, Number, Program, Term, parse_program};
+
+    fn solved(src: &str) -> Vec<Vec<Answer>> {
+        let clauses = parse_program(src).expect("parses");
+        let program = Program::compile(&clauses).expect("compiles");
+        program
+            .queries()
+            .iter()
+            .map(|q| program.solve(q).collect())
+            .collect()
+    }
+
+    fn atom(s: &str) -> Term {
+        Term::Atom(s.to_string())
+    }
+    fn var(s: &str) -> Term {
+        Term::Var(s.to_string())
+    }
+    fn num(n: i64) -> Term {
+        Term::Number(Number::from(n))
+    }
+    fn compound(f: &str, args: Vec<Term>) -> Term {
+        Term::Compound(f.to_string(), args)
+    }
+    fn bound(name: &str, value: Term) -> Binding {
+        Binding {
+            name: name.to_string(),
+            value,
+        }
+    }
+
+    #[test]
+    fn a_bound_variable_carries_its_value_and_the_text_is_its_display() {
+        let out = solved("p('a b', 3, f(g(x), 0.5)).\n?- p(A, N, C).");
+        let a = &out[0][0];
+        assert_eq!(a.equations, vec!["A = 'a b'", "N = 3", "C = f(g(x), 1/2)"]);
+        // The atom's name is content, unquoted; the display quotes it.
+        assert_eq!(a.binding("A"), Some(&atom("a b")));
+        assert_eq!(a.binding("N"), Some(&num(3)));
+        assert_eq!(
+            a.binding("C"),
+            Some(&compound(
+                "f",
+                vec![
+                    compound("g", vec![atom("x")]),
+                    Term::Number(Number::from_ratio(1, 2).unwrap()),
+                ]
+            ))
+        );
+        assert_eq!(a.bindings.len(), 3);
+        for (b, e) in a.bindings.iter().zip(&a.equations) {
+            assert_eq!(&format!("{} = {}", b.name, b.value), e);
+        }
+        assert_eq!(a.binding("D"), None);
+    }
+
+    #[test]
+    fn an_unbound_or_constrained_variable_has_no_binding() {
+        let out = solved("?- { X = f(Y) }.\n?- { X > 1 }.\n?- { X + 1 = 4 }.");
+        // `Y` is free: it appears as a `Var` inside `X`'s value and has none
+        // of its own.
+        let a = &out[0][0];
+        assert_eq!(a.equations, vec!["X = f(Y)"]);
+        assert_eq!(a.binding("X"), Some(&compound("f", vec![var("Y")])));
+        assert_eq!(a.binding("Y"), None);
+        assert_eq!(a.bindings.len(), 1);
+        // Only constrained: the constraint stays text, no binding.
+        let a = &out[1][0];
+        assert!(a.bindings.is_empty());
+        assert_eq!(a.constraints, vec!["X > 1"]);
+        assert_eq!(a.binding("X"), None);
+        // A numeric variable the store has determined is its value.
+        let a = &out[2][0];
+        assert_eq!(a.equations, vec!["X = 3"]);
+        assert_eq!(a.binding("X"), Some(&num(3)));
+    }
+
+    #[test]
+    fn an_alias_keeps_the_text_and_binds_the_later_variable() {
+        let out = solved("?- { X = Y }.\n?- { X = Y, Y = Z }.");
+        let a = &out[0][0];
+        assert_eq!(a.equations, vec!["X = Y"]);
+        assert_eq!(a.bindings, vec![bound("Y", var("X"))]);
+        assert_eq!(a.binding("X"), None);
+        let a = &out[1][0];
+        assert_eq!(a.equations, vec!["X = Y", "X = Z"]);
+        assert_eq!(a.bindings, vec![bound("Y", var("X")), bound("Z", var("X"))]);
+    }
+
+    #[test]
+    fn lists_are_lists_and_a_string_is_a_list_of_characters() {
+        let out = solved(r#"?- { E = <>, L = <1, a>, I = <1, 2> . T, S = "ab" }."#);
+        let a = &out[0][0];
+        assert_eq!(
+            a.equations,
+            vec!["E = <>", "L = <1, a>", "I = <1, 2> . T", "S = <a, b>"]
+        );
+        assert_eq!(a.binding("E"), Some(&Term::List(vec![], None)));
+        assert_eq!(
+            a.binding("L"),
+            Some(&Term::List(vec![num(1), atom("a")], None))
+        );
+        assert_eq!(
+            a.binding("I"),
+            Some(&Term::List(vec![num(1), num(2)], Some(Box::new(var("T")))))
+        );
+        assert_eq!(
+            a.binding("S"),
+            Some(&Term::List(vec![atom("a"), atom("b")], None))
+        );
+    }
+
+    #[test]
+    fn cyclic_terms_are_the_solved_forms_equations() {
+        let out = solved(
+            "p(f(Y)) :- { Y = g(Y) }.
+             ?- { X = f(X) }.
+             ?- { X = <1> . X }.
+             ?- p(X).",
+        );
+        let a = &out[0][0];
+        assert_eq!(a.equations, vec!["X = f(X)"]);
+        assert_eq!(a.bindings, vec![bound("X", compound("f", vec![var("X")]))]);
+        let a = &out[1][0];
+        assert_eq!(a.equations, vec!["X = <1> . X"]);
+        assert_eq!(
+            a.bindings,
+            vec![bound(
+                "X",
+                Term::List(vec![num(1)], Some(Box::new(var("X"))))
+            )]
+        );
+        // A cyclic node no query variable names gets its own `_N` binding,
+        // after the query variables, as the text writes it.
+        let a = &out[2][0];
+        assert_eq!(a.equations, vec!["X = f(_1)", "_1 = g(_1)"]);
+        assert_eq!(
+            a.bindings,
+            vec![
+                bound("X", compound("f", vec![var("_1")])),
+                bound("_1", compound("g", vec![var("_1")])),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_equation_of_every_example_is_its_binding_rendered() {
+        // Text and value come from one walk; this pins it across every
+        // shape the examples produce. An alias renders earlier variable
+        // first, its binding is on the later one.
+        let mut programs = 0;
+        let mut answers = 0;
+        for entry in std::fs::read_dir("examples").expect("examples/") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_none_or(|e| e != "claimr") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).expect("readable");
+            let clauses = parse_program(&src).expect("parses");
+            let Ok(program) = Program::compile(&clauses) else {
+                continue;
+            };
+            programs += 1;
+            for q in program.queries() {
+                for a in program.solve(q).with_step_limit(2_000_000).take(20) {
+                    answers += 1;
+                    assert_eq!(a.bindings.len(), a.equations.len(), "{}", path.display());
+                    let mut seen = std::collections::HashSet::new();
+                    for (b, e) in a.bindings.iter().zip(&a.equations) {
+                        assert!(
+                            seen.insert(&b.name),
+                            "{} twice in {}",
+                            b.name,
+                            path.display()
+                        );
+                        let direct = format!("{} = {}", b.name, b.value);
+                        let alias = match &b.value {
+                            Term::Var(earlier) => format!("{earlier} = {}", b.name),
+                            _ => String::new(),
+                        };
+                        assert!(
+                            *e == direct || *e == alias,
+                            "{}: {e:?} is neither {direct:?} nor {alias:?}",
+                            path.display()
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            programs >= 10 && answers >= 50,
+            "{programs} programs, {answers} answers"
+        );
+    }
+}

@@ -1,6 +1,6 @@
 ---
 type: architecture-component
-last-verified: 2026-11-15
+last-verified: 2026-11-22
 decisions:
   - docs/design/2026-08-17-evaluator.md
   - docs/design/2026-08-17-arithmetic-in-terms.md
@@ -13,6 +13,7 @@ decisions:
   - docs/design/2026-11-09-numbers-numeric-variables-and-attribute-terms.md
   - docs/design/2026-11-10-tabling-for-recursive-rules.md
   - docs/design/2026-11-11-explanations-of-failure.md
+  - docs/design/2026-11-22-answers-as-values.md
 aspects: [answer-soundness, exact-arithmetic]
 ---
 
@@ -24,7 +25,10 @@ answers in solved form. Public surface (re-exported from `claimr`):
 `Program::compile` / `Program::compile_spanned`, `Program::queries`,
 `Program::solve` → `Solutions` (a lazy iterator of `Answer`s;
 `with_explanations()` makes each answer carry its proof tree, CLM-0023),
-`Answer`, `ProofNode`, `Resolution`, `UndefinedCall` (CLM-0036:
+`Answer` — with its `bindings` as values, `Term` and `Binding` (CLM-0037,
+`2026-11-22-answers-as-values.md`: `Answer::binding("X")` is the term the
+query variable is bound to, or `None` when it is unbound or only
+constrained) — `ProofNode`, `Resolution`, `UndefinedCall` (CLM-0036:
 `Program::undefined()` lists every call site whose predicate no clause
 defines and no built-in provides, `Program::undefined_from(&Query)` those a
 query can reach), `EvalError` — which since CLM-0033
@@ -387,7 +391,19 @@ each an exhaustive `match`, so a new variant cannot compile without them.
   (`Fact`, `Rule`, `Constraint`, `Builtin`, `Committed`, `NoSolution`,
   `Collected` — a comprehension with the list it produced), the
   cited clause's position and text, and subgoals; `explanation_lines()`
-  renders it as the indented tree the CLI prints, iteratively.
+  renders it as the indented tree the CLI prints, iteratively. Since
+  CLM-0037 the printer builds a public `Term` for every value it renders —
+  `Atom` (name as content, unquoted), `Number`, `Var` (by display name),
+  `Compound`, `List` (items and an optional improper tail; the empty list
+  is `List([], None)`) — and the text is the term's `Display`, which
+  applies `display_name` quoting and the list notation, so text and value
+  cannot disagree. `Answer::bindings` holds one `Binding { name, value }`
+  per equation, in equation order: a bound query variable's term, a
+  determined numeric variable's `Number`, an alias as `(later,
+  Var(earlier))` while the text keeps `earlier = later`, and each named
+  cyclic node's `(_N, term)` after the query variables. Disequations and
+  constraints stay text. `Term`'s `Display` and `Drop` are iterative
+  (a consumer destructures a `Term` by reference).
 
 The CLI (`cli` component) loads a file and runs its queries in order,
 `--limit N` capping answers per query, `--explain` printing each answer's

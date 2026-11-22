@@ -8,6 +8,25 @@ minor versions may change the language. Each entry names the ticket
 journal entry under `docs/journal/` carry the detail, and the design record
 under `docs/design/` that decided it.
 
+## [Unreleased]
+
+### Added
+
+- **Answers as values** (CLM-0037;
+  `docs/design/2026-11-22-answers-as-values.md`). An `Answer` carries its
+  equations as `bindings` beside the text: one `Binding { name, value }`
+  per bound query variable, in order, then one per named cyclic node
+  (`_1 = …`), and `Answer::binding("X")` looks one up. The value is a new
+  public `Term` — `Atom` (the name as content, unquoted), `Number` (exact),
+  `Var` (a query variable's name or `_N`), `Compound`, `List` (items and
+  an optional improper tail) — whose `Display` is the solved-form
+  renderer, so the text and the value cannot disagree. An unbound or
+  merely constrained variable has no binding; an alias `A = B` binds the
+  later variable to `Var("A")`; a cyclic term is its equations. The text
+  fields, the batch output and the `--json` documents are unchanged. For
+  a program that links the crate (genite's rule runner first), which
+  until now split the equation strings and unquoted atoms by hand.
+
 ## [0.7.0] — 2026-11-15
 
 A relation read in either direction. A predicate is indexed on whichever

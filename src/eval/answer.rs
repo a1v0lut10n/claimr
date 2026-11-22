@@ -28,10 +28,123 @@ pub struct Answer {
     pub disequations: Vec<String>,
     /// Numeric constraints: bounds, linear equations, numeric disequations.
     pub constraints: Vec<String>,
+    /// CLM-0037 (docs/design/2026-11-22-answers-as-values.md): the equations
+    /// as values — one binding per query variable that has an equation, in
+    /// query-variable order, then one per named cyclic node (`_N`). An
+    /// unbound or merely constrained variable has none. An alias `A = B`
+    /// binds the later variable: `B` to `Var("A")`.
+    pub bindings: Vec<Binding>,
     /// The proof tree (CLM-0023), present when the solutions were asked for
     /// explanations (`Solutions::with_explanations`): the query's goals as
     /// roots. Not part of the answer's `Display`.
     pub explanation: Option<Vec<ProofNode>>,
+}
+
+/// A value in an answer (CLM-0037,
+/// docs/design/2026-11-22-answers-as-values.md): what the heap can hold at
+/// an answer, and nothing a program is merely written with. Atom and functor
+/// names are content, unquoted, as the AST and the symbol table hold them;
+/// `Display` writes the solved-form syntax, quoting a name exactly when the
+/// source would need it. A cyclic term appears as the solved form's
+/// equations: a `Var` under the node's name where it recurs, with the node's
+/// own entry in [`Answer::bindings`]. A string is a list of one-character
+/// atoms, here as in print. `Display` and `Drop` are iterative, so a deep
+/// term costs no stack; `Drop` means a consumer destructures by reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Term {
+    /// An atom, by its name.
+    Atom(String),
+    /// An exact rational.
+    Number(Number),
+    /// A variable, by its display name: a query variable's own, or `_N`.
+    Var(String),
+    /// A compound term: the functor's name and the arguments.
+    Compound(String, Vec<Term>),
+    /// A list: its items, and its tail when improper (`<a, b> . T`).
+    List(Vec<Term>, Option<Box<Term>>),
+}
+
+/// One binding of an answer (CLM-0037): the equation `name = value`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    /// A query variable's name, or a cyclic node's `_N`.
+    pub name: String,
+    pub value: Term,
+}
+
+/// A unit of `Term`'s display work list.
+enum Piece<'t> {
+    Term(&'t Term),
+    Text(&'static str),
+}
+
+fn push_separated<'t>(stack: &mut Vec<Piece<'t>>, items: &'t [Term]) {
+    for (i, item) in items.iter().enumerate().rev() {
+        if i + 1 < items.len() {
+            stack.push(Piece::Text(", "));
+        }
+        stack.push(Piece::Term(item));
+    }
+}
+
+impl fmt::Display for Term {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut stack = vec![Piece::Term(self)];
+        while let Some(piece) = stack.pop() {
+            match piece {
+                Piece::Text(t) => f.write_str(t)?,
+                Piece::Term(Term::Atom(name)) => f.write_str(&crate::ast::display_name(name))?,
+                Piece::Term(Term::Number(n)) => write!(f, "{n}")?,
+                Piece::Term(Term::Var(name)) => f.write_str(name)?,
+                Piece::Term(Term::Compound(name, args)) => {
+                    f.write_str(&crate::ast::display_name(name))?;
+                    f.write_str("(")?;
+                    stack.push(Piece::Text(")"));
+                    push_separated(&mut stack, args);
+                }
+                Piece::Term(Term::List(items, tail)) => {
+                    f.write_str("<")?;
+                    match tail {
+                        Some(tail) => {
+                            stack.push(Piece::Term(tail));
+                            stack.push(Piece::Text("> . "));
+                        }
+                        None => stack.push(Piece::Text(">")),
+                    }
+                    push_separated(&mut stack, items);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Term {
+    /// Move the children out, for the iterative drop.
+    fn take_children(&mut self, into: &mut Vec<Term>) {
+        match self {
+            Term::Compound(_, args) => into.append(args),
+            Term::List(items, tail) => {
+                into.append(items);
+                if let Some(tail) = tail.take() {
+                    into.push(*tail);
+                }
+            }
+            Term::Atom(_) | Term::Number(_) | Term::Var(_) => {}
+        }
+    }
+}
+
+/// A term of any depth drops in constant stack (as `ProofNode`s do): the
+/// children are moved into a worklist and dropped in a loop.
+impl Drop for Term {
+    fn drop(&mut self) {
+        let mut work = Vec::new();
+        self.take_children(&mut work);
+        while let Some(mut t) = work.pop() {
+            t.take_children(&mut work);
+        }
+    }
 }
 
 /// One node of an answer's proof tree (CLM-0023,
@@ -301,6 +414,17 @@ impl Answer {
         out
     }
 
+    /// The value bound to the query variable `name` (CLM-0037), if the
+    /// answer has an equation for it; `None` for a variable that is unbound
+    /// or only constrained (what is known of it is in `constraints` and
+    /// `disequations`).
+    pub fn binding(&self, name: &str) -> Option<&Term> {
+        self.bindings
+            .iter()
+            .find(|b| b.name == name)
+            .map(|b| &b.value)
+    }
+
     /// All lines of the answer, in print order.
     pub fn parts(&self) -> impl Iterator<Item = &str> {
         self.equations
@@ -333,10 +457,13 @@ impl fmt::Display for Answer {
     }
 }
 
-/// A unit of the iterative renderer's work list.
-enum Item {
-    Term(Addr),
-    Text(&'static str),
+/// A unit of the value builder's work list (CLM-0037): a cell to visit, or
+/// a compound / list to assemble from the last `n` built values (a list also
+/// says whether a tail was built after its items).
+enum Build {
+    Visit(Addr),
+    Compound(String, usize),
+    List(usize, bool),
 }
 
 struct Printer<'a> {
@@ -416,12 +543,12 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// CLM-0014: queue the rendering of the list whose first cell is `cell`
+    /// CLM-0014: queue the building of the list whose first cell is `cell`
     /// (a `'<>'/2` structure): `<h1, h2, h3>` when the spine ends in `'<>'`,
     /// `<h1, h2> . t` when it ends in anything else. The spine stops at a
-    /// cyclic node, which prints by name, so `X = <1> . X` is the finite form
+    /// cyclic node, which appears by name, so `X = <1> . X` is the finite form
     /// of a cyclic list.
-    fn push_list(&self, stack: &mut Vec<Item>, cell: Addr) {
+    fn push_list(&self, work: &mut Vec<Build>, cell: Addr) {
         let mut heads = Vec::new();
         let mut tail = cell;
         let mut first = true;
@@ -429,7 +556,7 @@ impl<'a> Printer<'a> {
             let a = self.store.deref(tail);
             match self.store.cell(a) {
                 // The first cell is walked even when it is cyclic (its inner
-                // occurrences print by name); any later cyclic cell ends the
+                // occurrences appear by name); any later cyclic cell ends the
                 // spine, which also stops a cycle back to the first cell.
                 Cell::Struct(f, args)
                     if args.len() == 2
@@ -446,57 +573,62 @@ impl<'a> Printer<'a> {
         let a = self.store.deref(tail);
         let proper =
             matches!(self.store.cell(a), Cell::Const(c) if self.symbols.name(*c) == LIST_LABEL);
-        if proper {
-            stack.push(Item::Text(">"));
-        } else {
-            stack.push(Item::Term(tail));
-            stack.push(Item::Text("> . "));
+        work.push(Build::List(heads.len(), !proper));
+        if !proper {
+            work.push(Build::Visit(tail));
         }
-        for (i, &h) in heads.iter().enumerate().rev() {
-            if i + 1 < heads.len() {
-                stack.push(Item::Text(", "));
-            }
-            stack.push(Item::Term(h));
+        for &h in heads.iter().rev() {
+            work.push(Build::Visit(h));
         }
-        stack.push(Item::Text("<"));
     }
 
-    /// Render the term at `root`. If `root` is itself a cyclic node it is
-    /// expanded here (its inner occurrences print as its name); other cyclic
-    /// nodes print as names and are queued for their own equations.
-    fn render(&mut self, root: Addr) -> String {
+    /// The value at `root` (CLM-0037). If `root` is itself a cyclic node it
+    /// is expanded here (its inner occurrences are `Var`s under its name);
+    /// other cyclic nodes are `Var`s under their names and are queued for
+    /// their own equations. Iterative: a work stack of visits and finishes
+    /// over a stack of built values, so a deep term costs no stack.
+    fn term(&mut self, root: Addr) -> Term {
         let root = self.store.deref(root);
-        let mut out = String::new();
-        let mut stack = vec![Item::Term(root)];
+        let mut work = vec![Build::Visit(root)];
+        let mut built: Vec<Term> = Vec::new();
         let mut first = true;
-        while let Some(item) = stack.pop() {
-            match item {
-                Item::Text(t) => out.push_str(t),
-                Item::Term(a) => {
+        while let Some(step) = work.pop() {
+            match step {
+                Build::Compound(name, n) => {
+                    let args = built.split_off(built.len() - n);
+                    built.push(Term::Compound(name, args));
+                }
+                Build::List(n, improper) => {
+                    let tail = if improper {
+                        built.pop().map(Box::new)
+                    } else {
+                        None
+                    };
+                    let items = built.split_off(built.len() - n);
+                    built.push(Term::List(items, tail));
+                }
+                Build::Visit(a) => {
                     let a = self.store.deref(a);
                     let is_root = first && a == root;
                     first = false;
                     match self.store.cell(a).clone() {
                         Cell::Var(_) => {
-                            // A numeric variable with a determined value prints as the value.
+                            // A numeric variable with a determined value is the value.
                             let fixed = self
                                 .store
                                 .numvar
                                 .get(&a)
                                 .and_then(|sv| self.store.class_value(*sv));
-                            match fixed {
-                                Some(c) => out.push_str(&c.to_string()),
-                                None => {
-                                    let n = self.name_for(a);
-                                    out.push_str(&n);
-                                }
-                            }
+                            built.push(match fixed {
+                                Some(c) => Term::Number(c),
+                                None => Term::Var(self.name_for(a)),
+                            });
                         }
-                        Cell::Const(c) if self.symbols.name(c) == LIST_LABEL => out.push_str("<>"),
-                        Cell::Const(c) => {
-                            out.push_str(&crate::ast::display_name(self.symbols.name(c)))
+                        Cell::Const(c) if self.symbols.name(c) == LIST_LABEL => {
+                            built.push(Term::List(Vec::new(), None))
                         }
-                        Cell::Num(n) => out.push_str(&n.to_string()),
+                        Cell::Const(c) => built.push(Term::Atom(self.symbols.name(c).to_string())),
+                        Cell::Num(n) => built.push(Term::Number(n)),
                         Cell::Struct(f, args) => {
                             if self.cyclic.contains(&a) && !is_root {
                                 if !self.names.contains_key(&a) {
@@ -504,28 +636,32 @@ impl<'a> Printer<'a> {
                                     self.names.insert(a, n);
                                     self.pending_nodes.push(a);
                                 }
-                                out.push_str(&self.names[&a]);
+                                built.push(Term::Var(self.names[&a].clone()));
                                 continue;
                             }
                             if args.len() == 2 && self.symbols.name(f) == LIST_LABEL {
-                                self.push_list(&mut stack, a);
+                                self.push_list(&mut work, a);
                                 continue;
                             }
-                            out.push_str(&crate::ast::display_name(self.symbols.name(f)));
-                            out.push('(');
-                            stack.push(Item::Text(")"));
-                            for (i, &arg) in args.iter().enumerate().rev() {
-                                if i + 1 < args.len() {
-                                    stack.push(Item::Text(", "));
-                                }
-                                stack.push(Item::Term(arg));
+                            work.push(Build::Compound(
+                                self.symbols.name(f).to_string(),
+                                args.len(),
+                            ));
+                            for &arg in args.iter().rev() {
+                                work.push(Build::Visit(arg));
                             }
                         }
                     }
                 }
             }
         }
-        out
+        built.pop().expect("a term was built")
+    }
+
+    /// The text of the value at `root`: its `Term` displayed, so the text
+    /// and the value cannot disagree.
+    fn render(&mut self, root: Addr) -> String {
+        self.term(root).to_string()
     }
 }
 
@@ -578,7 +714,7 @@ pub(crate) fn render_answer(
         match store.cell(d) {
             Cell::Var(_) => {
                 if let Some(existing) = p.names.get(&d) {
-                    aliases.push(Some(format!("{existing} = {name}")));
+                    aliases.push(Some(existing.clone()));
                 } else {
                     p.names.insert(d, name.clone());
                     aliases.push(None);
@@ -593,19 +729,36 @@ pub(crate) fn render_answer(
         }
     }
 
-    // Pass 3: equations, in query-variable order. An unbound numeric
-    // variable whose value is determined prints as `X = value`.
+    // Pass 3: equations, in query-variable order, each with its binding
+    // (CLM-0037). An unbound numeric variable whose value is determined is
+    // `X = value`; an alias keeps the earlier variable first in the text and
+    // binds the later one.
+    let mut bindings = Vec::new();
     for ((name, addr), alias) in query_vars.iter().zip(aliases) {
-        if let Some(alias) = alias {
-            equations.push(alias);
+        if let Some(earlier) = alias {
+            equations.push(format!("{earlier} = {name}"));
+            bindings.push(Binding {
+                name: name.clone(),
+                value: Term::Var(earlier),
+            });
             continue;
         }
         let d = store.deref(*addr);
-        if !matches!(store.cell(d), Cell::Var(_)) {
-            let rendered = p.render(d);
-            equations.push(format!("{name} = {rendered}"));
-        } else if let Some(c) = store.numvar.get(&d).and_then(|sv| store.class_value(*sv)) {
-            equations.push(format!("{name} = {c}"));
+        let value = if !matches!(store.cell(d), Cell::Var(_)) {
+            Some(p.term(d))
+        } else {
+            store
+                .numvar
+                .get(&d)
+                .and_then(|sv| store.class_value(*sv))
+                .map(Term::Number)
+        };
+        if let Some(value) = value {
+            equations.push(format!("{name} = {value}"));
+            bindings.push(Binding {
+                name: name.clone(),
+                value,
+            });
         }
     }
 
@@ -629,20 +782,12 @@ pub(crate) fn render_answer(
     }
 
     // Pass 5: cyclic nodes that were named but not yet expanded.
-    while let Some(node) = p.pending_nodes.pop() {
-        let name = p.names[&node].clone();
-        let rendered = p.render(node);
-        equations.push(format!("{name} = {rendered}"));
-    }
+    cyclic_equations(&mut p, &mut equations, &mut bindings);
 
     // CLM-0023: the explanation's goal instances, after the answer's names
     // are fixed; a cyclic node first seen here gets its equation too.
     let extra_rendered: Vec<String> = extra.iter().map(|a| p.render(*a)).collect();
-    while let Some(node) = p.pending_nodes.pop() {
-        let name = p.names[&node].clone();
-        let rendered = p.render(node);
-        equations.push(format!("{name} = {rendered}"));
-    }
+    cyclic_equations(&mut p, &mut equations, &mut bindings);
 
     // Pass 6: the numeric store, projected onto what the query can see and
     // simplified (design D7, stage 4).
@@ -708,10 +853,22 @@ pub(crate) fn render_answer(
             equations,
             disequations,
             constraints,
+            bindings,
             explanation: None,
         },
         extra_rendered,
     )
+}
+
+/// The equations of the cyclic nodes named so far and not yet expanded,
+/// `_N = …`, each with its binding (CLM-0037).
+fn cyclic_equations(p: &mut Printer<'_>, equations: &mut Vec<String>, bindings: &mut Vec<Binding>) {
+    while let Some(node) = p.pending_nodes.pop() {
+        let name = p.names[&node].clone();
+        let value = p.term(node);
+        equations.push(format!("{name} = {value}"));
+        bindings.push(Binding { name, value });
+    }
 }
 
 /// The public numeric variables (alias-class roots) with their names: numeric
