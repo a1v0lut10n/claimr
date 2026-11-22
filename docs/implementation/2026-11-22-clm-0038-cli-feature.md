@@ -1,7 +1,7 @@
 ---
 date: 2026-11-22
 type: task
-status: in-progress
+status: done
 affects:
   - README.md
   - docs/architecture/README.md
@@ -59,16 +59,39 @@ keeps discovering the other tests automatically.
 
 ## Findings
 
-(filled in as the work proceeds)
+- **Seventeen crates fewer, half a second faster.** `cargo tree -e normal`
+  lists 51 crates with the feature and 34 without; the ones that leave are
+  `rustyline`, `ctrlc` and their trees — on macOS the `objc2`,
+  `dispatch2`, `block2` and `nix` stacks, `radix_trie`, `home`, `log`,
+  `smallvec`, `unicode-segmentation`, `utf8parse`. A clean `cargo build
+  --lib` on the M4 Pro takes 6.7–7.2 s with the feature and 6.3–6.5 s
+  without (two runs each, fresh target directory): the removed crates
+  compile in parallel beside the parser generation, which is the long
+  pole, so the gain is dependency surface — what an embedding program
+  audits, vendors and rebuilds on a one-core CI runner — more than
+  wall-clock here.
+- **The binary's tests needed declaring.** A test that reads
+  `CARGO_BIN_EXE_claimr` through `env!` fails to compile when the binary
+  is not built, so the four such tests are `[[test]]` targets with
+  `required-features = ["cli"]`; Cargo keeps discovering the others
+  (`parse_examples`, `quoted_atoms`, …) on its own, and `cargo test
+  --no-default-features` runs 174 library tests, the two discovered
+  integration suites and the doc test, skipping the binary's four and
+  the `json_out` unit tests that live in the binary.
+- **No `cfg` in the sources.** `main.rs`, `repl.rs` and `json_out.rs`
+  form the one binary target and go behind the feature whole; `src/lib.rs`
+  never named either dependency.
+- **`cargo package --list` is unchanged** (84 files).
 
 ## Verification
 
-- [ ] Default features: `cargo fmt --all -- --check`,
-      `cargo clippy --all-targets -- -D warnings`, `cargo test` as before.
-- [ ] `--no-default-features`: `cargo build --lib`, `cargo clippy
+- [x] Default features: `cargo fmt --all -- --check`,
+      `cargo clippy --all-targets -- -D warnings`, `cargo test` as before
+      (232 pass, 3 benchmarks ignored).
+- [x] `--no-default-features`: `cargo build --lib`, `cargo clippy
       --all-targets --no-default-features -- -D warnings`, `cargo test
       --no-default-features` (library and doc tests; the binary's tests
       skipped), `cargo tree` without `rustyline`/`ctrlc`.
-- [ ] `cargo build` still produces the binary; `cargo package --list`
+- [x] `cargo build` still produces the binary; `cargo package --list`
       unchanged.
-- [ ] `aivolution lint .` clean; the two `affects` docs current.
+- [x] `aivolution lint .` clean; the two `affects` docs current.

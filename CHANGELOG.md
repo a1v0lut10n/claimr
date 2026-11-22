@@ -27,6 +27,18 @@ under `docs/design/` that decided it.
   a program that links the crate (genite's rule runner first), which
   until now split the equation strings and unquoted atoms by hand.
 
+### Changed
+
+- **The command line is a default feature, `cli`** (CLM-0038;
+  `docs/implementation/2026-11-22-clm-0038-cli-feature.md`). It owns
+  `rustyline` and `ctrlc` and the `claimr` binary requires it, so a program
+  that embeds the engine depends on
+  `claimr = { version = "0.8", default-features = false }` and builds the
+  parser, evaluator and solver alone — seventeen crates fewer, the macOS
+  `objc2` and `nix` trees among them. `cargo install claimr`, `cargo
+  build` and `cargo run` are unchanged; `cargo test --no-default-features`
+  runs the library's tests and skips the binary's.
+
 ## [0.7.0] — 2026-11-15
 
 A relation read in either direction. A predicate is indexed on whichever
