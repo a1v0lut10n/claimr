@@ -22,6 +22,33 @@ path = "src/lib.rs"
 [[bin]]
 name = "claimr"
 path = "src/main.rs"
+required-features = ["cli"]
+
+# The tests that drive the binary (through `CARGO_BIN_EXE_claimr`) need the
+# feature too; the library's tests are discovered as usual (CLM-0038).
+[[test]]
+name = "run_examples"
+required-features = ["cli"]
+
+[[test]]
+name = "json_output"
+required-features = ["cli"]
+
+[[test]]
+name = "repl"
+required-features = ["cli"]
+
+[[test]]
+name = "benchmarks"
+required-features = ["cli"]
+
+[features]
+# `cli` owns the command line's dependencies — the REPL's line editor and
+# the Ctrl-C handler — and the binary requires it. A program that embeds
+# the engine depends on `claimr` with `default-features = false`
+# (CLM-0038, docs/implementation/2026-11-22-clm-0038-cli-feature.md).
+default = ["cli"]
+cli = ["dep:rustyline", "dep:ctrlc"]
 
 [dependencies]
 num-bigint = "0.4"
@@ -29,8 +56,8 @@ num-integer = "0.1"
 num-rational = { version = "0.4", features = ["num-bigint"] }
 num-traits = "0.2"
 rustemo = "0.9.1"
-rustyline = "18"
-ctrlc = "3"
+rustyline = { version = "18", optional = true }
+ctrlc = { version = "3", optional = true }
 thiserror = "1"
 
 [build-dependencies]

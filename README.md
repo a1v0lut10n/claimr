@@ -345,6 +345,17 @@ display name, a compound, or a list with an optional improper tail; a
 variable that is unbound or only constrained has no binding, and a cyclic
 term is its equations, `X = f(X)` as a compound containing `Var("X")`.
 
+A program that embeds the engine leaves the command line out:
+
+```toml
+claimr = { version = "0.8", default-features = false }
+```
+
+The default feature `cli` owns the REPL's line editor and the Ctrl-C
+handler and is what the `claimr` binary requires; without it the crate is
+the parser, the evaluator and the solver alone, seventeen crates lighter.
+`cargo install claimr` is unchanged.
+
 Diagnostics are GCC-style `file:line:column: message` for syntax errors
 (structured JSON objects under `--json`); a call to a predicate no clause
 defines is a `warning:` line in the same format, once per load, with the
