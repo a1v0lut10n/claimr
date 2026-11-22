@@ -1,7 +1,7 @@
 ---
 date: 2026-11-22
 type: design
-status: proposed
+status: accepted
 components: [evaluator, cli]
 aspects: [answer-soundness]
 tags: [undefined-predicate, warnings, compile, cli, repl, json-output, integrity-checker, library]
