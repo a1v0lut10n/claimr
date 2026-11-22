@@ -1,7 +1,7 @@
 ---
 date: 2026-11-22
 type: design
-status: proposed
+status: accepted
 components: [evaluator]
 aspects: [answer-soundness]
 tags: [answers, bindings, term, library, solved-form, genite]
