@@ -1,7 +1,7 @@
 ---
 date: 2026-11-22
 type: task
-status: in-progress
+status: done
 affects:
   - docs/architecture/components/evaluator.md
   - README.md
@@ -75,11 +75,27 @@ so a consumer destructures it by reference.
 
 ## Findings
 
-(filled in as the work proceeds)
+- **The text output did not move.** Rebuilding the printer over values
+  — every `render` is now `term(…).to_string()` — left all 226 existing
+  tests and every golden file byte-identical on the first run; the
+  invariant test over `examples/*.claimr` (19 programs, up to twenty
+  answers per query) found no equation that is not its binding rendered.
+- **One `expect` kept, as a structural invariant.** The builder's work
+  stack always leaves exactly one value for the root; the final `pop`
+  says so with an `expect`, in the style of `machine.rs`'s
+  `"parents precede children"`. The improper-list tail needed none.
+- **`Drop` on `Term` means destructuring by reference.** The derive of
+  `PartialEq`/`Eq`/`Clone`/`Debug` is unaffected; `let Term::Atom(n) =
+  value` by value is refused by the compiler, `match &value` is the
+  pattern — the README snippet shows it.
+- **The three `Answer` literals in `json_out.rs`'s tests** were the only
+  struct literals in the crate; they gained `bindings` consistent with
+  their equations.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test`; every golden file byte-identical (the text is unchanged).
-- [ ] The invariant test over `examples/*.claimr`.
-- [ ] `aivolution lint .` clean; the two `affects` docs current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` (six new tests in `bindings`; 232 pass, 3 benchmarks
+      ignored); every golden file byte-identical (the text is unchanged).
+- [x] The invariant test over `examples/*.claimr`.
+- [x] `aivolution lint .` clean; the two `affects` docs current.

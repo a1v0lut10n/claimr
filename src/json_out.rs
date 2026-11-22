@@ -300,6 +300,7 @@ mod tests {
             equations: vec![],
             disequations: vec![],
             constraints: vec![],
+            bindings: vec![],
             explanation: None,
         };
         assert_eq!(
@@ -314,6 +315,10 @@ mod tests {
             equations: vec!["X = 3".to_string()],
             disequations: vec!["X != Y".to_string()],
             constraints: vec!["age(alice) = 30".to_string()],
+            bindings: vec![claimr::Binding {
+                name: "X".to_string(),
+                value: claimr::Term::Number(claimr::Number::from(3)),
+            }],
             explanation: None,
         };
         assert_eq!(
@@ -325,6 +330,10 @@ mod tests {
             equations: vec!["C = c17".to_string()],
             disequations: vec![],
             constraints: vec![],
+            bindings: vec![claimr::Binding {
+                name: "C".to_string(),
+                value: claimr::Term::Atom("c17".to_string()),
+            }],
             explanation: Some(vec![ProofNode {
                 goal: "violation(c17)".to_string(),
                 by: claimr::Resolution::Rule,
