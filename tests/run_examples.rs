@@ -160,3 +160,34 @@ fn steps_flag_stops_a_looping_query() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("bad --steps value"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// CLM-0036: a call to a predicate no clause defines is a warning on stderr,
+/// once per call site before any query runs; stdout and the exit code are
+/// unchanged.
+#[test]
+fn undefined_calls_warn_and_do_not_fail_the_run() {
+    let dir = std::env::temp_dir().join(format!("claimr-undef-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("undef.claimr");
+    std::fs::write(
+        &file,
+        "p(a).\ns(X) :- p(X).\ns(X) :- p(X), nosuch(X).\nok(X) :- p(X), \\+ nosuch(X).\n?- nosuch(X).\n?- s(X).\n?- ok(X).\n",
+    )
+    .unwrap();
+    let out = claimr().arg(&file).output().unwrap();
+    std::fs::remove_file(&file).ok();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "?- nosuch(X).\nfalse\n?- s(X).\nX = a\n?- ok(X).\nX = a\n"
+    );
+    let path = file.display();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        format!(
+            "{path}:3:1: warning: nosuch/1 is called in `s(X) :- p(X), nosuch(X).` and no clause defines it\n\
+             {path}:4:1: warning: nosuch/1 is called in `ok(X) :- p(X), \\+ nosuch(X).` and no clause defines it\n\
+             {path}:5:1: warning: nosuch/1 is called in `?- nosuch(X).` and no clause defines it\n"
+        )
+    );
+}

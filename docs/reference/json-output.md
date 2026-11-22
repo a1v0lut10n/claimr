@@ -198,6 +198,27 @@ constraint facts are unsatisfiable is such a failure:
 The `message` still carries the cited facts as lines, as human mode prints
 them; `conflict` carries them as records.
 
+## Warnings (CLM-0036)
+
+A call to a predicate no clause defines and no built-in provides
+(`docs/design/2026-11-22-undefined-predicates-are-reported.md`) is a
+**warning**: the call still fails when reached, and before any query runs
+one document per call site goes to **stderr**, with stdout and the exit
+code unchanged:
+
+```json
+{"warning": {"file": "f.claimr", "line": 3, "column": 1, "kind": "undefined-predicate",
+             "predicate": "nosuch/1", "clause": "s(X) :- p(X), nosuch(X).",
+             "message": "nosuch/1 is called in `s(X) :- p(X), nosuch(X).` and no clause defines it"}}
+```
+
+The shape is the error document's with `warning` for `error` and no
+`class` — a warning asks nothing of the caller. `kind` is open, as for
+errors; `undefined-predicate` is the only kind today, with `predicate`
+(`name/arity`) and `clause` (the calling clause or query as written) as
+its data. A consumer that reads stderr only on a non-zero exit sees no
+change.
+
 ## Exit codes
 
 Identical to human mode: `0` all queries ran; `1` parse/compile

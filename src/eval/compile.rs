@@ -548,12 +548,61 @@ pub struct Query {
     pub(crate) goals: Vec<TGoal>,
     pub(crate) var_names: Vec<String>,
     text: String,
+    /// The query's position, when compiled with positions (CLM-0036).
+    span: Option<Span>,
 }
 
 impl Query {
     /// The query as written (canonically re-rendered), e.g. `?- mortal(X).`
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// The query's source position, when the program was compiled with
+    /// positions.
+    pub fn span(&self) -> Option<Span> {
+        self.span
+    }
+}
+
+/// CLM-0036 (`docs/design/2026-11-22-undefined-predicates-are-reported.md`):
+/// a call site whose predicate no clause defines and no built-in provides.
+/// The call still fails when reached; this is the static report of it,
+/// one entry per call site in program order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndefinedCall {
+    /// The predicate's name as source (quoted when the spelling needs it).
+    pub name: String,
+    pub arity: usize,
+    /// The calling clause's or query's position, when compiled with positions.
+    pub span: Option<Span>,
+    /// The calling clause or query as written.
+    pub clause: String,
+    /// Who makes the call, for reachability from a query.
+    pub(crate) caller: Caller,
+}
+
+/// The clause or query a call site belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Caller {
+    Clause(PredKey),
+    Query(usize),
+}
+
+impl UndefinedCall {
+    /// `name/arity`.
+    pub fn predicate(&self) -> String {
+        format!("{}/{}", self.name, self.arity)
+    }
+
+    /// The warning as a sentence: the predicate, where it is called, and
+    /// that nothing defines it.
+    pub fn describe(&self) -> String {
+        format!(
+            "{} is called in `{}` and no clause defines it",
+            self.predicate(),
+            self.clause
+        )
     }
 }
 
@@ -571,6 +620,9 @@ pub struct Program {
     queries: Vec<Query>,
     /// CLM-0027: the predicates declared `:- table`.
     pub(crate) tabled: HashSet<PredKey>,
+    /// CLM-0036: the call sites whose predicate nothing defines, in program
+    /// order.
+    undefined: Vec<UndefinedCall>,
     /// The world store — the constraint facts posted, baseline set — built
     /// once here; every query, and every table evaluation (CLM-0027), runs
     /// on a clone.
@@ -853,6 +905,8 @@ impl Program {
         let mut initial = Vec::new();
         let mut queries = Vec::new();
         let mut tabled: HashSet<PredKey> = HashSet::new();
+        // CLM-0036: clauses and queries in program order, for the report.
+        let mut order: Vec<Site> = Vec::new();
 
         for (clause, span) in clauses {
             // CLM-0014: `'<>'` is the list constructor; a program cannot define
@@ -891,6 +945,7 @@ impl Program {
                     let nvars = lw.vars.names.len() as u32;
                     push_clause(
                         &mut preds,
+                        &mut order,
                         TClause {
                             head,
                             body: vec![],
@@ -908,6 +963,7 @@ impl Program {
                     let nvars = lw.vars.names.len() as u32;
                     push_clause(
                         &mut preds,
+                        &mut order,
                         TClause {
                             head,
                             body,
@@ -929,6 +985,7 @@ impl Program {
                     let nvars = lw.vars.names.len() as u32;
                     push_clause(
                         &mut preds,
+                        &mut order,
                         TClause {
                             head,
                             body,
@@ -956,10 +1013,12 @@ impl Program {
                 Clause::Query(body) => {
                     let mut goals = lw.body(body)?;
                     lw.finish_body(&mut goals, None, clause);
+                    order.push(Site::Query(queries.len()));
                     queries.push(Query {
                         goals,
                         var_names: lw.vars.names.clone(),
                         text: clause.to_string(),
+                        span,
                     });
                 }
                 // CLM-0027: `:- table name/arity, ….`
@@ -995,6 +1054,7 @@ impl Program {
         for pred in preds.values_mut() {
             pred.finish();
         }
+        let undefined = undefined_calls(&order, &preds, &builtins, &queries, &symbols);
         let mut program = Program {
             symbols: Rc::new(RefCell::new(symbols)),
             preds,
@@ -1002,6 +1062,7 @@ impl Program {
             initial,
             queries,
             tabled,
+            undefined,
             world: Store::default(),
             tables: RefCell::new(Tables::default()),
         };
@@ -1035,6 +1096,40 @@ impl Program {
     /// The program's `?-` clauses, in source order.
     pub fn queries(&self) -> &[Query] {
         &self.queries
+    }
+
+    /// CLM-0036: every call site whose predicate no clause defines and no
+    /// built-in provides, in program order — bodies, conditions, negations,
+    /// comprehension bodies and queries alike. A `:- table` declaration is
+    /// not a definition. The call still fails when reached; what the list
+    /// means is the embedding program's decision.
+    pub fn undefined(&self) -> &[UndefinedCall] {
+        &self.undefined
+    }
+
+    /// CLM-0036: the undefined call sites `query` can reach — its own, and
+    /// those in the clauses of every predicate reachable from its goals
+    /// through the call graph. `query` must be one of this program's.
+    pub fn undefined_from(&self, query: &Query) -> Vec<&UndefinedCall> {
+        let index = self.queries.iter().position(|q| std::ptr::eq(q, query));
+        let mut reached: HashSet<PredKey> = HashSet::new();
+        let mut work: Vec<PredKey> = Vec::new();
+        calls(&query.goals, &mut work);
+        while let Some(key) = work.pop() {
+            if !reached.insert(key) {
+                continue;
+            }
+            for clause in self.clauses(&key) {
+                calls(&clause.body, &mut work);
+            }
+        }
+        self.undefined
+            .iter()
+            .filter(|u| match u.caller {
+                Caller::Query(i) => Some(i) == index,
+                Caller::Clause(key) => reached.contains(&key),
+            })
+            .collect()
     }
 
     /// Answer a query: an iterator over its solutions, computed lazily.
@@ -1120,13 +1215,96 @@ impl Program {
     }
 }
 
-fn push_clause(preds: &mut HashMap<PredKey, Pred>, clause: TClause) {
+fn push_clause(preds: &mut HashMap<PredKey, Pred>, order: &mut Vec<Site>, clause: TClause) {
     let key = match &clause.head {
         TTerm::Compound(f, args) => (*f, args.len()),
         TTerm::Const(c) => (*c, 0),
         _ => unreachable!("clause heads are atoms"),
     };
-    preds.entry(key).or_default().push(clause);
+    let pred = preds.entry(key).or_default();
+    order.push(Site::Clause(key, pred.clauses.len()));
+    pred.push(clause);
+}
+
+/// CLM-0036: a clause (by predicate and position) or a query, in program
+/// order, for the undefined-call report.
+#[derive(Debug, Clone, Copy)]
+enum Site {
+    Clause(PredKey, usize),
+    Query(usize),
+}
+
+/// The predicate a call goal names, if the term is an atom.
+fn call_key(t: &TTerm) -> Option<PredKey> {
+    match t {
+        TTerm::Compound(f, args) => Some((*f, args.len())),
+        TTerm::Const(c) => Some((*c, 0)),
+        _ => None,
+    }
+}
+
+/// CLM-0036: the predicates a body calls, constructs included, in order.
+fn calls(goals: &[TGoal], out: &mut Vec<PredKey>) {
+    for g in goals {
+        match g {
+            TGoal::Call(t) => out.extend(call_key(t)),
+            TGoal::Eq(..) | TGoal::Dif(..) | TGoal::Rel(..) => {}
+            TGoal::Or(a, b) => {
+                calls(a, out);
+                calls(b, out);
+            }
+            TGoal::IfThenElse {
+                cond, then, els, ..
+            } => {
+                calls(cond, out);
+                calls(then, out);
+                if let Some(e) = els {
+                    calls(e, out);
+                }
+            }
+            TGoal::Not { cond, .. } => calls(cond, out),
+            TGoal::Collect { body, .. } => calls(body, out),
+        }
+    }
+}
+
+/// CLM-0036: every call site, in program order, whose predicate has no
+/// clause and is not a built-in.
+fn undefined_calls(
+    order: &[Site],
+    preds: &HashMap<PredKey, Pred>,
+    builtins: &HashMap<PredKey, Builtin>,
+    queries: &[Query],
+    symbols: &Symbols,
+) -> Vec<UndefinedCall> {
+    let mut out = Vec::new();
+    for site in order {
+        let (goals, span, text, caller) = match *site {
+            Site::Clause(key, i) => {
+                let c = &preds[&key].clauses[i];
+                (&c.body, c.span, &c.text, Caller::Clause(key))
+            }
+            Site::Query(i) => {
+                let q = &queries[i];
+                (&q.goals, q.span, &q.text, Caller::Query(i))
+            }
+        };
+        let mut keys = Vec::new();
+        calls(goals, &mut keys);
+        for key in keys {
+            if preds.contains_key(&key) || builtins.contains_key(&key) {
+                continue;
+            }
+            out.push(UndefinedCall {
+                name: ast::display_name(symbols.name(key.0)).into_owned(),
+                arity: key.1,
+                span,
+                clause: text.clone(),
+                caller,
+            });
+        }
+    }
+    out
 }
 
 /// Instantiate a template on the heap. `var(store, i)` supplies the heap

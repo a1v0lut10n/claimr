@@ -24,7 +24,10 @@ answers in solved form. Public surface (re-exported from `claimr`):
 `Program::compile` / `Program::compile_spanned`, `Program::queries`,
 `Program::solve` → `Solutions` (a lazy iterator of `Answer`s;
 `with_explanations()` makes each answer carry its proof tree, CLM-0023),
-`Answer`, `ProofNode`, `Resolution`, `EvalError` — which since CLM-0033
+`Answer`, `ProofNode`, `Resolution`, `UndefinedCall` (CLM-0036:
+`Program::undefined()` lists every call site whose predicate no clause
+defines and no built-in provides, `Program::undefined_from(&Query)` those a
+query can reach), `EvalError` — which since CLM-0033
 (`2026-11-11-json-error-kind-and-class.md`) classifies itself for the
 `--json` error object: `kind()` a stable name per variant, `class()` one of
 the closed `ErrorClass` set (`syntax`, `program`, `unsupported`, `resource`,
@@ -310,6 +313,22 @@ each an exhaustive `match`, so a new variant cannot compile without them.
   before an answer is yielded `Store::finalize` runs (exact determination
   and disequation checks; a non-linear residue stops the query with
   `EvalError::NonLinear`, exposed by `Solutions::error`).
+- **Undefined calls** (CLM-0036, design record
+  `2026-11-22-undefined-predicates-are-reported.md`): after the predicates
+  are indexed, a pass walks every body goal of every clause and every
+  query — calls inside disjunctions, conditions, negations and
+  comprehension bodies included — and records each call whose key is in
+  neither `preds` nor `builtins` as an `UndefinedCall` (name as source,
+  arity, the calling clause's position and text, and crate-privately the
+  caller), in program order (`Site`); a `:- table` declaration is not a
+  definition. `Program::undefined()` returns the list;
+  `Program::undefined_from(&Query)` the entries reachable from a query
+  through the call graph (a worklist over `preds`). Nothing changes at run
+  time: the call still fails, as invariant 3 of `answer-soundness` says.
+  The CLI warns once per load (`file:line:col: warning: …`, a `{"warning":
+  …}` stderr document under `--json`, exit code unchanged); the REPL warns
+  on `:load` for the file's own entries and before a query for
+  `undefined_from`, never on a clause typed at the prompt.
 - **`explain.rs`** — explanations of failure, stage 1 (CLM-0030, design
   record `2026-11-11-explanations-of-failure.md`): a derivation's **steps**
   as closed, replayable records (`Step`: a clause head unified with its

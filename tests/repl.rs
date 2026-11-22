@@ -336,3 +336,29 @@ fn explain_shows_why_a_query_failed() {
          not explaining answers\n?- q(3).\nfalse.\n"
     );
 }
+
+/// CLM-0036: the REPL does not warn on a clause typed at the prompt; it
+/// warns before a query for the undefined predicates the query can reach,
+/// and on `:load` for the file's own undefined calls.
+#[test]
+fn undefined_calls_warn_on_the_query_and_on_load_not_on_a_typed_clause() {
+    let (out, err, code) = run(&[], "p(a).\ns(X) :- p(X), nosuch(X).\n?- p(X).\n?- s(X).\n");
+    assert_eq!(code, 0);
+    assert_eq!(out, "?- p(X).\nX = a.\n?- s(X).\nfalse.\n");
+    assert_eq!(
+        err,
+        "warning: nosuch/1 is called in `s(X) :- p(X), nosuch(X).` and no clause defines it\n"
+    );
+    let dir = std::env::temp_dir().join(format!("claimr-repl-undef-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("rules.claimr");
+    std::fs::write(&file, "q(X) :- p(X), missing(X).\n").unwrap();
+    let (out, err, code) = run(&[], &format!("p(a).\n:load {}\n?- p(X).\n", file.display()));
+    std::fs::remove_file(&file).ok();
+    assert_eq!(code, 0);
+    assert_eq!(out, "?- p(X).\nX = a.\n");
+    assert_eq!(
+        err,
+        "warning: missing/1 is called in `q(X) :- p(X), missing(X).` and no clause defines it\n"
+    );
+}

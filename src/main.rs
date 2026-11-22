@@ -217,6 +217,38 @@ fn main() -> ExitCode {
         }
     };
 
+    // CLM-0036: calls to predicates no clause defines, once per load, on
+    // stderr; the run proceeds and the exit code is unchanged.
+    for call in program.undefined() {
+        let (line, column) = (call.span.map(|s| s.line), call.span.map(|s| s.column));
+        if opts.json {
+            eprintln!(
+                "{}",
+                json_out::warning_document(
+                    path,
+                    line,
+                    column,
+                    "undefined-predicate",
+                    &[
+                        ("predicate", claimr::ErrorValue::Text(call.predicate())),
+                        ("clause", claimr::ErrorValue::Text(call.clause.clone())),
+                    ],
+                    &call.describe(),
+                )
+            );
+        } else {
+            match call.span {
+                Some(s) => eprintln!(
+                    "{path}:{}:{}: warning: {}",
+                    s.line,
+                    s.column,
+                    call.describe()
+                ),
+                None => eprintln!("{path}: warning: {}", call.describe()),
+            }
+        }
+    }
+
     if opts.json {
         // CLM-0010: one document per query; a runtime failure is that
         // query's document, then the run stops (as in human mode).

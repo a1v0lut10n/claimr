@@ -141,6 +141,18 @@ impl Repl {
         if !self.loaded.contains(&path.to_path_buf()) {
             self.loaded.push(path.to_path_buf());
         }
+        // CLM-0036: the file's own calls to predicates no clause defines.
+        let texts: Vec<String> = self
+            .clauses
+            .iter()
+            .filter(|(_, o)| matches!(o, Origin::File(p) if p == path))
+            .map(|(c, _)| c.to_string())
+            .collect();
+        for call in self.program.undefined() {
+            if texts.contains(&call.clause) {
+                eprintln!("warning: {}", call.describe());
+            }
+        }
         for q in queries {
             println!("{q}");
             self.answer(&q, true);
@@ -368,6 +380,12 @@ impl Repl {
             }
         };
         let q = program.queries().last().expect("the query").clone();
+        // CLM-0036: the undefined predicates this query can reach.
+        if let Some(last) = program.queries().last() {
+            for call in program.undefined_from(last) {
+                eprintln!("warning: {}", call.describe());
+            }
+        }
         self.interrupt.store(false, Ordering::Relaxed);
         let mut sols = program.solve(&q).with_interrupt(self.interrupt.clone());
         if let Some(n) = self.steps {

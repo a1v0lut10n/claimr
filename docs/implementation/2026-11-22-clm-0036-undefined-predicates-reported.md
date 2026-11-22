@@ -1,7 +1,7 @@
 ---
 date: 2026-11-22
 type: task
-status: in-progress
+status: done
 affects:
   - docs/architecture/components/evaluator.md
   - docs/architecture/aspects/answer-soundness.md
@@ -82,13 +82,32 @@ everywhere so the clause is always cited.
 
 ## Findings
 
-(filled in as the work proceeds)
+- **Program order needs its own record.** `preds` is a `HashMap`, so the
+  pass cannot iterate it for a deterministic report; a `Site` list
+  (clause by predicate and position, or query by index) is appended as
+  clauses and queries are compiled, and the pass walks it. Without
+  positions (the REPL) the order would otherwise differ from run to run.
+- **One wording everywhere.** The record's batch sample said "is called
+  here"; the implementation cites the clause in every mode —
+  `nosuch/1 is called in `s(X) :- p(X), nosuch(X).` and no clause defines
+  it` — since the clause is what a reader fixes, and the REPL has no
+  position to point at.
+- **`:load` matches the file's clauses by text.** The session keeps each
+  clause with its origin; an undefined call's clause text is matched
+  against the loaded file's clauses to decide whether `:load` reports it.
+  A clause typed earlier with the same text is reported too, which is
+  correct: it is an undefined call site of the session either way.
+- **The `--json` shape needed one refactor.** `error_tail` now takes the
+  class as an option, so the warning document shares the writer with the
+  two error documents and differs only in the outer key and the absent
+  `class`.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test`; existing golden files byte-identical (no example calls
-      an undefined predicate).
-- [ ] A program without undefined calls prints exactly as before, in every
-      mode.
-- [ ] `aivolution lint .` clean; the four `affects` docs current.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+      `cargo test` (three unit tests in `undefined_calls`, one integration
+      test each for batch, JSON and the REPL); existing golden files
+      byte-identical (no example calls an undefined predicate).
+- [x] A program without undefined calls prints exactly as before, in every
+      mode (the goldens and the existing JSON and REPL suites).
+- [x] `aivolution lint .` clean; the four `affects` docs current.
