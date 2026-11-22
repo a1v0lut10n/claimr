@@ -8,10 +8,36 @@ minor versions may change the language. Each entry names the ticket
 journal entry under `docs/journal/` carry the detail, and the design record
 under `docs/design/` that decided it.
 
-## [Unreleased]
+## [0.8.0] — 2026-11-22
+
+The release for a program that embeds claimr. genite's rule runner was the
+first to link the crate instead of running the binary, and three things it
+met are fixed here: a call to a predicate no clause defines is reported at
+load instead of failing in silence; an answer carries its bindings as
+values, so a consumer reads the term a variable is bound to instead of
+parsing the printed text; and the command line's dependencies sit behind
+a default feature, so `default-features = false` is the engine alone.
+Programs written for 0.7.0 run unchanged and print the same answers, in
+the same order; the only new output is a warning, on stderr, for a call
+that could never succeed.
 
 ### Added
 
+- **Undefined predicates are reported** (CLM-0036;
+  `docs/design/2026-11-22-undefined-predicates-are-reported.md`). The
+  compile step records every call whose predicate has no clause and is not
+  a built-in — inside disjunctions, conditions, negations, comprehension
+  bodies and queries alike; a `:- table` declaration is not a definition.
+  `Program::undefined()` returns them (`UndefinedCall { name, arity, span,
+  clause }`) and `Program::undefined_from(&Query)` those a query can
+  reach. Batch mode prints one `file:line:col: warning: nosuch/1 is
+  called in `…` and no clause defines it` line per call site on stderr
+  before any query runs, with stdout and the exit code unchanged; under
+  `--json` each is a `{"warning": {"file", "line"?, "column"?, "kind":
+  "undefined-predicate", "predicate", "clause", "message"}}` stderr
+  document (`docs/reference/json-output.md`, *Warnings*). The REPL warns
+  on `:load` and before a query that can reach the call, never on a
+  clause typed at the prompt. The call still fails: no answer changes.
 - **Answers as values** (CLM-0037;
   `docs/design/2026-11-22-answers-as-values.md`). An `Answer` carries its
   equations as `bindings` beside the text: one `Binding { name, value }`
