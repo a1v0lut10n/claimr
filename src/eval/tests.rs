@@ -3031,3 +3031,138 @@ mod other_argument_indexing {
         assert!(out[1].is_empty());
     }
 }
+
+// --- undefined predicates are reported (CLM-0036) ---------------------------
+
+mod undefined_calls {
+    //! `docs/design/2026-11-22-undefined-predicates-are-reported.md`: a call
+    //! to a predicate no clause defines still fails, and the compiled program
+    //! lists every such call site with its clause and position.
+
+    use crate::{Program, parse_program, parse_program_spanned};
+
+    fn compiled(src: &str) -> Program {
+        Program::compile_spanned(&parse_program_spanned(src).expect("parses")).expect("compiles")
+    }
+
+    /// (predicate, line, clause) per entry.
+    fn report(program: &Program) -> Vec<(String, Option<usize>, String)> {
+        program
+            .undefined()
+            .iter()
+            .map(|u| (u.predicate(), u.span.map(|s| s.line), u.clause.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn every_call_site_is_reported_with_its_clause_and_position() {
+        let program = compiled(
+            "p(a).\n\
+             s(X) :- p(X).\n\
+             s(X) :- p(X), nosuch(X).\n\
+             ok(X) :- p(X), \\+ nosuch(X).\n\
+             ?- nosuch(X).\n\
+             ?- s(X).\n\
+             ?- ok(X).\n",
+        );
+        assert_eq!(
+            report(&program),
+            [
+                (
+                    "nosuch/1".to_string(),
+                    Some(3),
+                    "s(X) :- p(X), nosuch(X).".to_string()
+                ),
+                (
+                    "nosuch/1".to_string(),
+                    Some(4),
+                    "ok(X) :- p(X), \\+ nosuch(X).".to_string()
+                ),
+                ("nosuch/1".to_string(), Some(5), "?- nosuch(X).".to_string()),
+            ]
+        );
+        // The semantics did not move: the calls still fail, the others answer.
+        let answers: Vec<Vec<String>> = program
+            .queries()
+            .iter()
+            .map(|q| program.solve(q).map(|a| a.to_string()).collect())
+            .collect();
+        assert_eq!(
+            answers,
+            [vec![], vec!["X = a".to_string()], vec!["X = a".to_string()]]
+        );
+        assert_eq!(
+            program.undefined()[0].describe(),
+            "nosuch/1 is called in `s(X) :- p(X), nosuch(X).` and no clause defines it"
+        );
+    }
+
+    #[test]
+    fn calls_inside_constructs_count_and_defined_ones_do_not() {
+        let program = compiled(
+            ":- table t/1.\n\
+             p(1).\n\
+             q(X) :- (a(X) ; b(X)), (c(X) -> d(X) ; e(X)), { N = |<Y | f(Y)>| }, { N > 0 }.\n\
+             r(X) :- p(X), atom(X), number(X), list(X), sum(X, X), atom_chars(X, X), t(X), 'odd name'(X).\n",
+        );
+        let names: Vec<String> = program.undefined().iter().map(|u| u.predicate()).collect();
+        // A tabled declaration is not a definition; built-ins and `p/1` are.
+        assert_eq!(
+            names,
+            [
+                "a/1",
+                "b/1",
+                "c/1",
+                "d/1",
+                "e/1",
+                "f/1",
+                "t/1",
+                "'odd name'/1"
+            ]
+        );
+        assert!(
+            program
+                .undefined()
+                .iter()
+                .all(|u| u.span.map(|s| s.line) == Some(3) || u.span.map(|s| s.line) == Some(4))
+        );
+        // Without positions the clause is still cited.
+        let plain = Program::compile(&parse_program("r() :- nosuch().").expect("parses"))
+            .expect("compiles");
+        assert_eq!(
+            report(&plain),
+            [("nosuch/0".to_string(), None, "r() :- nosuch().".to_string())]
+        );
+        let clean = compiled("p(1).\nq(X) :- p(X), atom(X).\n?- q(X).\n");
+        assert!(clean.undefined().is_empty());
+    }
+
+    #[test]
+    fn a_query_reaches_the_undefined_calls_of_the_predicates_it_calls() {
+        let program = compiled(
+            "p(a).\n\
+             s(X) :- p(X).\n\
+             s(X) :- p(X), nosuch(X).\n\
+             u(X) :- s(X).\n\
+             ?- s(X).\n\
+             ?- u(X).\n\
+             ?- p(X).\n\
+             ?- nosuch(X).\n",
+        );
+        let reach = |i: usize| -> Vec<String> {
+            program
+                .undefined_from(&program.queries()[i])
+                .iter()
+                .map(|u| u.clause.clone())
+                .collect()
+        };
+        assert_eq!(reach(0), ["s(X) :- p(X), nosuch(X)."]);
+        assert_eq!(
+            reach(1),
+            ["s(X) :- p(X), nosuch(X)."],
+            "through u/1 then s/1"
+        );
+        assert!(reach(2).is_empty());
+        assert_eq!(reach(3), ["?- nosuch(X)."], "the query's own call");
+    }
+}

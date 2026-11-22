@@ -45,7 +45,10 @@ realise the store.
    assert that queries whose only derivations violate a disequation — even
    one implied only through the store — yield `false`.
 3. **Nothing satisfiable is dropped as an error.** Undefined predicates
-   fail (no clauses ⇒ no solutions); unsupported constructs are rejected at
+   fail (no clauses ⇒ no solutions) — and since CLM-0036 every call to one
+   is reported statically at compile time (`Program::undefined()`, a
+   warning per load), while the call itself still fails; unsupported
+   constructs are rejected at
    load time with a positioned diagnostic, never silently ignored at run
    time. A stop under a caller's step budget (CLM-0029, `--steps N`) is a
    resource error that names its count and goal, not a judgment about the

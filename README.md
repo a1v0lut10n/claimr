@@ -337,7 +337,9 @@ for query in program.queries() {
 ```
 
 Diagnostics are GCC-style `file:line:column: message` for syntax errors
-(structured JSON objects under `--json`);
+(structured JSON objects under `--json`); a call to a predicate no clause
+defines is a `warning:` line in the same format, once per load, with the
+call still failing when reached and the exit code unchanged;
 load errors (an unsatisfiable set of constraint facts, with a minimal
 conflicting set of them named by position and text) and runtime errors
 (a non-linear constraint still undetermined at answer time — Claimr never

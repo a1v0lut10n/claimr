@@ -23,6 +23,6 @@ mod table;
 mod tests;
 
 pub use answer::{Answer, Failure, FailureTree, ProofNode, Reason, Resolution};
-pub use compile::{Program, Query};
+pub use compile::{Program, Query, UndefinedCall};
 pub use error::{ErrorClass, ErrorValue, EvalError};
 pub use machine::Solutions;

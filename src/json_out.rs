@@ -185,14 +185,14 @@ pub fn query_document(
 /// error's data as fields, then the unchanged `message`.
 fn error_tail(
     kind: &str,
-    class: ErrorClass,
+    class: Option<ErrorClass>,
     fields: &[(&str, ErrorValue)],
     message: &str,
 ) -> Vec<String> {
-    let mut out = vec![
-        format!("\"kind\":\"{}\"", escape(kind)),
-        format!("\"class\":\"{}\"", class.as_str()),
-    ];
+    let mut out = vec![format!("\"kind\":\"{}\"", escape(kind))];
+    if let Some(class) = class {
+        out.push(format!("\"class\":\"{}\"", class.as_str()));
+    }
     for (name, value) in fields {
         let rendered = match value {
             ErrorValue::Text(s) => format!("\"{}\"", escape(s)),
@@ -224,7 +224,7 @@ fn error_tail(
 pub fn query_error_document(query_text: &str, error: &EvalError) -> String {
     let tail = error_tail(
         error.kind(),
-        error.class(),
+        Some(error.class()),
         &error.fields(),
         &error.to_string(),
     );
@@ -255,8 +255,31 @@ pub fn error_document(
     if let Some(column) = column {
         out.push(format!("\"column\":{column}"));
     }
-    out.extend(error_tail(kind, class, fields, message));
+    out.extend(error_tail(kind, Some(class), fields, message));
     format!("{{\"error\":{{{}}}}}", out.join(","))
+}
+
+/// CLM-0036: a warning for stderr — the error document's shape with
+/// `warning` for `error` and no `class` (a warning asks nothing of the
+/// caller): `{"warning": {"file", "line"?, "column"?, "kind", …fields,
+/// "message"}}`. Emitted with exit 0 beside the normal stdout.
+pub fn warning_document(
+    file: &str,
+    line: Option<usize>,
+    column: Option<usize>,
+    kind: &str,
+    fields: &[(&str, ErrorValue)],
+    message: &str,
+) -> String {
+    let mut out = vec![format!("\"file\":\"{}\"", escape(file))];
+    if let Some(line) = line {
+        out.push(format!("\"line\":{line}"));
+    }
+    if let Some(column) = column {
+        out.push(format!("\"column\":{column}"));
+    }
+    out.extend(error_tail(kind, None, fields, message));
+    format!("{{\"warning\":{{{}}}}}", out.join(","))
 }
 
 #[cfg(test)]

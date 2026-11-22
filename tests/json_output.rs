@@ -387,3 +387,26 @@ fn a_no_clause_failure_names_the_narrowing_argument() {
         lines[2]
     );
 }
+
+/// CLM-0036: under `--json` each undefined call is a `warning` document on
+/// stderr, the error document's shape without `class`; stdout and the exit
+/// code are unchanged.
+#[test]
+fn undefined_calls_are_warning_documents() {
+    let src = "p(a).\ns(X) :- p(X), nosuch(X).\n?- s(X).\n";
+    let path = write_temp("undefined", src);
+    let (stdout, stderr, code) = run(&["--json", path.to_str().unwrap()]);
+    let path_str = path.to_str().unwrap().to_string();
+    std::fs::remove_file(&path).ok();
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        stdout,
+        "{\"query\":\"?- s(X).\",\"outcome\":\"none\",\"answers\":[]}\n"
+    );
+    assert_eq!(
+        stderr,
+        format!(
+            "{{\"warning\":{{\"file\":\"{path_str}\",\"line\":2,\"column\":1,\"kind\":\"undefined-predicate\",\"predicate\":\"nosuch/1\",\"clause\":\"s(X) :- p(X), nosuch(X).\",\"message\":\"nosuch/1 is called in `s(X) :- p(X), nosuch(X).` and no clause defines it\"}}}}\n"
+        )
+    );
+}
